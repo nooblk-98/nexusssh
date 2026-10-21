@@ -6,7 +6,15 @@ export const metadata: Metadata = {
 };
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              'try{if(localStorage.getItem("nexus-theme")==="light")document.documentElement.classList.add("light")}catch(e){}',
+          }}
+        />
+      </head>
       <body>{children}</body>
     </html>
   );

@@ -28,6 +28,7 @@ import {
   Shield,
   ShieldCheck,
   Star,
+  Moon,
   Sun,
   Terminal as TerminalIcon,
   Users,
@@ -61,6 +62,8 @@ const useWorkspace = create<{
   setSelected: (id: string) => void;
   connect: (s: Row) => void;
   close: (id: string) => void;
+  light: boolean;
+  setLight: (light: boolean) => void;
 }>((set) => ({
   page: "Dashboard",
   selected: "",
@@ -74,6 +77,17 @@ const useWorkspace = create<{
       tabs: [...v.tabs, { ...s, tabId: crypto.randomUUID() }],
     })),
   close: (id) => set((v) => ({ tabs: v.tabs.filter((t) => t.tabId !== id) })),
+  // The layout script applies the saved theme to <html> before first paint.
+  light:
+    typeof document !== "undefined" &&
+    document.documentElement.classList.contains("light"),
+  setLight: (light) => {
+    document.documentElement.classList.toggle("light", light);
+    try {
+      localStorage.setItem("nexus-theme", light ? "light" : "dark");
+    } catch {}
+    set({ light });
+  },
 }));
 async function api(path: string, body?: unknown, method?: string) {
   const response = await fetch("/api/" + path, {
@@ -348,10 +362,18 @@ function Auth({ onLogin }: { onLogin: () => void }) {
 function App() {
   const me = useApi("auth/me");
   const qc = useQueryClient();
-  const { page, setPage, connect, selected, setSelected, tabs, close } =
-    useWorkspace();
-  const [light, setLight] = useState(false),
-    [search, setSearch] = useState(""),
+  const {
+    page,
+    setPage,
+    connect,
+    selected,
+    setSelected,
+    tabs,
+    close,
+    light,
+    setLight,
+  } = useWorkspace();
+  const [search, setSearch] = useState(""),
     [modal, setModal] = useState<ReactNode>(null),
     [error, setError] = useState(""),
     [split, setSplit] = useState(false);
@@ -439,7 +461,7 @@ function App() {
     Settings: "Make this workspace your own.",
   };
   return (
-    <div className={"app" + (light ? " light" : "")}>
+    <div className="app">
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-icon">
@@ -459,7 +481,7 @@ function App() {
           </div>
         </div>
         <div className="workspace-label">WORKSPACE</div>
-        {menu.slice(0, 6).map(([name, Icon]) => (
+        {menu.slice(0, 4).map(([name, Icon]) => (
           <button
             key={name}
             className={"nav-item" + (page === name ? " active" : "")}
@@ -470,7 +492,7 @@ function App() {
           </button>
         ))}
         <div className="workspace-label">CONTROL PLANE</div>
-        {menu.slice(6, 10).map(([name, Icon]) => (
+        {menu.slice(4, 8).map(([name, Icon]) => (
           <button
             key={name}
             className={"nav-item" + (page === name ? " active" : "")}
@@ -481,7 +503,7 @@ function App() {
           </button>
         ))}
         <div className="nav-bottom">
-          {menu.slice(10).map(([name, Icon]) => (
+          {menu.slice(8).map(([name, Icon]) => (
             <button
               key={name}
               className={"nav-item" + (page === name ? " active" : "")}
@@ -547,10 +569,12 @@ function App() {
             </span>
             <Button
               variant="ghost"
-              aria-label="Switch theme"
+              aria-label={
+                light ? "Switch to dark mode" : "Switch to light mode"
+              }
               onClick={() => setLight(!light)}
             >
-              <Sun size={17} />
+              {light ? <Moon size={17} /> : <Sun size={17} />}
             </Button>
             <Button
               variant="ghost"
@@ -1270,6 +1294,7 @@ function SimpleForm({
 }
 type Run = (op: string, args: Row) => Promise<Row>;
 function FileManager({ server, run }: { server: Row; run: Run }) {
+  const light = useWorkspace((s) => s.light);
   const [path, setPath] = useState(server.fileRoot),
     [entries, setEntries] = useState<Row[]>([]),
     [file, setFile] = useState(""),
@@ -1431,7 +1456,7 @@ function FileManager({ server, run }: { server: Row; run: Run }) {
           {file ? (
             <Editor
               height="420px"
-              theme="vs-dark"
+              theme={light ? "vs" : "vs-dark"}
               language={languages[ext] || "plaintext"}
               value={text}
               onChange={(v) => setText(v || "")}

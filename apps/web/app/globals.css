@@ -689,23 +689,88 @@ h3 {
   color: var(--muted);
   margin-top: 20px;
 }
-.light {
+/* Light theme: the class is set on <html> so body and every component follow it. */
+:root.light {
   --bg: #f4f6f7;
   --surface: #fff;
   --surface2: #e9eef0;
   --border: #d6dfe0;
   --text: #19272b;
-  --muted: #607579;
-  --accent: #3ca37b;
+  --muted: #5a6e72;
+  --accent: #2b8a63;
   --sidebar: #f8faf9;
+  --danger: #b4372c;
   color-scheme: light;
+}
+.light .btn-primary,
+.light .brand-icon {
+  color: #fff;
+}
+.light .btn-danger {
+  background: #fdecea;
+  color: #9b2c22;
+  border-color: #f0c1bb;
+}
+.light .workspace-label {
+  color: #6b7c80;
 }
 .light .nav-item.active {
   background: #dceee5;
 }
+.light .avatar {
+  background: #dceee5;
+  border-color: #b5d8c6;
+}
+.light .server-card:hover {
+  border-color: #9ccbb5;
+}
+.light .server-icon {
+  background: #e3f2ea;
+  border-color: #bfdccd;
+}
+.light .badge.production {
+  color: #8a5a1c;
+  background: #fbefdf;
+  border-color: #efd3ad;
+}
+.light .badge.reachable {
+  background: #e0f1e8;
+}
+.light .badge.unreachable {
+  background: #fbe7e5;
+}
+.light .empty svg {
+  color: #8fa59b;
+}
+.light .guide-number {
+  border-color: #b5d8c6;
+}
 .light .callout {
   background: #e0f1e8;
+  border-color: #b5d8c6;
   color: #285b44;
+}
+.light .error {
+  background: #fdecea;
+  border-color: #f0c1bb;
+  color: #9b2c22;
+}
+.light .toast,
+.light .modal {
+  box-shadow: 0 20px 60px #0002;
+}
+.light .modal {
+  border-color: var(--border);
+}
+.light .modal-backdrop {
+  background: #19272b66;
+}
+.light .login-art {
+  background:
+    radial-gradient(ellipse at 30% 55%, #cfeadc 0, transparent 65%), #eef5f1;
+}
+.light .login-art p {
+  color: #4f6b60;
 }
 .mobile-nav {
   display: none;
