@@ -24,6 +24,7 @@ export const connectionFailures = [
   /^Host denied \(verification failed\)$/,
   /^SSH destination is outside the configured allowlist \([0-9a-fA-F.:, ]*\)$/,
   /^All configured authentication methods failed$/,
+  /^Cloud metadata addresses cannot be SSH destinations$/,
 ];
 export function allowedIP(address: string, cidrs: string[]) {
   let ip = ipaddr.parse(address);
@@ -34,8 +35,18 @@ export function allowedIP(address: string, cidrs: string[]) {
     return ip.kind() === net.kind() && ip.match(net, bits);
   });
 }
+// Cloud instance metadata endpoints hand out credentials; they are never
+// SSH destinations, whatever the allowlist says.
+const metadata = [
+  "169.254.169.254/32",
+  "169.254.170.2/32",
+  "100.100.100.200/32",
+  "fd00:ec2::254/128",
+];
 export async function resolveAllowed(host: string, cidrs: string[]) {
   const addresses = await lookup(host, { all: true, verbatim: true });
+  if (addresses.some((a) => allowedIP(a.address, metadata)))
+    throw new Error("Cloud metadata addresses cannot be SSH destinations");
   const blocked = addresses.filter((a) => !allowedIP(a.address, cidrs));
   if (!addresses.length || blocked.length)
     throw new Error(
@@ -216,7 +227,7 @@ export async function sftp(client: Client) {
 export function inside(root: string, path: string) {
   return path === root || path.startsWith(root === "/" ? "/" : root + "/");
 }
-function invoke<T>(
+export function invoke<T>(
   s: SFTPWrapper,
   method: string,
   ...args: unknown[]

@@ -1,7 +1,14 @@
 "use client";
 import { useState } from "react";
 import { KeyRound, Pencil, Trash2, Vault } from "lucide-react";
-import { api, notify, refresh, useApi, type Row } from "../../lib/api";
+import {
+  api,
+  notify,
+  refresh,
+  saveFile,
+  useApi,
+  type Row,
+} from "../../lib/api";
 import { savePrefs, usePrefs } from "../../lib/store";
 import { editorThemes, terminalFonts, terminalThemes } from "../../lib/themes";
 import {
@@ -21,6 +28,11 @@ export function Account({ me }: { me: Row }) {
   const prefs = usePrefs();
   const [editName, setEditName] = useState<string | null>(null);
   const [mfa, setMfa] = useState<Row | null>(null);
+  const [codes, setCodes] = useState<string[] | null>(null);
+  const [confirm, setConfirm] = useState<{
+    action: "disable" | "recovery";
+    password?: string;
+  } | null>(null);
   const [code, setCode] = useState("");
   const [password, setPassword] = useState<{
     current: string;
@@ -78,10 +90,30 @@ export function Account({ me }: { me: Row }) {
       )}
       <h3>Two-Factor Authentication</h3>
       {prefs.mfaEnabled ? (
-        <p className="row">
-          <span className="badge green">Enabled</span> A one-time code is
-          required when you sign in.
-        </p>
+        <>
+          <p className="row">
+            <span className="badge green">Enabled</span> A one-time code is
+            required when you sign in.
+          </p>
+          <p className="small muted" style={{ marginTop: 8 }}>
+            {prefs.recoveryCodesLeft ?? 0} recovery code
+            {prefs.recoveryCodesLeft === 1 ? "" : "s"} left.
+          </p>
+          <div className="row" style={{ marginTop: 12 }}>
+            <Button
+              variant="outline"
+              onClick={() => setConfirm({ action: "recovery" })}
+            >
+              New Recovery Codes
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => setConfirm({ action: "disable" })}
+            >
+              Disable 2FA
+            </Button>
+          </div>
+        </>
       ) : (
         <>
           <p>
@@ -135,11 +167,11 @@ export function Account({ me }: { me: Row }) {
                     challenge: mfa.challenge,
                     code,
                   })
-                    .then(() => {
+                    .then((r: Row) => {
                       setMfa(null);
                       setCode("");
+                      setCodes(r.recoveryCodes);
                       void refresh("preferences");
-                      notify.success("Two-factor authentication enabled.");
                     })
                     .catch(notify.error)
                 }
@@ -182,6 +214,93 @@ export function Account({ me }: { me: Row }) {
               maxLength={6}
               value={code}
               onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+            />
+          </Field>
+        </Dialog>
+      )}
+      {codes && (
+        <Dialog
+          title="Save Your Recovery Codes"
+          onClose={() => setCodes(null)}
+          footer={
+            <>
+              <Button
+                variant="secondary"
+                onClick={() =>
+                  saveFile(
+                    codes.join(String.fromCharCode(10)),
+                    "nexusssh-recovery-codes.txt",
+                  )
+                }
+              >
+                Download
+              </Button>
+              <Button onClick={() => setCodes(null)}>I Saved Them</Button>
+            </>
+          }
+        >
+          <p style={{ marginBottom: 12 }}>
+            Each code signs you in once if you lose your authenticator. They are
+            shown only now; store them somewhere safe.
+          </p>
+          <code className="code" style={{ columns: 2 }}>
+            {codes.join(String.fromCharCode(10))}
+          </code>
+        </Dialog>
+      )}
+      {confirm && (
+        <Dialog
+          title={
+            confirm.action === "disable"
+              ? "Disable Two-Factor Authentication"
+              : "Create New Recovery Codes"
+          }
+          onClose={() => setConfirm(null)}
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setConfirm(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant={confirm.action === "disable" ? "danger" : "primary"}
+                disabled={!confirm.password}
+                onClick={() =>
+                  void api<Row>(
+                    confirm.action === "disable"
+                      ? "auth/mfa/disable"
+                      : "auth/mfa/recovery-codes",
+                    { password: confirm.password },
+                  )
+                    .then((r) => {
+                      setConfirm(null);
+                      void refresh("preferences");
+                      if (r.recoveryCodes) setCodes(r.recoveryCodes);
+                      else
+                        notify.success("Two-factor authentication disabled.");
+                    })
+                    .catch(notify.error)
+                }
+              >
+                {confirm.action === "disable" ? "Disable 2FA" : "Create Codes"}
+              </Button>
+            </>
+          }
+        >
+          <p style={{ marginBottom: 12 }}>
+            {confirm.action === "disable"
+              ? "Your account will only need a password to sign in."
+              : "Your current recovery codes stop working."}
+          </p>
+          <Field label="Confirm with your password">
+            <input
+              autoFocus
+              className="input"
+              type="password"
+              autoComplete="current-password"
+              value={confirm.password || ""}
+              onChange={(e) =>
+                setConfirm({ ...confirm, password: e.target.value })
+              }
             />
           </Field>
         </Dialog>

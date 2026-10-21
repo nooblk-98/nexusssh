@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowDownToLine,
   ArrowUpDown,
@@ -562,25 +562,66 @@ export function UsersPage({ me }: { me: Row }) {
   );
 }
 
+type Access = Record<string, string[]>;
+// Team server access as three levels; anything else shows as Custom.
+function accessLevel(ops: string[] | undefined, all: string[], read: string[]) {
+  if (!ops?.length) return "none";
+  const set = new Set(ops);
+  if (all.every((o) => set.has(o))) return "full";
+  if (read.every((o) => set.has(o)) && ops.every((o) => read.includes(o)))
+    return "read";
+  return "custom";
+}
 export function Teams() {
   const teams = useApi<Row[]>("teams");
   const users = useApi<Row[]>("users");
+  const settings = useApi<Row>("settings");
+  const { servers } = useServers();
+  const all: string[] = settings.data?.operations || [];
+  const read: string[] = settings.data?.readOperations || [];
   const [form, setForm] = useState<{
     id?: string;
     name: string;
     userIds: string[];
+    access: Access;
   } | null>(null);
   const list = teams.data || [];
+  const edit = (t?: Row) =>
+    setForm({
+      id: t?.id,
+      name: t?.name || "",
+      userIds: t?.members.map((m: Row) => m.userId) || [],
+      access: Object.fromEntries(
+        (t?.servers || []).map((g: Row) => [g.serverId, g.operations]),
+      ),
+    });
+  async function save() {
+    if (!form) return;
+    try {
+      const body = { name: form.name.trim(), userIds: form.userIds };
+      let id = form.id;
+      if (id) await api("teams/" + id, body, "PATCH");
+      else id = (await api<Row>("teams", body)).id;
+      await api("teams/" + id + "/servers", {
+        servers: Object.entries(form.access).map(([serverId, operations]) => ({
+          serverId,
+          operations,
+        })),
+      });
+      setForm(null);
+      void refresh("teams");
+      notify.success("Team saved.");
+    } catch (e) {
+      notify.error(e);
+    }
+  }
   return (
     <div className="page">
       <PageHead
         title="Teams"
-        sub="Manage teams and organize your users into groups"
+        sub="Group users and share servers with everyone in a team"
       >
-        <Button
-          variant="outline"
-          onClick={() => setForm({ name: "", userIds: [] })}
-        >
+        <Button variant="outline" onClick={() => edit()}>
           <UserPlus size={17} /> Add Team
         </Button>
       </PageHead>
@@ -591,6 +632,7 @@ export function Teams() {
               <tr>
                 <th>Name</th>
                 <th>Members</th>
+                <th>Servers</th>
                 <th style={{ width: 100 }}>Actions</th>
               </tr>
             </thead>
@@ -600,21 +642,24 @@ export function Teams() {
                   <td>
                     <b style={{ fontWeight: 600 }}>{t.name}</b>
                   </td>
-                  <td className="ellipsis" style={{ maxWidth: 520 }}>
+                  <td className="ellipsis" style={{ maxWidth: 420 }}>
                     {t.members.map((m: Row) => m.user.name).join(", ") || "-"}
+                  </td>
+                  <td className="ellipsis" style={{ maxWidth: 320 }}>
+                    {t.servers
+                      .map(
+                        (g: Row) =>
+                          servers.find((s) => s.id === g.serverId)?.name,
+                      )
+                      .filter(Boolean)
+                      .join(", ") || "-"}
                   </td>
                   <td>
                     <span className="row" style={{ gap: 2 }}>
                       <IconButton
                         label="Edit team"
                         size="sm"
-                        onClick={() =>
-                          setForm({
-                            id: t.id,
-                            name: t.name,
-                            userIds: t.members.map((m: Row) => m.userId),
-                          })
-                        }
+                        onClick={() => edit(t)}
                       >
                         <Pencil size={15} />
                       </IconButton>
@@ -626,7 +671,7 @@ export function Teams() {
                           if (
                             await confirmDialog(
                               "Delete Team",
-                              `Delete the team “${t.name}”? Users are not deleted.`,
+                              `Delete the team "${t.name}"? Its members lose the server access it gave them; users are not deleted.`,
                               "Delete",
                               true,
                             )
@@ -649,40 +694,24 @@ export function Teams() {
             icon={<UsersRound size={56} strokeWidth={1.5} />}
             title="No Teams Found"
           >
-            Organize your users into teams to simplify access management and
-            collaboration.
+            Organize your users into teams to simplify access management, enable
+            collaboration, and share server connections with team members.
             <br />
-            <a onClick={() => setForm({ name: "", userIds: [] })}>
-              Click here
-            </a>{" "}
-            to create your first team.
+            <a onClick={() => edit()}>Click here</a> to create your first team.
           </Empty>
         )}
       </div>
       {form && (
         <Drawer
           title={form.id ? "Edit Team" : "New Team"}
+          wide
           onClose={() => setForm(null)}
           footer={
             <>
               <Button variant="secondary" onClick={() => setForm(null)}>
                 Cancel
               </Button>
-              <Button
-                disabled={!form.name.trim()}
-                onClick={() =>
-                  void api(
-                    form.id ? "teams/" + form.id : "teams",
-                    { name: form.name.trim(), userIds: form.userIds },
-                    form.id ? "PATCH" : "POST",
-                  )
-                    .then(() => {
-                      setForm(null);
-                      void refresh("teams");
-                    })
-                    .catch(notify.error)
-                }
-              >
+              <Button disabled={!form.name.trim()} onClick={() => void save()}>
                 Save Team
               </Button>
             </>
@@ -717,6 +746,56 @@ export function Teams() {
               }
             />
           ))}
+          <div className="drawer-section" style={{ marginTop: 18 }}>
+            Server access
+          </div>
+          <p className="small muted" style={{ marginBottom: 10 }}>
+            Every member gets this access, on top of anything given to them
+            directly. Read only lets members browse and download files; full
+            access adds the terminal and file changes.
+          </p>
+          <table className="table">
+            <tbody>
+              {servers.map((s) => {
+                const level = accessLevel(form.access[s.id], all, read);
+                return (
+                  <tr key={s.id}>
+                    <td>
+                      {s.name} <span className="muted small">{s.host}</span>
+                    </td>
+                    <td style={{ width: 170 }}>
+                      <select
+                        className="select"
+                        aria-label={"Access to " + s.name}
+                        value={level}
+                        onChange={(e) =>
+                          setForm({
+                            ...form,
+                            access: {
+                              ...form.access,
+                              [s.id]:
+                                e.target.value === "full"
+                                  ? all
+                                  : e.target.value === "read"
+                                    ? read
+                                    : [],
+                            },
+                          })
+                        }
+                      >
+                        <option value="none">No access</option>
+                        <option value="read">Read only</option>
+                        <option value="full">Full access</option>
+                        {level === "custom" && (
+                          <option value="custom">Custom</option>
+                        )}
+                      </select>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </Drawer>
       )}
     </div>
@@ -906,6 +985,11 @@ export function SessionHistory() {
 export function Security() {
   const q = useApi<Row>("settings");
   const [cidr, setCidr] = useState("");
+  const [webhook, setWebhook] = useState<string>("");
+  useEffect(() => {
+    if (q.data?.approvalWebhook !== undefined)
+      setWebhook(q.data.approvalWebhook);
+  }, [q.data?.approvalWebhook]);
   // Updates show immediately and roll back if the API refuses them.
   const save = (patch: Row, success: string) => {
     const before = q.data;
@@ -966,7 +1050,8 @@ export function Security() {
       <p className="small muted" style={{ lineHeight: 1.6, marginBottom: 14 }}>
         NexusSSH only connects to addresses in these networks. Entries from the
         deployment’s <span className="mono">SSH_ALLOWED_CIDRS</span> can only be
-        changed there; add more for this workspace below.
+        changed there; add more for this workspace below. Cloud metadata
+        addresses such as 169.254.169.254 are always blocked.
       </p>
       <table className="table" style={{ marginBottom: 14 }}>
         <thead>
@@ -987,10 +1072,13 @@ export function Security() {
           {workspace.map((c) => (
             <tr key={"w" + c}>
               <td className="mono">{c}</td>
-              <td>Workspace</td>
+              <td className={q.data?.allowlistLocked ? "muted" : ""}>
+                Workspace{q.data?.allowlistLocked ? " (ignored)" : ""}
+              </td>
               <td>
                 <IconButton
                   label={"Remove " + c}
+                  disabled={!!q.data?.allowlistLocked}
                   size="sm"
                   danger
                   onClick={() =>
@@ -1007,30 +1095,66 @@ export function Security() {
           ))}
         </tbody>
       </table>
-      <form
-        className="input-group"
-        onSubmit={(e) => {
-          e.preventDefault();
-          add();
-        }}
-      >
-        <input
-          className="input mono"
-          aria-label="IP address or network"
-          placeholder="203.0.113.10 or 10.0.0.0/24"
-          value={cidr}
-          onChange={(e) => setCidr(e.target.value)}
-        />
-        <button className="btn btn-primary" disabled={!cidr.trim()}>
-          Allow
-        </button>
-      </form>
+      {q.data?.allowlistLocked ? (
+        <div className="alert info">
+          Locked by the deployment (SSH_ALLOWLIST_LOCKED=true): only the .env
+          networks apply, and workspace entries are ignored.
+        </div>
+      ) : (
+        <form
+          className="input-group"
+          onSubmit={(e) => {
+            e.preventDefault();
+            add();
+          }}
+        >
+          <input
+            className="input mono"
+            aria-label="IP address or network"
+            placeholder="203.0.113.10 or 10.0.0.0/24"
+            value={cidr}
+            onChange={(e) => setCidr(e.target.value)}
+          />
+          <button className="btn btn-primary" disabled={!cidr.trim()}>
+            Allow
+          </button>
+        </form>
+      )}
       {workspace.some((c) => c.endsWith("/0")) && (
         <div className="alert" style={{ marginTop: 14 }}>
           A /0 entry allows every address, including internal services reachable
           from this server.
         </div>
       )}
+      <div className="section-title" style={{ marginTop: 28 }}>
+        Approval Notifications
+      </div>
+      <p className="small muted" style={{ lineHeight: 1.6, marginBottom: 14 }}>
+        Posts a short message when an agent or user asks for approval. Works
+        with Slack, Discord and Microsoft Teams incoming webhooks, or any
+        endpoint that accepts JSON <span className="mono">{"{ text }"}</span>.
+        Administrators also see a badge on the bell in the server list and get a
+        browser notification once they allow it.
+      </p>
+      <form
+        className="input-group"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void save(
+            { approvalWebhook: webhook.trim() },
+            webhook.trim() ? "Webhook saved." : "Webhook removed.",
+          );
+        }}
+      >
+        <input
+          className="input mono"
+          aria-label="Webhook URL"
+          placeholder="https://hooks.slack.com/services/…"
+          value={webhook}
+          onChange={(e) => setWebhook(e.target.value)}
+        />
+        <button className="btn btn-primary">Save</button>
+      </form>
     </div>
   );
 }

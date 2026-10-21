@@ -57,6 +57,11 @@ const schema = z.object({
   MCP_PUBLIC_URL: z.url().optional(),
   MCP_AUTH_ISSUER: z.url().optional(),
   SSH_ALLOWED_CIDRS: z.string().min(1),
+  // "true" ignores networks added in Settings > Security and disables editing.
+  SSH_ALLOWLIST_LOCKED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
   SSH_CONNECT_TIMEOUT: z.coerce.number().int().min(1000).default(10000),
   SSH_IDLE_TIMEOUT: z.coerce.number().int().min(1000).default(300000),
   SSH_MAX_SESSIONS: z.coerce.number().int().positive().default(20),
@@ -66,6 +71,12 @@ const schema = z.object({
     .positive()
     .max(4194304)
     .default(1048576),
+  // Largest file accepted by interactive SFTP uploads (default 10 GiB).
+  SFTP_MAX_FILE_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(10 * 1024 ** 3),
   API_PORT: z.coerce.number().default(3001),
   MCP_PORT: z.coerce.number().default(3002),
   INTERNAL_API_URL: z.url().default("http://127.0.0.1:3001"),

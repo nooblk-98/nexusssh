@@ -123,6 +123,12 @@ export function HostKeyPrompt({
           <div className="alert info">
             Ask an administrator to allow this server under Settings → Security.
           </div>
+        ) : settings.data?.allowlistLocked ? (
+          <div className="alert info">
+            This deployment only allows the networks in its .env file. Add{" "}
+            <span className="mono">{(blocked[0] || server.host) + "/32"}</span>{" "}
+            to SSH_ALLOWED_CIDRS and restart NexusSSH.
+          </div>
         ) : !blocked.length ? (
           <div className="alert">
             {server.host} could not be resolved to an address. Add its network

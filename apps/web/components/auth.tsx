@@ -4,7 +4,7 @@ import { api, useApi, type Row } from "../lib/api";
 import { Button, Field, Logo } from "./ui";
 
 export function Auth({ onLogin }: { onLogin: () => void }) {
-  const { data } = useApi<Row>("auth/status");
+  const { data, error: statusError, refetch } = useApi<Row>("auth/status");
   const [invitation, setInvitation] = useState("");
   useEffect(
     () =>
@@ -38,6 +38,17 @@ export function Auth({ onLogin }: { onLogin: () => void }) {
       setBusy(false);
     }
   }
+  if (statusError)
+    return (
+      <div className="splash">
+        <div style={{ display: "grid", gap: 12, justifyItems: "center" }}>
+          <span>NexusSSH is not reachable: {statusError.message}</span>
+          <Button variant="outline" onClick={() => void refetch()}>
+            Try again
+          </Button>
+        </div>
+      </div>
+    );
   if (!data) return <div className="splash">Opening your workspace…</div>;
   return (
     <div className="auth">
@@ -121,14 +132,16 @@ export function Auth({ onLogin }: { onLogin: () => void }) {
           />
         </Field>
         {!setup && !invitation && needCode && (
-          <Field label="Authenticator code">
+          <Field
+            label="Authenticator code"
+            hint="Lost your device? Enter one of your recovery codes instead."
+          >
             <input
               className="input"
               name="code"
               autoFocus
               autoComplete="one-time-code"
-              inputMode="numeric"
-              maxLength={6}
+              maxLength={14}
             />
           </Field>
         )}

@@ -15,6 +15,7 @@ export type Prefs = {
   editorTheme: string;
   editorWrap: boolean;
   mfaEnabled?: boolean;
+  recoveryCodesLeft?: number;
 };
 export const defaultPrefs: Prefs = {
   uiTheme: "auto",
@@ -68,6 +69,8 @@ export type Tab = {
   title: string;
   path?: string;
   status?: "connecting" | "connected" | "error" | "closed";
+  // Terminal resume token, so a reload reattaches to the same shell.
+  resume?: string;
 };
 type Workspace = {
   tabs: Tab[];
@@ -80,6 +83,7 @@ type Workspace = {
   close: (id: string) => void;
   activate: (id: string | null) => void;
   setStatus: (id: string, status: Tab["status"]) => void;
+  updateTab: (id: string, patch: Partial<Tab>) => void;
   setColumns: (n: number) => void;
   setCollapsed: (v: boolean) => void;
   select: (id: string | null) => void;
@@ -87,10 +91,25 @@ type Workspace = {
 };
 export const narrow = () =>
   typeof window !== "undefined" && matchMedia("(max-width: 760px)").matches;
+// Open tabs are remembered per browser tab (sessionStorage), so a reload
+// brings them back; terminals then resume their shells.
+const SAVED = "nexus-workspace";
+function saved(): Pick<Workspace, "tabs" | "active" | "columns"> {
+  try {
+    const v = JSON.parse(sessionStorage.getItem(SAVED) || "null");
+    if (v && Array.isArray(v.tabs))
+      return {
+        tabs: v.tabs.map((t: Tab) => ({ ...t, status: "connecting" })),
+        active: v.active ?? null,
+        columns: v.columns || 1,
+      };
+  } catch {}
+  return { tabs: [], active: null, columns: 1 };
+}
 export const useWorkspace = create<Workspace>((set, get) => ({
-  tabs: [],
-  active: null,
-  columns: 1,
+  ...(typeof window === "undefined"
+    ? { tabs: [], active: null, columns: 1 }
+    : saved()),
   // On phones the server list overlays the workspace, so it starts hidden.
   collapsed: narrow(),
   selected: null,
@@ -129,6 +148,10 @@ export const useWorkspace = create<Workspace>((set, get) => ({
   setColumns: (columns) => set({ columns }),
   setCollapsed: (collapsed) => set({ collapsed }),
   select: (selected) => set({ selected }),
+  updateTab: (id, patch) =>
+    set((s) => ({
+      tabs: s.tabs.map((t) => (t.id === id ? { ...t, ...patch } : t)),
+    })),
   toggleBroadcast: (id) =>
     set((s) => ({
       broadcast: s.broadcast.includes(id)
@@ -136,6 +159,15 @@ export const useWorkspace = create<Workspace>((set, get) => ({
         : [...s.broadcast, id],
     })),
 }));
+if (typeof window !== "undefined")
+  useWorkspace.subscribe((s) => {
+    try {
+      sessionStorage.setItem(
+        SAVED,
+        JSON.stringify({ tabs: s.tabs, active: s.active, columns: s.columns }),
+      );
+    } catch {}
+  });
 // Terminals register their input sink so broadcast keystrokes reach every
 // terminal that has broadcasting switched on.
 export const terminalSinks = new Map<string, (data: string) => void>();

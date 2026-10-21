@@ -2,7 +2,8 @@
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { RotateCw, Save, WrapText } from "lucide-react";
-import { notify, operation, type Row } from "../lib/api";
+import { notify, type Row } from "../lib/api";
+import { sftp } from "../lib/sftp";
 import { savePrefs, usePrefs, useWorkspace, type Tab } from "../lib/store";
 import { editorLanguage, editorThemes } from "../lib/themes";
 import { Button, IconButton } from "./ui";
@@ -27,7 +28,8 @@ export default function EditorView({ tab, server }: { tab: Tab; server: Row }) {
   const load = () => {
     setLoading(true);
     setError("");
-    operation<Row>("ssh_read_file", { serverId: server.id, path: tab.path })
+    sftp(server.id)
+      .read(tab.path!)
       .then((r) => {
         setText(r.content);
         setSaved(r.content);
@@ -43,11 +45,8 @@ export default function EditorView({ tab, server }: { tab: Tab; server: Row }) {
   save.current = () => {
     if (saving || text === saved) return;
     setSaving(true);
-    operation("ssh_write_file", {
-      serverId: server.id,
-      path: tab.path,
-      content: text,
-    })
+    sftp(server.id)
+      .write(tab.path!, text)
       .then(() => {
         setSaved(text);
         notify.success("Saved " + tab.title);

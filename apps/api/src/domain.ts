@@ -1,4 +1,5 @@
 import {
+  HttpException,
   ForbiddenException,
   NotFoundException,
   BadRequestException,
@@ -61,24 +62,49 @@ export async function authorize(p: Principal, id: string, op: string) {
     where: { id, organizationId: p.organizationId, archived: false },
   });
   if (!server) throw new NotFoundException("Server unavailable");
-  const grant =
-    p.kind === "agent"
-      ? await db.agentPermission.findUnique({
-          where: { agentId_serverId: { agentId: p.id, serverId: id } },
-        })
-      : await db.serverPermission.findUnique({
-          where: { serverId_userId: { serverId: id, userId: p.id } },
-        });
-  if (
-    !permitted(
-      p,
-      server.organizationId,
-      op,
-      grant ? JSON.parse(grant.operations) : [],
-    )
-  )
+  if (!permitted(p, server.organizationId, op, await grants(p, id)))
     throw new ForbiddenException("Operation is not permitted for this server");
   return server;
+}
+// A person's operations on a server: their own grant plus every grant given
+// to a team they belong to. Agents only have their own grant.
+async function grants(p: Principal, serverId: string): Promise<string[]> {
+  if (p.kind === "agent") {
+    const grant = await db.agentPermission.findUnique({
+      where: { agentId_serverId: { agentId: p.id, serverId } },
+    });
+    return grant ? JSON.parse(grant.operations) : [];
+  }
+  const [own, teams] = await Promise.all([
+    db.serverPermission.findUnique({
+      where: { serverId_userId: { serverId, userId: p.id } },
+    }),
+    db.teamPermission.findMany({
+      where: { serverId, team: { members: { some: { userId: p.id } } } },
+    }),
+  ]);
+  return [
+    ...new Set(
+      [own, ...teams].flatMap((g) => (g ? JSON.parse(g.operations) : [])),
+    ),
+  ];
+}
+async function enforceAgentLimits(agentId: string) {
+  const agent = await db.agent.findUnique({ where: { id: agentId } });
+  const window = async (ms: number) =>
+    db.commandExecution.count({
+      where: {
+        principalId: agentId,
+        createdAt: { gt: new Date(Date.now() - ms) },
+      },
+    });
+  if (
+    agent?.maxCallsPerMinute &&
+    (await window(60000)) >= agent.maxCallsPerMinute
+  )
+    throw new HttpException("Agent rate limit reached (per minute)", 429);
+  if (agent?.maxCallsPerDay && (await window(86400000)) >= agent.maxCallsPerDay)
+    throw new HttpException("Agent daily call limit reached", 429);
 }
 export async function listServers(p: Principal) {
   return db.server.findMany({
@@ -88,12 +114,52 @@ export async function listServers(p: Principal) {
         ? { archived: false, agentPermissions: { some: { agentId: p.id } } }
         : ["owner", "administrator"].includes(p.role)
           ? {}
-          : { permissions: { some: { userId: p.id } } }),
+          : {
+              OR: [
+                { permissions: { some: { userId: p.id } } },
+                {
+                  teamPermissions: {
+                    some: { team: { members: { some: { userId: p.id } } } },
+                  },
+                },
+              ],
+            }),
     },
     include: { group: true, tags: true },
     orderBy: [{ favorite: "desc" }, { name: "asc" }],
     take: 500,
   });
+}
+// Optional webhook (Slack, Discord, Teams or any JSON endpoint) told about
+// new approval requests so they are not left waiting unseen.
+export const APPROVAL_WEBHOOK = "notify.approvalWebhook";
+export async function approvalWebhook(org: string) {
+  const row = await db.systemSetting.findUnique({
+    where: {
+      organizationId_key: { organizationId: org, key: APPROVAL_WEBHOOK },
+    },
+  });
+  return row?.value || "";
+}
+async function announceApproval(
+  p: Principal,
+  op: string,
+  serverName: string,
+  approvalId: string,
+) {
+  const url = await approvalWebhook(p.organizationId);
+  if (!url) return;
+  const who =
+    p.kind === "agent"
+      ? (await db.agent.findUnique({ where: { id: p.id } }))?.name + " (agent)"
+      : (await db.user.findUnique({ where: { id: p.id } }))?.name;
+  const text = `NexusSSH: ${who} requests approval for ${op} on ${serverName} (${approvalId}). Review it under Settings > Approvals.`;
+  await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, content: text }),
+    signal: AbortSignal.timeout(5000),
+  }).catch(() => {});
 }
 // SSH destinations allowed for a workspace: the deployment's SSH_ALLOWED_CIDRS
 // plus networks administrators add under Settings > Security.
@@ -108,7 +174,7 @@ export async function sshLimits(org: string) {
   return {
     cidrs: [
       ...config.SSH_ALLOWED_CIDRS.split(","),
-      ...(await workspaceCidrs(org)),
+      ...(config.SSH_ALLOWLIST_LOCKED ? [] : await workspaceCidrs(org)),
     ],
     connectTimeout: config.SSH_CONNECT_TIMEOUT,
     outputLimit: config.SSH_OUTPUT_LIMIT,
@@ -258,6 +324,7 @@ export async function operation(
       message:
         "MCP connections are operation-scoped and closed after each result",
     };
+  if (p.kind === "agent") await enforceAgentLimits(p.id);
   const normalized = executionArgs(a),
     digest = hash(canonical(normalized));
   if (needsApproval(op)) {
@@ -278,6 +345,7 @@ export async function operation(
         },
       });
       await audit(p, op, "approval_pending", server.id, approval.id);
+      void announceApproval(p, op, server.name, approval.id);
       return {
         status: "approval_required",
         approvalId: approval.id,

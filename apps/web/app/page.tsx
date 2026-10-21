@@ -5,6 +5,7 @@ import { queryClient, useApi, type Row } from "../lib/api";
 import { usePath } from "../lib/router";
 import { usePrefs, useWorkspace } from "../lib/store";
 import { Auth } from "../components/auth";
+import { ImportExportHost } from "../components/import-export";
 import { ServerDrawerHost } from "../components/server-drawer";
 import { Settings } from "../components/settings/layout";
 import { Sidebar } from "../components/sidebar";
@@ -70,6 +71,7 @@ function SignedIn({ me }: { me: Row }) {
       </div>
       {settings && <Settings me={me} slug={settings[1]} />}
       <ServerDrawerHost />
+      <ImportExportHost />
       <SnippetsDrawerHost admin={admin} />
     </>
   );

@@ -35,7 +35,7 @@ test("first-run setup, login, workspace, settings and responsive layout", async 
     fullPage: true,
   });
   await page.getByRole("button", { name: "Add", exact: true }).click();
-  await page.getByRole("menuitem", { name: "Server" }).click();
+  await page.getByRole("menuitem", { name: "Server", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "New Server" })).toBeVisible();
   await page.getByRole("button", { name: "Advanced Settings" }).click();
   await expect(

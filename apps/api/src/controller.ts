@@ -19,7 +19,7 @@ import { ApiTags, ApiCookieAuth } from "@nestjs/swagger";
 import type { Request, Response } from "express";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import ipaddr from "ipaddr.js";
 import { db } from "../../../packages/database/index.js";
 import {
@@ -42,7 +42,9 @@ import {
 import { authenticate, admin, human, internal } from "./auth.js";
 import {
   ACCEPT_NEW_HOST_KEYS,
+  APPROVAL_WEBHOOK,
   EXTRA_CIDRS,
+  approvalWebhook,
   acceptsNewHostKeys,
   sshLimits,
   workspaceCidrs,
@@ -54,6 +56,7 @@ import {
 } from "./domain.js";
 import { verifyTotp, newTotp, totpStep } from "./totp.js";
 import { scanHostKey } from "../../../packages/ssh-core/index.js";
+import { closeSftp } from "./sftp.js";
 // Keep in sync with the icon picker in apps/web/components/icons.tsx.
 const serverIcons = [
   "linux",
@@ -71,6 +74,34 @@ const serverIcons = [
   "firewall",
   "globe",
 ] as const;
+// Optional per-agent call caps; null or omitted means unlimited.
+const agentLimits = {
+  maxCallsPerMinute: z.number().int().min(1).max(10000).nullish(),
+  maxCallsPerDay: z.number().int().min(1).max(1000000).nullish(),
+};
+// Recovery codes are shown once; only their hashes are stored.
+const normalizeRecovery = (code: string) =>
+  code.toLowerCase().replace(/[^a-z0-9]/g, "");
+async function newRecoveryCodes(userId: string) {
+  const codes = Array.from({ length: 10 }, () =>
+    randomBytes(6).toString("hex").match(/.{4}/g)!.join("-"),
+  );
+  await db.user.update({
+    where: { id: userId },
+    data: {
+      recoveryCodes: JSON.stringify(
+        codes.map((c) => hash(normalizeRecovery(c))),
+      ),
+    },
+  });
+  return codes;
+}
+async function confirmPassword(userId: string, body: unknown) {
+  const a = z.object({ password: z.string().min(1).max(200) }).parse(body);
+  const u = await db.user.findUniqueOrThrow({ where: { id: userId } });
+  if (!(await bcrypt.compare(a.password, u.passwordHash)))
+    throw new BadRequestException("Password is incorrect");
+}
 // An IP address or CIDR network; a bare address becomes a single-host network.
 const cidr = z
   .string()
@@ -241,20 +272,40 @@ export class AppController {
       role: user.role,
       scopes: [],
     };
-    if (
+    const code = (a.code || "").trim();
+    if (user.totpSecret && code && !/^\d{6}$/.test(code)) {
+      // A one-time recovery code instead of an authenticator code; consumed
+      // with a compare-and-swap so it cannot be used twice.
+      const codes: string[] = JSON.parse(user.recoveryCodes);
+      const h = hash(normalizeRecovery(code));
+      const used =
+        codes.includes(h) &&
+        (
+          await db.user.updateMany({
+            where: { id: user.id, recoveryCodes: user.recoveryCodes },
+            data: {
+              recoveryCodes: JSON.stringify(codes.filter((c) => c !== h)),
+            },
+          })
+        ).count === 1;
+      if (!used) {
+        await audit(p, "login", "failed_mfa");
+        throw new UnauthorizedException("Valid authenticator code required");
+      }
+      await audit(p, "login_recovery_code", "success");
+    } else if (
       user.totpSecret &&
       !verifyTotp(
         unseal<string>(user.totpSecret, config.ENCRYPTION_KEY, user.id),
-        a.code || "",
+        code,
       )
     ) {
       await audit(p, "login", "failed_mfa");
       throw new UnauthorizedException("Valid authenticator code required");
-    }
-    if (user.totpSecret) {
+    } else if (user.totpSecret) {
       const step = totpStep(
         unseal<string>(user.totpSecret, config.ENCRYPTION_KEY, user.id),
-        a.code || "",
+        code,
       );
       if (
         step === null ||
@@ -354,9 +405,13 @@ export class AppController {
     human(p);
     const u = await db.user.findUniqueOrThrow({
       where: { id: p.id },
-      select: { preferences: true, totpSecret: true },
+      select: { preferences: true, totpSecret: true, recoveryCodes: true },
     });
-    return { ...JSON.parse(u.preferences), mfaEnabled: !!u.totpSecret };
+    return {
+      ...JSON.parse(u.preferences),
+      mfaEnabled: !!u.totpSecret,
+      recoveryCodesLeft: JSON.parse(u.recoveryCodes).length,
+    };
   }
   @Patch("preferences") async setPreferences(
     @Req() req: Request,
@@ -412,7 +467,34 @@ export class AppController {
       },
     });
     await audit(p, "mfa_enabled", "success");
-    return { enabled: true };
+    return { enabled: true, recoveryCodes: await newRecoveryCodes(p.id) };
+  }
+  @Post("auth/mfa/disable") async disableMfa(
+    @Req() req: Request,
+    @Body() body: unknown,
+  ) {
+    const p = await authenticate(req);
+    human(p);
+    await confirmPassword(p.id, body);
+    await db.user.update({
+      where: { id: p.id },
+      data: { totpSecret: null, totpLastStep: -1, recoveryCodes: "[]" },
+    });
+    await audit(p, "mfa_disabled", "success");
+    return { enabled: false };
+  }
+  @Post("auth/mfa/recovery-codes") async recoveryCodes(
+    @Req() req: Request,
+    @Body() body: unknown,
+  ) {
+    const p = await authenticate(req);
+    human(p);
+    await confirmPassword(p.id, body);
+    const u = await db.user.findUniqueOrThrow({ where: { id: p.id } });
+    if (!u.totpSecret)
+      throw new BadRequestException("Two-factor authentication is not enabled");
+    await audit(p, "mfa_recovery_codes_created", "success");
+    return { recoveryCodes: await newRecoveryCodes(p.id) };
   }
   @Get("dashboard") async dashboard(@Req() req: Request) {
     const p = await authenticate(req);
@@ -612,12 +694,40 @@ export class AppController {
   ) {
     const p = await authenticate(req);
     admin(p);
-    await authorize(p, id, "server_get_info");
-    const data = await this.serverData(p, body, id);
+    const old = await authorize(p, id, "server_get_info");
+    // Fields left out keep their saved values, so callers can send only changes.
+    const tags = await db.serverTag.findMany({
+      where: { servers: { some: { id } } },
+      select: { name: true },
+    });
+    const saved = {
+      name: old.name,
+      host: old.host,
+      port: old.port,
+      username: old.username,
+      identityId: old.identityId,
+      fingerprint: old.fingerprint,
+      environment: old.environment,
+      description: old.description,
+      icon: old.icon,
+      terminalSettings: JSON.parse(old.terminalSettings),
+      fileRoot: old.fileRoot,
+      groupId: old.groupId,
+      bastionId: old.bastionId,
+      favorite: old.favorite,
+      archived: old.archived,
+      tags: tags.map((t) => t.name),
+    };
+    const data = await this.serverData(
+      p,
+      { ...saved, ...z.record(z.string(), z.unknown()).parse(body) },
+      id,
+    );
     const s = await db.server.update({
       where: { id },
       data: { ...data, status: "unknown" },
     });
+    closeSftp(id);
     await audit(p, "server_updated", "success", id);
     return s;
   }
@@ -792,6 +902,7 @@ export class AppController {
           .array(z.enum(allOperations as [string, ...string[]]))
           .max(60),
         expiresInDays: z.number().int().min(1).max(90).default(30),
+        ...agentLimits,
       })
       .strict()
       .parse(body);
@@ -818,6 +929,8 @@ export class AppController {
         ownerId: p.id,
         name: a.name,
         level: a.level,
+        maxCallsPerMinute: a.maxCallsPerMinute ?? null,
+        maxCallsPerDay: a.maxCallsPerDay ?? null,
         permissions: {
           create: [...new Set(a.serverIds)].map((serverId) => ({
             serverId,
@@ -837,6 +950,39 @@ export class AppController {
     });
     await audit(p, "agent_created", "success");
     return { agent, token, endpoint: mcpEndpoint(req.headers) };
+  }
+  @Patch("agents/:id/limits") async agentLimits(
+    @Req() req: Request,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    const p = await authenticate(req);
+    admin(p);
+    const a = z.object(agentLimits).strict().parse(body);
+    const result = await db.agent.updateMany({
+      where: { id, organizationId: p.organizationId },
+      data: {
+        maxCallsPerMinute: a.maxCallsPerMinute ?? null,
+        maxCallsPerDay: a.maxCallsPerDay ?? null,
+      },
+    });
+    if (!result.count) throw new NotFoundException();
+    await audit(p, "agent_limits_updated", "success");
+    return a;
+  }
+  // Recent SSH operations an agent ran, newest first.
+  @Get("agents/:id/activity") async agentActivity(
+    @Req() req: Request,
+    @Param("id") id: string,
+  ) {
+    const p = await authenticate(req);
+    admin(p);
+    return db.commandExecution.findMany({
+      where: { principalId: id, organizationId: p.organizationId },
+      include: { server: { select: { name: true } } },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+    });
   }
   @Delete("agents/:id") async revoke(
     @Req() req: Request,
@@ -1026,9 +1172,14 @@ export class AppController {
       sessionLimit: config.SSH_MAX_SESSIONS,
       recording: false,
       operations: allOperations,
+      readOperations,
       acceptNewHostKeys: await acceptsNewHostKeys(p.organizationId),
       deploymentCidrs: config.SSH_ALLOWED_CIDRS.split(","),
       workspaceCidrs: await workspaceCidrs(p.organizationId),
+      allowlistLocked: config.SSH_ALLOWLIST_LOCKED,
+      ...(["owner", "administrator"].includes(p.role)
+        ? { approvalWebhook: await approvalWebhook(p.organizationId) }
+        : {}),
     };
   }
   @Patch("settings") async updateSettings(
@@ -1041,6 +1192,7 @@ export class AppController {
       .object({
         acceptNewHostKeys: z.boolean().optional(),
         workspaceCidrs: z.array(cidr).max(100).optional(),
+        approvalWebhook: z.union([z.url().max(1000), z.literal("")]).optional(),
       })
       .strict()
       .parse(body);
@@ -1062,6 +1214,14 @@ export class AppController {
         "success",
       );
     }
+    if (a.approvalWebhook !== undefined) {
+      await save(APPROVAL_WEBHOOK, a.approvalWebhook);
+      await audit(p, "approval_webhook_updated", "success");
+    }
+    if (a.workspaceCidrs && config.SSH_ALLOWLIST_LOCKED)
+      throw new ForbiddenException(
+        "SSH destinations are locked by the deployment (SSH_ALLOWLIST_LOCKED)",
+      );
     if (a.workspaceCidrs) {
       await save(EXTRA_CIDRS, JSON.stringify([...new Set(a.workspaceCidrs)]));
       await audit(p, "ssh_allowlist_updated", "success");
@@ -1071,14 +1231,22 @@ export class AppController {
   @Get("teams") async teams(@Req() req: Request) {
     const p = await authenticate(req);
     admin(p);
-    return db.team.findMany({
+    const teams = await db.team.findMany({
       where: { organizationId: p.organizationId },
       include: {
         members: {
           include: { user: { select: { id: true, name: true, email: true } } },
         },
+        servers: { select: { serverId: true, operations: true } },
       },
     });
+    return teams.map((t) => ({
+      ...t,
+      servers: t.servers.map((g) => ({
+        serverId: g.serverId,
+        operations: JSON.parse(g.operations),
+      })),
+    }));
   }
   @Post("teams") async createTeam(@Req() req: Request, @Body() body: unknown) {
     const p = await authenticate(req);
@@ -1145,6 +1313,58 @@ export class AppController {
     ]);
     await audit(p, "team_updated", "success");
     return { id };
+  }
+  // Replaces the team's server grants; an empty operation list removes one.
+  @Post("teams/:id/servers") async teamServers(
+    @Req() req: Request,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    const p = await authenticate(req);
+    admin(p);
+    const a = z
+      .object({
+        servers: z
+          .array(
+            z.object({
+              serverId: z.uuid(),
+              operations: z.array(
+                z.enum(allOperations as [string, ...string[]]),
+              ),
+            }),
+          )
+          .max(500),
+      })
+      .parse(body);
+    if (
+      !(await db.team.findFirst({
+        where: { id, organizationId: p.organizationId },
+      }))
+    )
+      throw new NotFoundException();
+    const ids = a.servers.map((s) => s.serverId);
+    if (
+      (await db.server.count({
+        where: { id: { in: ids }, organizationId: p.organizationId },
+      })) !== new Set(ids).size
+    )
+      throw new BadRequestException("Server unavailable");
+    await db.$transaction([
+      db.teamPermission.deleteMany({ where: { teamId: id } }),
+      ...a.servers
+        .filter((s) => s.operations.length)
+        .map((s) =>
+          db.teamPermission.create({
+            data: {
+              teamId: id,
+              serverId: s.serverId,
+              operations: JSON.stringify([...new Set(s.operations)]),
+            },
+          }),
+        ),
+    ]);
+    await audit(p, "team_servers_updated", "success");
+    return { updated: true };
   }
   @Delete("teams/:id") async removeTeam(
     @Req() req: Request,

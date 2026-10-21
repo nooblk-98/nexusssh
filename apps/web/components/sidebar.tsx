@@ -1,18 +1,27 @@
 "use client";
-import { useEffect, useMemo, useState, type DragEvent } from "react";
-import { ChevronDown, ChevronLeft, Folder, Menu, Plus } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import {
+  Bell,
+  ChevronDown,
+  ChevronLeft,
+  Folder,
+  Menu,
+  Plus,
+} from "lucide-react";
 import {
   api,
   copyText,
   notify,
   queryClient,
   refresh,
+  useApi,
   type Row,
 } from "../lib/api";
 import { navigate } from "../lib/router";
 import { connectServer, updateServer, useServers } from "../lib/servers";
 import { useWorkspace } from "../lib/store";
 import { ServerIcon } from "./icons";
+import { openImportExport } from "./import-export";
 import { openServerDrawer } from "./server-drawer";
 import {
   confirmDialog,
@@ -283,6 +292,7 @@ export function Sidebar({ me }: { me: Row }) {
       <div className="sidebar-head">
         <Logo />
         <span className="grow" />
+        {admin && <ApprovalBell />}
         <IconButton
           label="Menu"
           onClick={(e) => openMenuAt(e.currentTarget, mainMenu(admin))}
@@ -311,6 +321,15 @@ export function Sidebar({ me }: { me: Row }) {
               openMenuAt(e.currentTarget, [
                 { label: "Server", onClick: () => openServerDrawer({}) },
                 { label: "Folder", onClick: newFolder },
+                "sep",
+                {
+                  label: "Import Servers…",
+                  onClick: () => openImportExport("import"),
+                },
+                {
+                  label: "Export Servers…",
+                  onClick: () => openImportExport("export"),
+                },
               ])
             }
           >
@@ -381,5 +400,56 @@ export function Sidebar({ me }: { me: Row }) {
         )}
       </nav>
     </aside>
+  );
+}
+// Pending approval requests, polled for administrators. A desktop notification
+// is shown when new ones arrive, once the browser has allowed notifications.
+function ApprovalBell() {
+  const q = useApi<Row[]>("approvals", { interval: 15000 });
+  const pending = (q.data || []).filter(
+    (a) => a.status === "pending" && new Date(a.expiresAt) > new Date(),
+  );
+  const seen = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (!q.data) return;
+    const ids = new Set(pending.map((a) => a.id));
+    const known = seen.current;
+    seen.current = ids;
+    if (!known || typeof Notification === "undefined") return;
+    const fresh = pending.filter((a) => !known.has(a.id));
+    if (fresh.length && Notification.permission === "granted")
+      new Notification("NexusSSH approval needed", {
+        body: fresh
+          .map((a) => `${a.operation} on ${a.server?.name || "a server"}`)
+          .join("\n"),
+        tag: "nexus-approvals",
+      }).onclick = () => {
+        window.focus();
+        navigate("/settings/approvals");
+      };
+  }, [q.data]);
+  return (
+    <IconButton
+      label={
+        pending.length
+          ? `${pending.length} approval request${pending.length === 1 ? "" : "s"}`
+          : "Approvals"
+      }
+      onClick={() => {
+        if (
+          typeof Notification !== "undefined" &&
+          Notification.permission === "default"
+        )
+          void Notification.requestPermission();
+        navigate("/settings/approvals");
+      }}
+    >
+      <span style={{ position: "relative", display: "inline-flex" }}>
+        <Bell size={18} />
+        {pending.length > 0 && (
+          <span className="count-badge">{pending.length}</span>
+        )}
+      </span>
+    </IconButton>
   );
 }

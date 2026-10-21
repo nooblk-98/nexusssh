@@ -38,6 +38,7 @@ model User {
   disabled Boolean @default(false)
   totpSecret String?
   totpLastStep Int @default(-1)
+  recoveryCodes String @default("[]")
   preferences String @default("{}")
   sessions WebSession[]
   teams TeamMember[]
@@ -64,6 +65,7 @@ model Team {
   organization Organization @relation(fields: [organizationId], references: [id])
   name String
   members TeamMember[]
+  servers TeamPermission[]
   @@unique([organizationId, name])
   @@index([organizationId])
 }
@@ -157,6 +159,7 @@ model Server {
   bastion Server? @relation("Bastion", fields: [bastionId], references: [id])
   targets Server[] @relation("Bastion")
   permissions ServerPermission[]
+  teamPermissions TeamPermission[]
   agentPermissions AgentPermission[]
   sessions SSHSession[]
   history SSHConnectionHistory[]
@@ -165,6 +168,18 @@ model Server {
   transfers FileTransfer[]
   tasks BackgroundTask[]
   @@index([organizationId])
+}
+
+model TeamPermission {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  serverId String
+  server Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  teamId String
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  operations String
+  @@unique([serverId, teamId])
 }
 
 model ServerPermission {
@@ -191,6 +206,8 @@ model Agent {
   level String @default("viewer")
   revoked Boolean @default(false)
   lastActivityAt DateTime?
+  maxCallsPerMinute Int?
+  maxCallsPerDay Int?
   permissions AgentPermission[]
   tokens AgentToken[]
   @@index([organizationId])

@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type DragEvent,
+  type MouseEvent,
 } from "react";
 import {
   ArrowDownToLine,
@@ -19,45 +20,39 @@ import {
   HardDriveDownload,
   Home,
   Link2,
+  Pause,
   Pencil,
+  Play,
   RotateCw,
+  Search,
   Trash2,
+  X,
 } from "lucide-react";
-import {
-  base64ToBytes,
-  formatBytes,
-  notify,
-  operation,
-  saveFile,
-  uid,
-  useApi,
-  type Row,
-} from "../lib/api";
+import { formatBytes, notify, type Row } from "../lib/api";
+import { useServers } from "../lib/servers";
+import { download, sftp, Upload, type Entry } from "../lib/sftp";
 import { useWorkspace, type Tab } from "../lib/store";
 import { HostKeyPrompt, hostKeyProblem } from "./host-key";
 import {
+  Button,
   confirmDialog,
+  Dialog,
+  Field,
   IconButton,
   openMenu,
   promptDialog,
   type MenuItem,
 } from "./ui";
 
-type Entry = {
-  name: string;
-  size: number;
-  mode: number;
-  modifiedAt: number;
-  directory: boolean;
-  symlink: boolean;
-};
 type Transfer = {
   id: string;
   name: string;
   dir: "up" | "down";
-  state: "queued" | "running" | "done" | "error";
+  state: "running" | "paused" | "done" | "error";
   size: number;
+  sent: number;
   error?: string;
+  upload?: Upload;
 };
 const join = (dir: string, name: string) =>
   (dir.endsWith("/") ? dir : dir + "/") + name;
@@ -67,20 +62,14 @@ export function perm(mode: number, dir: boolean, link: boolean) {
     (n & 4 ? "r" : "-") + (n & 2 ? "w" : "-") + (n & 1 ? "x" : "-");
   return (link ? "l" : dir ? "d" : "-") + r(mode >> 6) + r(mode >> 3) + r(mode);
 }
-const readAsBase64 = (f: Blob) =>
-  new Promise<string>((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result).split(",")[1] || "");
-    r.onerror = () => reject(r.error);
-    r.readAsDataURL(f);
-  });
 
 export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
-  const settings = useApi<Row>("settings");
-  const limit: number = settings.data?.fileLimit || 1048576;
+  const api = useMemo(() => sftp(server.id), [server.id]);
   const open = useWorkspace((s) => s.open);
   const setStatus = useWorkspace((s) => s.setStatus);
-  const [path, setPath] = useState<string>(tab.path || server.fileRoot);
+  const updateTab = useWorkspace((s) => s.updateTab);
+  const [path, setPath] = useState<string>(tab.path || "");
+  const [root, setRoot] = useState("");
   const [input, setInput] = useState(path);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -92,26 +81,35 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
     key: "name",
     asc: true,
   });
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [anchor, setAnchor] = useState<string | null>(null);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [over, setOver] = useState(false);
+  const [find, setFind] = useState<{
+    term: string;
+    results: Row[] | null;
+    busy: boolean;
+  } | null>(null);
+  const [dialog, setDialog] = useState<
+    | null
+    | { kind: "chmod"; mode: number; paths: string[] }
+    | { kind: "copy" | "move"; paths: string[] }
+  >(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const args = (extra: Row) => ({ serverId: server.id, ...extra });
 
   const load = useCallback(
-    async (target: string) => {
+    async (target?: string) => {
       setLoading(true);
       setError("");
       try {
-        const r = await operation<Row>(
-          "ssh_list_directory",
-          args({ path: target }),
-        );
-        setEntries(r.entries || []);
-        setPath(r.path || target);
-        setInput(r.path || target);
-        setSelected(null);
+        const r = await api.list(target || undefined);
+        setEntries(r.entries);
+        setPath(r.path);
+        setRoot(r.root);
+        setInput(r.path);
+        setSelected([]);
         setStatus(tab.id, "connected");
+        updateTab(tab.id, { path: r.path });
       } catch (e) {
         setError((e as Error).message);
         setStatus(tab.id, "error");
@@ -119,13 +117,14 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
         setLoading(false);
       }
     },
-    [server.id],
+    [api, setStatus, updateTab, tab.id],
   );
   useEffect(() => {
     void load(path);
     // Initial load only; navigation calls load directly.
   }, []);
   const go = (target: string) => {
+    setFind(null);
     if (target === path) return void load(target);
     setHistory((h) => ({ back: [...h.back, path], forward: [] }));
     void load(target);
@@ -148,22 +147,38 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
     }));
     void load(next);
   };
-  const sorted = useMemo(() => {
-    const list = [...entries].sort((a, b) => {
-      if (a.directory !== b.directory) return a.directory ? -1 : 1;
-      const x = a[sort.key],
-        y = b[sort.key];
-      const c =
-        typeof x === "string"
-          ? x.localeCompare(String(y), undefined, { numeric: true })
-          : Number(x) - Number(y);
-      return sort.asc ? c : -c;
-    });
-    return list;
-  }, [entries, sort]);
+  const sorted = useMemo(
+    () =>
+      [...entries].sort((a, b) => {
+        if (a.directory !== b.directory) return a.directory ? -1 : 1;
+        const x = a[sort.key],
+          y = b[sort.key];
+        const c =
+          typeof x === "string"
+            ? x.localeCompare(String(y), undefined, { numeric: true })
+            : Number(x) - Number(y);
+        return sort.asc ? c : -c;
+      }),
+    [entries, sort],
+  );
+  const pick = (names: string[]) =>
+    sorted.filter((e) => names.includes(e.name));
+  const toPaths = (list: Entry[]) => list.map((e) => join(path, e.name));
 
   const update = (id: string, patch: Partial<Transfer>) =>
     setTransfers((t) => t.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+  async function runUpload(t: Transfer) {
+    update(t.id, { state: "running", error: undefined });
+    try {
+      await t.upload!.run();
+      update(t.id, { state: "done", sent: t.size });
+      return true;
+    } catch (e) {
+      if ((e as Error).name === "AbortError") update(t.id, { state: "paused" });
+      else update(t.id, { state: "error", error: (e as Error).message });
+      return false;
+    }
+  }
   async function uploadFiles(
     files: { file: File; rel: string }[],
     base = path,
@@ -176,58 +191,46 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
         }),
       ),
     ];
-    for (const d of dirs)
-      await operation(
-        "ssh_create_directory",
-        args({ path: join(base, d) }),
-      ).catch(() => {});
-    for (const { file, rel } of files) {
-      const id = uid();
-      setTransfers((t) => [
-        { id, name: rel, dir: "up", state: "queued", size: file.size },
-        ...t,
-      ]);
-      if (file.size > limit) {
-        update(id, {
-          state: "error",
-          error: `Larger than the ${formatBytes(limit)} transfer limit`,
-        });
-        continue;
-      }
-      update(id, { state: "running" });
-      try {
-        await operation(
-          "ssh_upload_file",
-          args({
-            path: join(base, rel),
-            content: await readAsBase64(file),
-            encoding: "base64",
-          }),
-        );
-        update(id, { state: "done" });
-      } catch (e) {
-        update(id, { state: "error", error: (e as Error).message });
-      }
-    }
-    if (base === path) void load(path);
+    for (const d of dirs) await api.mkdir(join(base, d)).catch(() => {});
+    const queued = files.map(({ file, rel }) => {
+      const id = Math.random().toString(36).slice(2);
+      const t: Transfer = {
+        id,
+        name: rel,
+        dir: "up",
+        state: "running",
+        size: file.size,
+        sent: 0,
+      };
+      t.upload = new Upload(server.id, join(base, rel), file, (sent) =>
+        update(id, { sent }),
+      );
+      return t;
+    });
+    setTransfers((t) => [...queued, ...t]);
+    let changed = false;
+    for (const t of queued) changed = (await runUpload(t)) || changed;
+    if (changed && base === path) void load(path);
   }
-  async function download(e: Entry) {
-    const id = uid();
+  const startDownload = (list: Entry[]) => {
+    if (!list.length) return;
+    const single = list.length === 1 && !list[0].directory;
+    download(api.downloadUrl(toPaths(list)));
     setTransfers((t) => [
-      { id, name: e.name, dir: "down", state: "running", size: e.size },
+      {
+        id: Math.random().toString(36).slice(2),
+        name: single
+          ? list[0].name
+          : (list.length === 1 ? list[0].name : list.length + " items") +
+            ".tar.gz",
+        dir: "down",
+        state: "done",
+        size: single ? list[0].size : 0,
+        sent: single ? list[0].size : 0,
+      },
       ...t,
     ]);
-    try {
-      const r = await operation<Row>(
-        "ssh_download_file",
-        args({ path: join(path, e.name) }),
-      );
-      saveFile(base64ToBytes(r.content), e.name, "application/octet-stream");
-      update(id, { state: "done" });
-    } catch (err) {
-      update(id, { state: "error", error: (err as Error).message });
-    }
-  }
+  };
   const edit = (e: Entry) =>
     open({
       kind: "editor",
@@ -236,39 +239,18 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
       path: join(path, e.name),
       status: "connected",
     });
-  async function removeTree(target: string, dir: boolean, budget = { n: 0 }) {
-    if (++budget.n > 500)
-      throw new Error("Folder is too large to delete from the browser");
-    if (dir) {
-      const r = await operation<Row>(
-        "ssh_list_directory",
-        args({ path: target }),
-      );
-      for (const c of r.entries as Entry[])
-        await removeTree(
-          join(target, c.name),
-          c.directory && !c.symlink,
-          budget,
-        );
-    }
-    await operation("ssh_delete_file", args({ path: target }));
-  }
   const act = (f: () => Promise<unknown>) => () =>
     void f()
       .then(() => load(path))
       .catch(notify.error);
   const newFolder = act(async () => {
     const name = await promptDialog("New Folder", "Folder name", "", "Create");
-    if (name)
-      await operation("ssh_create_directory", args({ path: join(path, name) }));
+    if (name) await api.mkdir(join(path, name));
   });
   const newFile = act(async () => {
     const name = await promptDialog("New File", "File name", "", "Create");
     if (!name) return;
-    await operation(
-      "ssh_write_file",
-      args({ path: join(path, name), content: "" }),
-    );
+    await api.write(join(path, name), "");
     open({
       kind: "editor",
       serverId: server.id,
@@ -277,59 +259,118 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
       status: "connected",
     });
   });
+  const rename = (e: Entry) =>
+    act(async () => {
+      const name = await promptDialog("Rename", "New name", e.name, "Rename");
+      if (name && name !== e.name)
+        await api.rename(
+          join(path, e.name),
+          name.startsWith("/") ? name : join(path, name),
+        );
+    })();
+  const remove = (list: Entry[]) =>
+    act(async () => {
+      const what =
+        list.length === 1 ? <b>{list[0].name}</b> : <b>{list.length} items</b>;
+      const folders = list.some((e) => e.directory && !e.symlink);
+      if (
+        await confirmDialog(
+          "Delete",
+          <>
+            Permanently delete {what}
+            {folders ? " and everything inside" : ""}? This cannot be undone.
+          </>,
+          "Delete",
+          true,
+        )
+      ) {
+        await api.remove(toPaths(list));
+        notify.success("Deleted.");
+      }
+    })();
   const generalMenu: MenuItem[] = [
     { label: "Refresh", onClick: () => void load(path) },
     { label: "New Folder", onClick: newFolder },
     { label: "New File", onClick: newFile },
-    { label: "Upload", onClick: () => fileInput.current?.click() },
-  ];
-  const entryMenu = (e: Entry): MenuItem[] => [
-    { label: "Refresh", onClick: () => void load(path) },
-    { label: "New Folder", onClick: newFolder },
-    { label: "New File", onClick: newFile },
-    "sep",
-    {
-      label: "Rename",
-      onClick: act(async () => {
-        const name = await promptDialog("Rename", "New name", e.name, "Rename");
-        if (name && name !== e.name)
-          await operation(
-            "ssh_rename_file",
-            args({
-              path: join(path, e.name),
-              destination: name.startsWith("/") ? name : join(path, name),
-            }),
-          );
-      }),
-    },
-    {
-      label: "Delete",
-      danger: true,
-      onClick: act(async () => {
-        if (
-          await confirmDialog(
-            "Delete",
-            <>
-              Permanently delete <b>{e.name}</b>
-              {e.directory ? " and everything inside it" : ""}? This cannot be
-              undone.
-            </>,
-            "Delete",
-            true,
-          )
-        )
-          await removeTree(join(path, e.name), e.directory && !e.symlink);
-      }),
-    },
     "sep",
     { label: "Upload", onClick: () => fileInput.current?.click() },
-    { label: "Edit", disabled: e.directory, onClick: () => edit(e) },
     {
-      label: "Download",
-      disabled: e.directory,
-      onClick: () => void download(e),
+      label: "Select All",
+      onClick: () => setSelected(entries.map((e) => e.name)),
     },
   ];
+  const entryMenu = (list: Entry[]): MenuItem[] => {
+    const one = list.length === 1 ? list[0] : null;
+    return [
+      { label: "Refresh", onClick: () => void load(path) },
+      { label: "New Folder", onClick: newFolder },
+      { label: "New File", onClick: newFile },
+      "sep",
+      { label: "Rename", disabled: !one, onClick: () => one && rename(one) },
+      {
+        label: list.length > 1 ? `Delete ${list.length} items` : "Delete",
+        danger: true,
+        onClick: () => remove(list),
+      },
+      {
+        label: "Permissions…",
+        onClick: () =>
+          setDialog({
+            kind: "chmod",
+            mode: list[0].mode & 0o7777,
+            paths: toPaths(list),
+          }),
+      },
+      {
+        label: "Copy to…",
+        onClick: () => setDialog({ kind: "copy", paths: toPaths(list) }),
+      },
+      {
+        label: "Move to…",
+        onClick: () => setDialog({ kind: "move", paths: toPaths(list) }),
+      },
+      "sep",
+      { label: "Upload", onClick: () => fileInput.current?.click() },
+      {
+        label: "Edit",
+        disabled: !one || one.directory,
+        onClick: () => one && edit(one),
+      },
+      {
+        label: one && !one.directory ? "Download" : "Download as .tar.gz",
+        onClick: () => startDownload(list),
+      },
+    ];
+  };
+  function select(e: MouseEvent, entry: Entry) {
+    if (e.shiftKey && anchor) {
+      const names = sorted.map((x) => x.name);
+      const [a, b] = [names.indexOf(anchor), names.indexOf(entry.name)].sort(
+        (x, y) => x - y,
+      );
+      setSelected(names.slice(a, b + 1));
+      return;
+    }
+    if (e.ctrlKey || e.metaKey)
+      setSelected((s) =>
+        s.includes(entry.name)
+          ? s.filter((x) => x !== entry.name)
+          : [...s, entry.name],
+      );
+    else setSelected([entry.name]);
+    setAnchor(entry.name);
+  }
+  async function runSearch(term: string) {
+    if (!term.trim()) return;
+    setFind({ term, results: null, busy: true });
+    try {
+      const r = await api.search(path, term.trim());
+      setFind({ term, results: r.matches, busy: false });
+    } catch (e) {
+      notify.error(e);
+      setFind({ term, results: [], busy: false });
+    }
+  }
   async function onDrop(ev: DragEvent) {
     ev.preventDefault();
     setOver(false);
@@ -355,15 +396,14 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
         } while (batch.length);
       }
     };
-    const entriesDropped = items
+    const dropped = items
       .map((i) => i.webkitGetAsEntry?.())
       .filter(Boolean) as FileSystemEntry[];
-    if (entriesDropped.length)
-      for (const e of entriesDropped) await walk(e, "");
+    if (dropped.length) for (const e of dropped) await walk(e, "");
     else
       for (const f of ev.dataTransfer.files) out.push({ file: f, rel: f.name });
-    if (out.length > 200)
-      return notify.error("Drop at most 200 files at a time.");
+    if (out.length > 1000)
+      return notify.error("Drop at most 1000 files at a time.");
     if (out.length) void uploadFiles(out);
   }
   const dragProps = {
@@ -392,6 +432,10 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
       </span>
     </th>
   );
+  const picked = pick(selected);
+  const active = transfers.filter(
+    (t) => t.dir === "up" && (t.state === "running" || t.state === "paused"),
+  );
   return (
     <div className="sftp">
       <div className="sftp-main">
@@ -410,23 +454,52 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
           >
             <ChevronRight size={18} />
           </IconButton>
-          <form
-            className="grow"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (input.trim()) go(input.trim());
-            }}
+          {find ? (
+            <form
+              className="grow row"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void runSearch(find.term);
+              }}
+            >
+              <input
+                autoFocus
+                className="input"
+                aria-label="Find files"
+                placeholder={`Find files and folders in ${path}`}
+                value={find.term}
+                onChange={(e) => setFind({ ...find, term: e.target.value })}
+                onKeyDown={(e) => e.key === "Escape" && setFind(null)}
+              />
+            </form>
+          ) : (
+            <form
+              className="grow"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (input.trim()) go(input.trim());
+              }}
+            >
+              <input
+                className="input mono"
+                aria-label="Path"
+                placeholder="Path"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                style={{ fontSize: 12 }}
+              />
+            </form>
+          )}
+          <IconButton
+            label={find ? "Close find" : "Find"}
+            active={!!find}
+            onClick={() =>
+              setFind(find ? null : { term: "", results: null, busy: false })
+            }
           >
-            <input
-              className="input mono"
-              aria-label="Path"
-              placeholder="Path"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              style={{ fontSize: 12 }}
-            />
-          </form>
-          <IconButton label="Home" onClick={() => go(server.fileRoot)}>
+            {find ? <X size={17} /> : <Search size={17} />}
+          </IconButton>
+          <IconButton label="Home" onClick={() => go(root)}>
             <Home size={18} />
           </IconButton>
           <IconButton
@@ -438,11 +511,30 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
           </IconButton>
         </div>
         <div
+          tabIndex={0}
           className={"sftp-table-wrap" + (over ? " dropzone over" : "")}
           {...dragProps}
+          onKeyDown={(e) => {
+            if (find || (e.target as HTMLElement).tagName === "INPUT") return;
+            if (e.key === "Delete" && picked.length) remove(picked);
+            else if (e.key === "F2" && picked.length === 1) rename(picked[0]);
+            else if (e.key === "Backspace" && path !== root) go(parent(path));
+            else if (e.key === "Enter" && picked.length === 1) {
+              if (picked[0].directory) go(join(path, picked[0].name));
+              else edit(picked[0]);
+            } else if (
+              e.key.toLowerCase() === "a" &&
+              (e.ctrlKey || e.metaKey)
+            ) {
+              e.preventDefault();
+              setSelected(entries.map((x) => x.name));
+            }
+          }}
           onContextMenu={(e) => {
-            if ((e.target as HTMLElement).closest("tr[data-entry]")) return;
+            if ((e.target as HTMLElement).closest("tr[data-entry]") || find)
+              return;
             e.preventDefault();
+            setSelected([]);
             openMenu(e.clientX, e.clientY, generalMenu);
           }}
         >
@@ -461,7 +553,58 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
               <Folder size={40} />
               <h3>Unable to open this folder</h3>
               <p>{error}</p>
+              <Button variant="outline" onClick={() => void load(path)}>
+                Try again
+              </Button>
             </div>
+          ) : find?.results || find?.busy ? (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>
+                    {find.busy
+                      ? "Searching…"
+                      : `${find.results!.length}${find.results!.length >= 200 ? "+" : ""} result(s) for “${find.term}”`}
+                  </th>
+                  <th>Size</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(find.results || []).map((m) => (
+                  <tr
+                    key={m.path}
+                    style={{ cursor: "pointer" }}
+                    onClick={() =>
+                      m.directory
+                        ? go(m.path)
+                        : open({
+                            kind: "editor",
+                            serverId: server.id,
+                            title: m.path.split("/").pop()!,
+                            path: m.path,
+                            status: "connected",
+                          })
+                    }
+                  >
+                    <td>
+                      <span className="name-cell mono" style={{ fontSize: 12 }}>
+                        {m.directory ? (
+                          <Folder
+                            size={16}
+                            className="folder-icon"
+                            fill="currentColor"
+                          />
+                        ) : (
+                          <File size={16} />
+                        )}
+                        {m.path}
+                      </span>
+                    </td>
+                    <td>{m.directory ? "" : formatBytes(m.size)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           ) : (
             <table className="table">
               <thead>
@@ -474,7 +617,7 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
                 </tr>
               </thead>
               <tbody>
-                {path !== "/" && path !== server.fileRoot && (
+                {path && path !== "/" && path !== root && (
                   <tr onDoubleClick={() => go(parent(path))}>
                     <td colSpan={5}>
                       <button
@@ -490,15 +633,19 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
                   <tr
                     key={e.name}
                     data-entry
-                    className={selected === e.name ? "selected" : ""}
-                    onClick={() => setSelected(e.name)}
+                    className={selected.includes(e.name) ? "selected" : ""}
+                    onClick={(ev) => select(ev, e)}
                     onDoubleClick={() =>
                       e.directory ? go(join(path, e.name)) : edit(e)
                     }
                     onContextMenu={(ev) => {
                       ev.preventDefault();
-                      setSelected(e.name);
-                      openMenu(ev.clientX, ev.clientY, entryMenu(e));
+                      const list = selected.includes(e.name) ? picked : [e];
+                      if (!selected.includes(e.name)) {
+                        setSelected([e.name]);
+                        setAnchor(e.name);
+                      }
+                      openMenu(ev.clientX, ev.clientY, entryMenu(list));
                     }}
                   >
                     <td>
@@ -528,20 +675,26 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
                           <IconButton
                             label="Edit"
                             size="sm"
-                            onClick={() => edit(e)}
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              edit(e);
+                            }}
                           >
                             <Pencil size={15} />
                           </IconButton>
                         )}
-                        {!e.directory && (
-                          <IconButton
-                            label="Download"
-                            size="sm"
-                            onClick={() => void download(e)}
-                          >
-                            <ArrowDownToLine size={16} />
-                          </IconButton>
-                        )}
+                        <IconButton
+                          label={
+                            e.directory ? "Download as .tar.gz" : "Download"
+                          }
+                          size="sm"
+                          onClick={(ev) => {
+                            ev.stopPropagation();
+                            startDownload([e]);
+                          }}
+                        >
+                          <ArrowDownToLine size={16} />
+                        </IconButton>
                       </span>
                     </td>
                   </tr>
@@ -568,18 +721,44 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
             <ArrowUpToLine size={18} />
           </IconButton>
           <IconButton
+            label={
+              active.some((t) => t.state === "running")
+                ? "Pause uploads"
+                : "Resume uploads"
+            }
+            disabled={!active.length}
+            onClick={() => {
+              const running = active.filter((t) => t.state === "running");
+              if (running.length) running.forEach((t) => t.upload!.pause());
+              else
+                void (async () => {
+                  for (const t of active) await runUpload(t);
+                  void load(path);
+                })();
+            }}
+          >
+            {active.some((t) => t.state === "running") || !active.length ? (
+              <Pause size={17} />
+            ) : (
+              <Play size={17} />
+            )}
+          </IconButton>
+          <IconButton
             label="Clear finished transfers"
             disabled={
               !transfers.some((t) => t.state === "done" || t.state === "error")
             }
             onClick={() =>
               setTransfers((t) =>
-                t.filter((x) => x.state === "running" || x.state === "queued"),
+                t.filter((x) => x.state === "running" || x.state === "paused"),
               )
             }
           >
             <Trash2 size={17} />
           </IconButton>
+          {picked.length > 1 && (
+            <span className="small muted">{picked.length} selected</span>
+          )}
           <input
             ref={fileInput}
             type="file"
@@ -597,41 +776,78 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
         </div>
         {transfers.length ? (
           <div style={{ overflow: "auto", flex: 1 }} {...dragProps}>
-            {transfers.map((t) => (
-              <div key={t.id} className="transfer" title={t.error}>
-                <div className="row">
-                  {t.dir === "up" ? (
-                    <ArrowUpToLine size={14} />
-                  ) : (
-                    <ArrowDownToLine size={14} />
-                  )}
-                  <span className="grow ellipsis">{t.name}</span>
-                  <span className="muted">{formatBytes(t.size)}</span>
-                </div>
-                <div
-                  className={"progress" + (t.state === "error" ? " error" : "")}
-                >
-                  <div
-                    style={{
-                      width:
-                        t.state === "done" || t.state === "error"
-                          ? "100%"
-                          : t.state === "running"
-                            ? "60%"
-                            : "0%",
-                    }}
-                  />
-                </div>
-                {t.error && (
-                  <div
-                    className="small"
-                    style={{ color: "var(--danger)", marginTop: 4 }}
-                  >
-                    {t.error}
+            {transfers.map((t) => {
+              const pct = t.size
+                ? Math.round((t.sent / t.size) * 100)
+                : t.state === "done"
+                  ? 100
+                  : 0;
+              return (
+                <div key={t.id} className="transfer" title={t.error}>
+                  <div className="row">
+                    {t.dir === "up" ? (
+                      <ArrowUpToLine size={14} />
+                    ) : (
+                      <ArrowDownToLine size={14} />
+                    )}
+                    <span className="grow ellipsis">{t.name}</span>
+                    {t.dir === "up" &&
+                      (t.state === "running" || t.state === "paused") && (
+                        <>
+                          <IconButton
+                            size="sm"
+                            label={t.state === "running" ? "Pause" : "Resume"}
+                            onClick={() => {
+                              if (t.state === "running") t.upload!.pause();
+                              else
+                                void runUpload(t).then((ok) => {
+                                  if (ok) void load(path);
+                                });
+                            }}
+                          >
+                            {t.state === "running" ? (
+                              <Pause size={13} />
+                            ) : (
+                              <Play size={13} />
+                            )}
+                          </IconButton>
+                          <IconButton
+                            size="sm"
+                            label="Cancel"
+                            onClick={() => {
+                              void t.upload!.cancel();
+                              update(t.id, {
+                                state: "error",
+                                error: "Cancelled",
+                              });
+                            }}
+                          >
+                            <X size={13} />
+                          </IconButton>
+                        </>
+                      )}
                   </div>
-                )}
-              </div>
-            ))}
+                  <div
+                    className={
+                      "progress" + (t.state === "error" ? " error" : "")
+                    }
+                  >
+                    <div
+                      style={{ width: (t.state === "error" ? 100 : pct) + "%" }}
+                    />
+                  </div>
+                  <div className="small muted" style={{ marginTop: 4 }}>
+                    {t.state === "error" ? (
+                      <span style={{ color: "var(--danger)" }}>{t.error}</span>
+                    ) : t.dir === "down" ? (
+                      "Saved by your browser"
+                    ) : (
+                      `${formatBytes(t.sent)} of ${formatBytes(t.size)} · ${t.state === "paused" ? "paused" : t.state === "done" ? "done" : pct + "%"}`
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         ) : (
           <div className={"dropzone" + (over ? " over" : "")} {...dragProps}>
@@ -642,10 +858,209 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
               or <a onClick={() => fileInput.current?.click()}>click here</a> to
               browse files from your computer.
             </span>
-            <span>Up to {formatBytes(limit)} per file.</span>
           </div>
         )}
       </aside>
+      {dialog?.kind === "chmod" && (
+        <PermissionsDialog
+          mode={dialog.mode}
+          count={dialog.paths.length}
+          close={() => setDialog(null)}
+          apply={(mode) => act(() => api.chmod(dialog.paths, mode))()}
+        />
+      )}
+      {(dialog?.kind === "copy" || dialog?.kind === "move") && (
+        <TransferDialog
+          kind={dialog.kind}
+          count={dialog.paths.length}
+          serverId={server.id}
+          dest={path}
+          close={() => setDialog(null)}
+          apply={(toServerId, toPath) =>
+            act(async () => {
+              const r = await api.transfer({
+                paths: dialog.paths,
+                toServerId,
+                toPath,
+                move: dialog.kind === "move",
+              });
+              notify.success(
+                `${dialog.kind === "move" ? "Moved" : "Copied"} ${r.copied} item(s).`,
+              );
+            })()
+          }
+        />
+      )}
     </div>
+  );
+}
+
+function PermissionsDialog({
+  mode,
+  count,
+  close,
+  apply,
+}: {
+  mode: number;
+  count: number;
+  close: () => void;
+  apply: (mode: number) => void;
+}) {
+  const [value, setValue] = useState(mode & 0o777);
+  const bits = [
+    ["Owner", 6],
+    ["Group", 3],
+    ["Others", 0],
+  ] as const;
+  return (
+    <Dialog
+      title="Permissions"
+      onClose={close}
+      footer={
+        <>
+          <Button variant="secondary" onClick={close}>
+            Cancel
+          </Button>
+          <Button
+            onClick={() => {
+              apply((mode & 0o7000) | value);
+              close();
+            }}
+          >
+            Apply
+          </Button>
+        </>
+      }
+    >
+      <p className="small muted" style={{ marginBottom: 10 }}>
+        {count > 1
+          ? `Applies to ${count} items.`
+          : "Applies to the selected item."}
+      </p>
+      <table className="table" style={{ marginBottom: 12 }}>
+        <thead>
+          <tr>
+            <th />
+            <th>Read</th>
+            <th>Write</th>
+            <th>Execute</th>
+          </tr>
+        </thead>
+        <tbody>
+          {bits.map(([label, shift]) => (
+            <tr key={label}>
+              <td>{label}</td>
+              {[4, 2, 1].map((b) => (
+                <td key={b}>
+                  <label className="check" style={{ margin: 0 }}>
+                    <input
+                      type="checkbox"
+                      aria-label={`${label} ${b === 4 ? "read" : b === 2 ? "write" : "execute"}`}
+                      checked={!!(value & (b << shift))}
+                      onChange={(e) =>
+                        setValue((v) =>
+                          e.target.checked
+                            ? v | (b << shift)
+                            : v & ~(b << shift),
+                        )
+                      }
+                    />
+                  </label>
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <Field label="Octal">
+        <input
+          className="input mono"
+          value={value.toString(8).padStart(3, "0")}
+          onChange={(e) =>
+            /^[0-7]{0,3}$/.test(e.target.value) &&
+            setValue(parseInt(e.target.value || "0", 8))
+          }
+        />
+      </Field>
+    </Dialog>
+  );
+}
+
+function TransferDialog({
+  kind,
+  count,
+  serverId,
+  dest,
+  close,
+  apply,
+}: {
+  kind: "copy" | "move";
+  count: number;
+  serverId: string;
+  dest: string;
+  close: () => void;
+  apply: (serverId: string, path: string) => void;
+}) {
+  const { servers } = useServers();
+  const [to, setTo] = useState(serverId);
+  const [path, setPath] = useState(dest);
+  const other = servers.find((s) => s.id === to);
+  return (
+    <Dialog
+      title={kind === "copy" ? "Copy To" : "Move To"}
+      onClose={close}
+      footer={
+        <>
+          <Button variant="secondary" onClick={close}>
+            Cancel
+          </Button>
+          <Button
+            disabled={!path.startsWith("/")}
+            onClick={() => {
+              apply(to, path);
+              close();
+            }}
+          >
+            {kind === "copy" ? "Copy" : "Move"} {count} item
+            {count === 1 ? "" : "s"}
+          </Button>
+        </>
+      }
+    >
+      <Field label="Server">
+        <select
+          className="select"
+          value={to}
+          onChange={(e) => {
+            setTo(e.target.value);
+            setPath(
+              e.target.value === serverId
+                ? dest
+                : servers.find((s) => s.id === e.target.value)?.fileRoot || "/",
+            );
+          }}
+        >
+          {servers.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name} ({s.host})
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Field
+        label="Destination folder"
+        hint={
+          other && to !== serverId
+            ? `Must be inside ${other.fileRoot} on ${other.name}.`
+            : undefined
+        }
+      >
+        <input
+          className="input mono"
+          value={path}
+          onChange={(e) => setPath(e.target.value)}
+        />
+      </Field>
+    </Dialog>
   );
 }

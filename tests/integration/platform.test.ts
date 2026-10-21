@@ -456,6 +456,9 @@ describe.runIf(enabled)(
             output += Buffer.from(msg.data, "base64").toString();
             if (output.includes("terminal-verified")) {
               clearTimeout(timer);
+              // An explicit disconnect ends the shell at once; a bare close
+              // would leave it resumable for the grace period.
+              ws.send(JSON.stringify({ type: "disconnect" }));
               ws.close();
               resolve();
             }
@@ -473,6 +476,308 @@ describe.runIf(enabled)(
           (s: any) => s.status === "active",
         ),
       ).toHaveLength(0);
+    });
+    function terminal(resume?: string) {
+      const ws = new WebSocket(
+        `ws://127.0.0.1:${port}/ws/terminal?serverId=${serverId}` +
+          (resume ? "&resume=" + resume : ""),
+        { headers: { cookie, origin } },
+      );
+      let output = "";
+      const ready = new Promise<any>((resolve, reject) => {
+        ws.on("message", (raw) => {
+          const msg = JSON.parse(raw.toString());
+          if (msg.type === "ready") resolve(msg);
+          if (msg.type === "output")
+            output += Buffer.from(msg.data, "base64").toString();
+          if (msg.type === "error") reject(new Error(msg.message));
+        });
+        ws.on("error", reject);
+      });
+      const waitFor = async (text: string) => {
+        for (let i = 0; i < 100 && !output.includes(text); i++)
+          await new Promise((r) => setTimeout(r, 100));
+        expect(output).toContain(text);
+      };
+      return { ws, ready, waitFor };
+    }
+    it("resumes a detached terminal and replays its output", async () => {
+      const first = terminal();
+      const hello = await first.ready;
+      expect(hello.resumed).toBe(false);
+      first.ws.send(
+        JSON.stringify({
+          type: "input",
+          data: "sleep 1; printf 'while-%s\\n' detached\r",
+        }),
+      );
+      first.ws.close();
+      await new Promise((r) => setTimeout(r, 1800));
+      expect(
+        (await request("sessions")).data.filter(
+          (s: any) => s.status === "active",
+        ),
+      ).toHaveLength(1);
+      const second = terminal(hello.resume);
+      const resumed = await second.ready;
+      expect(resumed.resumed).toBe(true);
+      expect(resumed.sessionId).toBe(hello.sessionId);
+      await second.waitFor("while-detached");
+      second.ws.send(JSON.stringify({ type: "disconnect" }));
+      await new Promise((r) => setTimeout(r, 300));
+      expect(
+        (await request("sessions")).data.filter(
+          (s: any) => s.status === "active",
+        ),
+      ).toHaveLength(0);
+      // A token never resumes someone else's shell or a finished one.
+      const fresh = terminal(hello.resume);
+      expect((await fresh.ready).resumed).toBe(false);
+      fresh.ws.send(JSON.stringify({ type: "disconnect" }));
+    });
+    it("serves interactive SFTP without approvals, in resumable chunks", async () => {
+      const base = `http://127.0.0.1:${port}/api/sftp/${serverId}/`;
+      const headers = { cookie, origin };
+      const list = await request(
+        `sftp/${serverId}/list?path=/home/nexus/files`,
+      );
+      expect(list.data.entries.some((f: any) => f.name === "example.txt")).toBe(
+        true,
+      );
+      const write = await request(`sftp/${serverId}/write`, {
+        path: "/home/nexus/files/interactive.txt",
+        content: "interactive write",
+      });
+      expect(write.r.status).toBe(201);
+      expect(
+        (
+          await request(
+            `sftp/${serverId}/read?path=/home/nexus/files/interactive.txt`,
+          )
+        ).data.content,
+      ).toBe("interactive write");
+      const id = randomBytes(16).toString("hex"),
+        body = Buffer.from("0123456789abcdef"),
+        target = encodeURIComponent("/home/nexus/files/chunked.bin");
+      const chunk = (offset: number, end: number) =>
+        fetch(
+          `${base}upload?path=${target}&uploadId=${id}&offset=${offset}&size=${body.length}`,
+          {
+            method: "POST",
+            headers: { ...headers, "content-type": "application/octet-stream" },
+            body: body.subarray(offset, end),
+          },
+        ).then((r) => r.json());
+      expect((await chunk(0, 6)).offset).toBe(6);
+      const status = await fetch(
+        `${base}upload?path=${target}&uploadId=${id}`,
+        { headers },
+      ).then((r) => r.json());
+      expect(status.offset).toBe(6);
+      expect((await chunk(6, body.length)).done).toBe(true);
+      const downloaded = await fetch(`${base}download?path=${target}`, {
+        headers,
+      });
+      expect(Buffer.from(await downloaded.arrayBuffer())).toEqual(body);
+      await request(`sftp/${serverId}/mkdir`, {
+        path: "/home/nexus/files/tree",
+      });
+      await request(`sftp/${serverId}/write`, {
+        path: "/home/nexus/files/tree/inner.txt",
+        content: "inner",
+      });
+      const archive = Buffer.from(
+        await (
+          await fetch(`${base}download?path=/home/nexus/files/tree`, {
+            headers,
+          })
+        ).arrayBuffer(),
+      );
+      expect([archive[0], archive[1]]).toEqual([0x1f, 0x8b]);
+      expect(
+        (
+          await request(
+            `sftp/${serverId}/read?path=/home/nexus/files/escape/passwd`,
+          )
+        ).r.status,
+      ).toBe(400);
+      const removed = await request(`sftp/${serverId}/delete`, {
+        paths: [
+          "/home/nexus/files/tree",
+          "/home/nexus/files/interactive.txt",
+          "/home/nexus/files/chunked.bin",
+        ],
+      });
+      expect(removed.data.removed).toBe(4);
+      // Agents keep using operations and approvals; the browser API is human only.
+      expect(
+        (await request(`sftp/${serverId}/list`, undefined, token)).r.status,
+      ).toBe(403);
+    });
+    it("shares servers with a team at the granted level", async () => {
+      const created = await request("users", {
+        name: "Team member",
+        email: "member@example.test",
+        password: "member-fixture-password-123",
+        role: "operator",
+      });
+      const login = await request("auth/login", {
+        email: "member@example.test",
+        password: "member-fixture-password-123",
+      });
+      const owner = cookie,
+        member = login.r.headers.get("set-cookie")!.split(";")[0];
+      try {
+        cookie = member;
+        expect((await request("servers")).data).toHaveLength(0);
+        cookie = owner;
+        const team = await request("teams", {
+          name: "Readers",
+          userIds: [created.data.id],
+        });
+        await request("teams/" + team.data.id + "/servers", {
+          servers: [
+            {
+              serverId,
+              operations: ["server_get_info", "ssh_list_directory"],
+            },
+          ],
+        });
+        cookie = member;
+        expect((await request("servers")).data).toHaveLength(1);
+        expect(
+          (await request(`sftp/${serverId}/list?path=/home/nexus/files`)).r
+            .status,
+        ).toBe(200);
+        expect(
+          (
+            await request(`sftp/${serverId}/write`, {
+              path: "/home/nexus/files/denied.txt",
+              content: "no",
+            })
+          ).r.status,
+        ).toBe(403);
+      } finally {
+        cookie = owner;
+      }
+    });
+    it("posts new approval requests to the configured webhook", async () => {
+      const { createServer } = await import("node:http");
+      const received: any[] = [];
+      const hook = createServer((req, res) => {
+        let body = "";
+        req.on("data", (c) => (body += c));
+        req.on("end", () => {
+          received.push(JSON.parse(body));
+          res.end("ok");
+        });
+      });
+      await new Promise<void>((r) => hook.listen(0, "127.0.0.1", r));
+      const url = `http://127.0.0.1:${(hook.address() as any).port}/hook`;
+      try {
+        expect(
+          (
+            await request(
+              "settings",
+              { approvalWebhook: url },
+              undefined,
+              "PATCH",
+            )
+          ).r.status,
+        ).toBe(200);
+        const pending = await request("operations/ssh_create_directory", {
+          serverId,
+          path: "/home/nexus/files/webhook-check",
+        });
+        expect(pending.data.status).toBe("approval_required");
+        for (let i = 0; i < 50 && !received.length; i++)
+          await new Promise((r) => setTimeout(r, 100));
+        expect(received[0].text).toContain("ssh_create_directory");
+        expect(received[0].text).toContain(pending.data.approvalId);
+      } finally {
+        await request("settings", { approvalWebhook: "" }, undefined, "PATCH");
+        hook.close();
+      }
+    });
+    it("caps agent calls per minute", async () => {
+      const agent = await request("agents", {
+        name: "Capped agent",
+        level: "viewer",
+        serverIds: [serverId],
+        operations: ["server_test_connection"],
+        expiresInDays: 1,
+        maxCallsPerMinute: 1,
+      });
+      const call = () =>
+        request(
+          "operations/server_test_connection",
+          { serverId },
+          agent.data.token,
+        );
+      expect((await call()).r.status).toBe(201);
+      const limited = await call();
+      expect(limited.r.status).toBe(429);
+      expect(limited.data.message).toContain("rate limit");
+    });
+    it("keeps unsent server fields on a partial update", async () => {
+      const before = (await request("servers")).data[0];
+      const patched = await request(
+        "servers/" + serverId,
+        { description: "partial update" },
+        undefined,
+        "PATCH",
+      );
+      expect(patched.r.status).toBe(200);
+      const after = (await request("servers")).data[0];
+      expect(after.description).toBe("partial update");
+      expect([
+        after.host,
+        after.port,
+        after.fingerprint,
+        after.fileRoot,
+      ]).toEqual([
+        before.host,
+        before.port,
+        before.fingerprint,
+        before.fileRoot,
+      ]);
+    });
+    it("signs in once with each two-factor recovery code", async () => {
+      await request("users", {
+        name: "MFA user",
+        email: "mfa@example.test",
+        password: "mfa-fixture-password-123",
+        role: "viewer",
+      });
+      const owner = cookie;
+      const credentials = {
+        email: "mfa@example.test",
+        password: "mfa-fixture-password-123",
+      };
+      try {
+        cookie = (await request("auth/login", credentials)).r.headers
+          .get("set-cookie")!
+          .split(";")[0];
+        const prepared = await request("auth/mfa/prepare", {});
+        const { totp } = await import("../../apps/api/src/totp.js");
+        const enabled = await request("auth/mfa/enable", {
+          challenge: prepared.data.challenge,
+          code: totp(prepared.data.secret, Math.floor(Date.now() / 30000)),
+        });
+        const codes: string[] = enabled.data.recoveryCodes;
+        expect(codes).toHaveLength(10);
+        expect((await request("auth/login", credentials)).r.status).toBe(401);
+        expect(
+          (await request("auth/login", { ...credentials, code: codes[0] })).r
+            .status,
+        ).toBe(201);
+        expect(
+          (await request("auth/login", { ...credentials, code: codes[0] })).r
+            .status,
+        ).toBe(401);
+      } finally {
+        cookie = owner;
+      }
     });
     it("serves modern 2026-07-28 and legacy clients over real HTTP sockets", async () => {
       for (const mode of ["auto", "legacy"] as const) {

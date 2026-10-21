@@ -1631,3 +1631,45 @@ p {
 .no-scrollbar .xterm-viewport::-webkit-scrollbar {
   display: none;
 }
+.term-keys {
+  display: flex;
+  gap: 4px;
+  flex: none;
+  overflow-x: auto;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  scrollbar-width: none;
+}
+.term-keys button {
+  flex: none;
+  min-width: 42px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--field-border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-strong);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.term-keys button.on {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-contrast);
+}
+.count-badge {
+  position: absolute;
+  top: -6px;
+  right: -8px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+}

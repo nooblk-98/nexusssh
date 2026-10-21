@@ -22,8 +22,9 @@ import {
 } from "../../../packages/shared/config.js";
 import { db, initializeDatabase } from "../../../packages/database/index.js";
 import { terminals } from "./terminal.js";
+import { SftpController } from "./sftp.js";
 import { queue, events } from "./domain.js";
-@Module({ controllers: [AppController] })
+@Module({ controllers: [AppController, SftpController] })
 class AppModule {}
 @Catch()
 class Errors implements ExceptionFilter {
@@ -73,13 +74,26 @@ app.use((req: any, res: any, next: any) => {
   }
   next();
 });
+// Guards credential attempts; reading the session or setup state is not one.
 app.use(
   "/api/auth",
   rateLimit({
     windowMs: 60000,
     limit: 20,
+    skip: (req) => req.method === "GET",
     standardHeaders: "draft-8",
     legacyHeaders: false,
+  }),
+);
+// Host key scans open outbound connections, so they get a tighter budget.
+app.use(
+  "/api/servers/scan-host-key",
+  rateLimit({
+    windowMs: 60000,
+    limit: 10,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    message: { message: "Too many host key scans; try again in a minute" },
   }),
 );
 app.use(
@@ -120,6 +134,7 @@ const retention = setInterval(() => {
 }, 3600000);
 async function shutdown() {
   clearInterval(retention);
+  wss.closeAll();
   for (const client of wss.clients) client.close();
   await queue.close();
   await events.close();

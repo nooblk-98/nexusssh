@@ -11,6 +11,10 @@ const API = 3001;
 const MCP = 3002;
 const WEB = 3000;
 const BODY_LIMIT = 2 * 1024 * 1024;
+// Interactive SFTP uploads arrive in chunks of up to 8 MiB.
+const UPLOAD_LIMIT = 9 * 1024 * 1024;
+const bodyLimit = (url = "") =>
+  /^\/api\/sftp\/[^/?]+\/upload(\?|$)/.test(url) ? UPLOAD_LIMIT : BODY_LIMIT;
 
 const database = (process.env.DATABASE_URL || "").replace(/^file:/, "");
 if (database) closeSync(openSync(database, "a"));
@@ -108,7 +112,8 @@ function route(url = "/") {
 const server = http.createServer((req, res) => {
   const port = route(req.url);
   if (!port) return void res.writeHead(404).end();
-  if (Number(req.headers["content-length"] || 0) > BODY_LIMIT)
+  const limit = bodyLimit(req.url);
+  if (Number(req.headers["content-length"] || 0) > limit)
     return void res.writeHead(413).end();
   if (port === MCP && !allowMcp(req.socket.remoteAddress))
     return void res.writeHead(503).end();
@@ -137,7 +142,7 @@ const server = http.createServer((req, res) => {
   let size = 0;
   req.on("data", (chunk) => {
     size += chunk.length;
-    if (size > BODY_LIMIT) {
+    if (size > limit) {
       upstream.destroy();
       if (!res.headersSent) res.writeHead(413);
       res.end();

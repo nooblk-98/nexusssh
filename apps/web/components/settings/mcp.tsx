@@ -140,8 +140,17 @@ export function Agents() {
     days: number;
     serverIds: string[];
     operations: string[];
+    perMinute: string;
+    perDay: string;
   } | null>(null);
+  const [limits, setLimits] = useState<{
+    agent: Row;
+    perMinute: string;
+    perDay: string;
+  } | null>(null);
+  const [activity, setActivity] = useState<Row | null>(null);
   const list = q.data || [];
+  const cap = (v: string) => (v.trim() ? Number(v) : null);
   const ops: string[] = (settings.data?.operations || []).filter(
     (o: string) => o !== "terminal",
   );
@@ -160,6 +169,8 @@ export function Agents() {
               days: 30,
               serverIds: [],
               operations: [],
+              perMinute: "",
+              perDay: "",
             })
           }
         >
@@ -201,9 +212,10 @@ export function Agents() {
               <tr>
                 <th>Agent</th>
                 <th>Access</th>
+                <th>Limits</th>
                 <th>Last Active</th>
                 <th>Status</th>
-                <th style={{ width: 100 }}>Actions</th>
+                <th style={{ width: 230 }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -216,6 +228,16 @@ export function Agents() {
                     {a.level} · {a.permissions.length} server
                     {a.permissions.length === 1 ? "" : "s"}
                   </td>
+                  <td className="small">
+                    {a.maxCallsPerMinute || a.maxCallsPerDay
+                      ? [
+                          a.maxCallsPerMinute && `${a.maxCallsPerMinute}/min`,
+                          a.maxCallsPerDay && `${a.maxCallsPerDay}/day`,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")
+                      : "Unlimited"}
+                  </td>
                   <td>
                     {a.lastActivityAt ? timeAgo(a.lastActivityAt) : "Never"}
                   </td>
@@ -224,7 +246,32 @@ export function Agents() {
                       {a.revoked ? "Revoked" : "Active"}
                     </span>
                   </td>
-                  <td>
+                  <td className="row" style={{ gap: 2 }}>
+                    <Button
+                      variant="text"
+                      size="sm"
+                      onClick={() => setActivity(a)}
+                    >
+                      Activity
+                    </Button>
+                    <Button
+                      variant="text"
+                      size="sm"
+                      disabled={a.revoked}
+                      onClick={() =>
+                        setLimits({
+                          agent: a,
+                          perMinute: a.maxCallsPerMinute
+                            ? String(a.maxCallsPerMinute)
+                            : "",
+                          perDay: a.maxCallsPerDay
+                            ? String(a.maxCallsPerDay)
+                            : "",
+                        })
+                      }
+                    >
+                      Limits
+                    </Button>
                     <Button
                       variant="text"
                       size="sm"
@@ -279,6 +326,8 @@ export function Agents() {
                     expiresInDays: form.days,
                     serverIds: form.serverIds,
                     operations: form.operations,
+                    maxCallsPerMinute: cap(form.perMinute),
+                    maxCallsPerDay: cap(form.perDay),
                   })
                     .then((r) => {
                       setToken(r.token);
@@ -337,6 +386,34 @@ export function Agents() {
               />
             </Field>
           </div>
+          <div className="grid-2">
+            <Field label="Max calls per minute" hint="Empty means unlimited.">
+              <input
+                className="input"
+                inputMode="numeric"
+                value={form.perMinute}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    perMinute: e.target.value.replace(/\D/g, ""),
+                  })
+                }
+              />
+            </Field>
+            <Field label="Max calls per day" hint="Counts SSH operations.">
+              <input
+                className="input"
+                inputMode="numeric"
+                value={form.perDay}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    perDay: e.target.value.replace(/\D/g, ""),
+                  })
+                }
+              />
+            </Field>
+          </div>
           <div className="drawer-section">Servers</div>
           <div className="check-grid">
             {servers.map((s) => (
@@ -377,7 +454,152 @@ export function Agents() {
           </div>
         </Drawer>
       )}
+      {limits && (
+        <Drawer
+          title={"Limits · " + limits.agent.name}
+          onClose={() => setLimits(null)}
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setLimits(null)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() =>
+                  void api(
+                    "agents/" + limits.agent.id + "/limits",
+                    {
+                      maxCallsPerMinute: cap(limits.perMinute),
+                      maxCallsPerDay: cap(limits.perDay),
+                    },
+                    "PATCH",
+                  )
+                    .then(() => {
+                      setLimits(null);
+                      void refresh("agents");
+                      notify.success("Limits saved.");
+                    })
+                    .catch(notify.error)
+                }
+              >
+                Save Limits
+              </Button>
+            </>
+          }
+        >
+          <p className="small muted" style={{ marginBottom: 14 }}>
+            Calls beyond a limit are refused with HTTP 429 until the window
+            passes. Leave a field empty for no limit.
+          </p>
+          <Field label="Max calls per minute">
+            <input
+              autoFocus
+              className="input"
+              inputMode="numeric"
+              value={limits.perMinute}
+              onChange={(e) =>
+                setLimits({
+                  ...limits,
+                  perMinute: e.target.value.replace(/\D/g, ""),
+                })
+              }
+            />
+          </Field>
+          <Field label="Max calls per day">
+            <input
+              className="input"
+              inputMode="numeric"
+              value={limits.perDay}
+              onChange={(e) =>
+                setLimits({
+                  ...limits,
+                  perDay: e.target.value.replace(/\D/g, ""),
+                })
+              }
+            />
+          </Field>
+        </Drawer>
+      )}
+      {activity && (
+        <AgentActivity agent={activity} close={() => setActivity(null)} />
+      )}
     </div>
+  );
+}
+
+function AgentActivity({ agent, close }: { agent: Row; close: () => void }) {
+  const q = useApi<Row[]>("agents/" + agent.id + "/activity");
+  const [server, setServer] = useState("");
+  const rows = (q.data || []).filter((r) => !server || r.serverId === server);
+  const names = [
+    ...new Map((q.data || []).map((r) => [r.serverId, r.server?.name])),
+  ];
+  return (
+    <Drawer
+      title={"Activity · " + agent.name}
+      wide
+      onClose={close}
+      footer={
+        <Button variant="secondary" onClick={close}>
+          Close
+        </Button>
+      }
+    >
+      <Field label="Server">
+        <select
+          className="select"
+          value={server}
+          onChange={(e) => setServer(e.target.value)}
+        >
+          <option value="">All servers</option>
+          {names.map(([id, name]) => (
+            <option key={id} value={id}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </Field>
+      {rows.length ? (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Operation</th>
+              <th>Server</th>
+              <th>Status</th>
+              <th>When</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id}>
+                <td className="mono small">{r.operation}</td>
+                <td>{r.server?.name}</td>
+                <td>
+                  <span
+                    className={
+                      "badge " +
+                      (r.status === "completed"
+                        ? "green"
+                        : r.status === "failed"
+                          ? "red"
+                          : "")
+                    }
+                  >
+                    {r.status}
+                  </span>
+                </td>
+                <td title={new Date(r.createdAt).toLocaleString()}>
+                  {timeAgo(r.createdAt)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="muted small">
+          {q.isPending ? "Loading…" : "No operations recorded yet."}
+        </p>
+      )}
+    </Drawer>
   );
 }
 

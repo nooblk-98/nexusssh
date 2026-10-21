@@ -9,6 +9,7 @@ import {
   ChevronUp,
   Code2,
   Folder,
+  Keyboard,
   Maximize,
   RadioTower,
   Search,
@@ -49,7 +50,17 @@ export default function TerminalView({
 }) {
   const prefs = usePrefs();
   const snippets = useApi<Row[]>("snippets");
-  const { setStatus, broadcast, toggleBroadcast } = useWorkspace();
+  const { setStatus, updateTab, broadcast, toggleBroadcast } = useWorkspace();
+  // Set when the user asks for a fresh shell, so the old one is ended now
+  // instead of waiting out its resume grace period.
+  const fresh = useRef(false);
+  // On-screen keys (shown by default on touch screens) with sticky Ctrl/Alt.
+  const [keys, setKeys] = useState(
+    () =>
+      typeof window !== "undefined" && matchMedia("(pointer: coarse)").matches,
+  );
+  const [sticky, setSticky] = useState({ ctrl: false, alt: false });
+  const modifiers = useRef(sticky);
   const pane = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
   const term = useRef<XTerm | null>(null);
@@ -110,8 +121,13 @@ export default function TerminalView({
     safeFit();
     const dev = location.port === "3000";
     const endpoint = dev ? `${location.hostname}:3001` : location.host;
+    const resume = fresh.current
+      ? ""
+      : useWorkspace.getState().tabs.find((x) => x.id === tab.id)?.resume;
+    fresh.current = false;
     const ws = new WebSocket(
-      `${location.protocol === "https:" ? "wss" : "ws"}://${endpoint}/ws/terminal?serverId=${server.id}`,
+      `${location.protocol === "https:" ? "wss" : "ws"}://${endpoint}/ws/terminal?serverId=${server.id}` +
+        (resume ? "&resume=" + resume : ""),
     );
     const decoder =
       settings.encoding !== "utf-8" ? new TextDecoder(settings.encoding) : null;
@@ -142,6 +158,7 @@ export default function TerminalView({
         const bytes = Uint8Array.from(atob(m.data), (c) => c.charCodeAt(0));
         t.write(decoder ? decoder.decode(bytes, { stream: true }) : bytes);
       } else if (m.type === "ready") {
+        updateTab(tab.id, { resume: m.resume });
         status("connected");
         resize();
         t.focus();
@@ -202,6 +219,14 @@ export default function TerminalView({
     const input = t.onData((data) => {
       const { settings } = live.current;
       if (settings.backspaceCtrlH && data === "\x7f") data = "\b";
+      const mod = modifiers.current;
+      if (mod.ctrl && data.length === 1 && /[a-z@[\\\]^_ ]/i.test(data))
+        data = String.fromCharCode(data.toUpperCase().charCodeAt(0) & 31);
+      if (mod.alt && data.length === 1) data = "\x1b" + data;
+      if (mod.ctrl || mod.alt) {
+        modifiers.current = { ctrl: false, alt: false };
+        setSticky(modifiers.current);
+      }
       track(data);
       sendInput(tab.id, data);
     });
@@ -266,6 +291,13 @@ export default function TerminalView({
       observer.disconnect();
       input.dispose();
       selection.dispose();
+      // Closing the tab or starting a fresh shell ends this one; anything else
+      // (a reload, a remount) leaves it resumable for a short while.
+      const closing =
+        fresh.current ||
+        !useWorkspace.getState().tabs.some((x) => x.id === tab.id);
+      if (closing && ws.readyState === 1)
+        ws.send(JSON.stringify({ type: "disconnect" }));
       ws.close();
       // xterm schedules a viewport sync on open; disposing in the same tick
       // makes that callback throw, so let it run first.
@@ -365,6 +397,13 @@ export default function TerminalView({
             onClick={() => setFontSize((n) => Math.min(32, n + 1))}
           >
             <ZoomIn size={19} />
+          </IconButton>
+          <IconButton
+            label="On-screen keys"
+            active={keys}
+            onClick={() => setKeys(!keys)}
+          >
+            <Keyboard size={19} />
           </IconButton>
           <IconButton
             label="Fullscreen"
@@ -490,7 +529,10 @@ export default function TerminalView({
                   server={server}
                   kind={hostKey}
                   message={message}
-                  onTrusted={() => setGeneration((g) => g + 1)}
+                  onTrusted={() => {
+                    fresh.current = true;
+                    setGeneration((g) => g + 1);
+                  }}
                 />
               </div>
             ) : (
@@ -499,7 +541,12 @@ export default function TerminalView({
                   {state === "error" ? "Connection failed" : "Session closed"}
                 </b>
                 {message && <span className="small muted">{message}</span>}
-                <Button onClick={() => setGeneration((g) => g + 1)}>
+                <Button
+                  onClick={() => {
+                    fresh.current = true;
+                    setGeneration((g) => g + 1);
+                  }}
+                >
                   Reconnect
                 </Button>
               </div>
@@ -507,6 +554,57 @@ export default function TerminalView({
           </div>
         )}
       </div>
+      {keys && (
+        <div className="term-keys" role="toolbar" aria-label="Terminal keys">
+          {(["ctrl", "alt"] as const).map((m) => (
+            <button
+              key={m}
+              className={sticky[m] ? "on" : ""}
+              aria-pressed={sticky[m]}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                modifiers.current = {
+                  ...modifiers.current,
+                  [m]: !modifiers.current[m],
+                };
+                setSticky(modifiers.current);
+                term.current?.focus();
+              }}
+            >
+              {m === "ctrl" ? "Ctrl" : "Alt"}
+            </button>
+          ))}
+          {(
+            [
+              ["Esc", "\x1b"],
+              ["Tab", "\t"],
+              ["←", "\x1b[D"],
+              ["↑", "\x1b[A"],
+              ["↓", "\x1b[B"],
+              ["→", "\x1b[C"],
+              ["Home", "\x1b[H"],
+              ["End", "\x1b[F"],
+              ["PgUp", "\x1b[5~"],
+              ["PgDn", "\x1b[6~"],
+              ["|", "|"],
+              ["~", "~"],
+              ["/", "/"],
+              ["-", "-"],
+            ] as const
+          ).map(([label, seq]) => (
+            <button
+              key={label}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                sendInput(tab.id, seq);
+                term.current?.focus();
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="statusbar">
         <b>{server.name}</b>
         <span className="key">Host:</span>
