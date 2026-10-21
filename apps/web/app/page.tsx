@@ -22,6 +22,7 @@ import {
   LogOut,
   MoreHorizontal,
   Plus,
+  Trash2,
   Search,
   Server,
   Settings,
@@ -380,6 +381,44 @@ function App() {
   const logged = !!me.data;
   const dashboard = useApi("dashboard", logged, true);
   const servers: Row[] = dashboard.data?.servers || [];
+  const groups = useApi("groups", logged);
+  const folders: Row[] = Array.isArray(groups.data) ? groups.data : [];
+  const isAdmin = ["owner", "administrator"].includes(me.data?.role);
+  const matches = (s: Row) =>
+    JSON.stringify([s.name, s.host, s.environment, s.tags, s.group])
+      .toLowerCase()
+      .includes(search.toLowerCase());
+  const deleteFolder = (g: Row, count: number) =>
+    setModal(
+      <Modal title="Delete folder" close={() => setModal(null)}>
+        <div className="stack">
+          <p>
+            Delete the folder <b>{g.name}</b>?
+            {count > 0 &&
+              ` Its ${count} server${count === 1 ? "" : "s"} will move to Ungrouped.`}{" "}
+            No servers are deleted.
+          </p>
+          <div className="form-actions">
+            <Button variant="outline" onClick={() => setModal(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() =>
+                void api("groups/" + g.id, undefined, "DELETE")
+                  .then(() => {
+                    setModal(null);
+                    refresh();
+                  })
+                  .catch(fail)
+              }
+            >
+              Delete folder
+            </Button>
+          </div>
+        </div>
+      </Modal>,
+    );
   const refresh = () => {
     void qc.invalidateQueries();
   };
@@ -782,36 +821,64 @@ function App() {
                   New folder
                 </Button>
               </div>
-              <div className="panel">
-                {servers.length ? (
-                  <div className="servers-grid">
-                    {servers
-                      .filter((s) =>
-                        JSON.stringify([
-                          s.name,
-                          s.host,
-                          s.environment,
-                          s.tags,
-                          s.group,
-                        ])
-                          .toLowerCase()
-                          .includes(search.toLowerCase()),
-                      )
-                      .map((s) => (
-                        <ServerCard
-                          key={s.id}
-                          s={s}
-                          connect={() => connect(s)}
-                          edit={() => openServer(s)}
-                          test={() =>
-                            void run("server_test_connection", {
-                              serverId: s.id,
-                            }).catch(() => {})
-                          }
-                        />
-                      ))}
-                  </div>
-                ) : (
+              {servers.length || folders.length ? (
+                <div className="stack">
+                  {[...folders, { id: "", name: "Ungrouped" }].map((g) => {
+                    const all = servers.filter(
+                      (s) => (s.groupId || "") === g.id,
+                    );
+                    const shown = all.filter(matches);
+                    if (!g.id && !all.length) return null;
+                    if (search && !shown.length) return null;
+                    return (
+                      <section className="panel" key={g.id || "ungrouped"}>
+                        <div className="panel-head">
+                          <div className="row">
+                            <Folder size={15} className="mint" />
+                            <h2>{g.name}</h2>
+                            <span className="badge">{all.length}</span>
+                          </div>
+                          {g.id && isAdmin && (
+                            <Button
+                              variant="ghost"
+                              aria-label={"Delete folder " + g.name}
+                              onClick={() => deleteFolder(g, all.length)}
+                            >
+                              <Trash2 size={15} />
+                            </Button>
+                          )}
+                        </div>
+                        {shown.length ? (
+                          <div className="servers-grid">
+                            {shown.map((s) => (
+                              <ServerCard
+                                key={s.id}
+                                s={s}
+                                connect={() => connect(s)}
+                                edit={() => openServer(s)}
+                                test={() =>
+                                  void run("server_test_connection", {
+                                    serverId: s.id,
+                                  }).catch(() => {})
+                                }
+                              />
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="muted small" style={{ padding: 21 }}>
+                            This folder is empty. Choose it as the folder when
+                            adding or editing a server.
+                          </p>
+                        )}
+                      </section>
+                    );
+                  })}
+                  {search && !servers.some(matches) && (
+                    <p className="muted small">No servers match “{search}”.</p>
+                  )}
+                </div>
+              ) : (
+                <div className="panel">
                   <Empty
                     title="No servers connected"
                     body="Add your first connection to start managing infrastructure."
@@ -819,8 +886,8 @@ function App() {
                       <Button onClick={() => openServer()}>Add server</Button>
                     }
                   />
-                )}
-              </div>
+                </div>
+              )}
             </>
           )}
           {page === "Terminal" && (

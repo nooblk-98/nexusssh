@@ -13,6 +13,7 @@ import {
   ForbiddenException,
   BadRequestException,
   NotFoundException,
+  ConflictException,
 } from "@nestjs/common";
 import { ApiTags, ApiCookieAuth } from "@nestjs/swagger";
 import type { Request, Response } from "express";
@@ -506,10 +507,37 @@ export class AppController {
   @Post("groups") async group(@Req() req: Request, @Body() body: unknown) {
     const p = await authenticate(req);
     admin(p);
-    const a = z.object({ name: z.string().min(1).max(80) }).parse(body);
-    return db.serverGroup.create({
+    const a = z.object({ name: z.string().trim().min(1).max(80) }).parse(body);
+    if (
+      await db.serverGroup.findFirst({
+        where: { organizationId: p.organizationId, name: a.name },
+      })
+    )
+      throw new ConflictException("A folder with this name already exists");
+    const group = await db.serverGroup.create({
       data: { organizationId: p.organizationId, ...a },
     });
+    await audit(p, "folder_created", "success");
+    return group;
+  }
+  @Delete("groups/:id") async removeGroup(
+    @Req() req: Request,
+    @Param("id") id: string,
+  ) {
+    const p = await authenticate(req);
+    admin(p);
+    // Servers in the folder become ungrouped; nothing else is removed.
+    await db.$transaction([
+      db.server.updateMany({
+        where: { groupId: id, organizationId: p.organizationId },
+        data: { groupId: null },
+      }),
+      db.serverGroup.deleteMany({
+        where: { id, organizationId: p.organizationId },
+      }),
+    ]);
+    await audit(p, "folder_deleted", "success");
+    return { deleted: true };
   }
   @Post("operations/:op") async run(
     @Req() req: Request,
