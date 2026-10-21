@@ -56,6 +56,7 @@ import {
 } from "./domain.js";
 import { verifyTotp, newTotp, totpStep } from "./totp.js";
 import { scanHostKey } from "../../../packages/ssh-core/index.js";
+import { connectionPath } from "./domain.js";
 import { closeSftp } from "./sftp.js";
 // Keep in sync with the icon picker in apps/web/components/icons.tsx.
 const serverIcons = [
@@ -184,6 +185,7 @@ const serverSchema = z
       ),
     groupId: z.uuid().nullable().default(null),
     bastionId: z.uuid().nullable().default(null),
+    vpnProfileId: z.uuid().nullable().default(null),
     favorite: z.boolean().default(false),
     archived: z.boolean().default(false),
     tags: z.array(z.string().min(1).max(32)).max(20).default([]),
@@ -633,6 +635,13 @@ export class AppController {
   async serverData(p: any, body: unknown, id?: string) {
     const { tags, ...a } = serverSchema.parse(body);
     if (
+      a.vpnProfileId &&
+      !(await db.vpnProfile.findFirst({
+        where: { id: a.vpnProfileId, organizationId: p.organizationId },
+      }))
+    )
+      throw new BadRequestException("VPN profile unavailable");
+    if (
       !(await db.sSHIdentity.findFirst({
         where: { id: a.identityId, organizationId: p.organizationId },
       }))
@@ -655,6 +664,10 @@ export class AppController {
       });
       if (!b || b.bastionId || b.id === id)
         throw new BadRequestException("Invalid bastion");
+      if (a.vpnProfileId && b.vpnProfileId && a.vpnProfileId !== b.vpnProfileId)
+        throw new BadRequestException(
+          "Choose the bastion's VPN profile or inherit its VPN",
+        );
       if (id && (await db.server.count({ where: { bastionId: id } })))
         throw new BadRequestException("Nested bastions are not supported");
     }
@@ -714,6 +727,7 @@ export class AppController {
       fileRoot: old.fileRoot,
       groupId: old.groupId,
       bastionId: old.bastionId,
+      vpnProfileId: old.vpnProfileId,
       favorite: old.favorite,
       archived: old.archived,
       tags: tags.map((t) => t.name),
@@ -822,6 +836,8 @@ export class AppController {
           .max(253)
           .regex(/^[a-zA-Z0-9.:-]+$/),
         port: z.number().int().min(1).max(65535).default(22),
+        vpnProfileId: z.uuid().nullable().optional(),
+        bastionId: z.uuid().nullable().optional(),
       })
       .parse(body);
     try {
@@ -830,6 +846,7 @@ export class AppController {
           a.host,
           a.port,
           await sshLimits(p.organizationId),
+          await connectionPath(p.organizationId, a),
         ),
       };
     } catch (e) {

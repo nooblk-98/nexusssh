@@ -3,6 +3,8 @@ import { lookup } from "node:dns/promises";
 import { createHash, randomUUID } from "node:crypto";
 import posix from "node:path/posix";
 import ipaddr from "ipaddr.js";
+import type { Duplex } from "node:stream";
+import { prepareVpn, type VpnRoute, type VpnGateway } from "./vpn.js";
 export type Connection = {
   host: string;
   port: number;
@@ -11,11 +13,13 @@ export type Connection = {
   fileRoot: string;
   credential: { password?: string; privateKey?: string; passphrase?: string };
   bastion?: Connection;
+  vpn?: VpnRoute;
 };
 export type Limits = {
   cidrs: string[];
   connectTimeout: number;
   outputLimit: number;
+  vpnGateway?: VpnGateway;
 };
 // Connection-stage failures whose text carries no remote output or secrets,
 // so they can be shown to the user as-is.
@@ -25,6 +29,7 @@ export const connectionFailures = [
   /^SSH destination is outside the configured allowlist \([0-9a-fA-F.:, ]*\)$/,
   /^All configured authentication methods failed$/,
   /^Cloud metadata addresses cannot be SSH destinations$/,
+  /^VPN (gateway|connection|DNS) [a-zA-Z ,;]+$/,
 ];
 export function allowedIP(address: string, cidrs: string[]) {
   let ip = ipaddr.parse(address);
@@ -43,8 +48,14 @@ const metadata = [
   "100.100.100.200/32",
   "fd00:ec2::254/128",
 ];
-export async function resolveAllowed(host: string, cidrs: string[]) {
-  const addresses = await lookup(host, { all: true, verbatim: true });
+export async function resolveAllowed(
+  host: string,
+  cidrs: string[],
+  resolver?: (host: string) => Promise<string[]>,
+) {
+  const addresses = resolver
+    ? (await resolver(host)).map((address) => ({ address }))
+    : await lookup(host, { all: true, verbatim: true });
   if (addresses.some((a) => allowedIP(a.address, metadata)))
     throw new Error("Cloud metadata addresses cannot be SSH destinations");
   const blocked = addresses.filter((a) => !allowedIP(a.address, cidrs));
@@ -62,35 +73,64 @@ export function fingerprint(key: Buffer) {
     createHash("sha256").update(key).digest("base64").replace(/=+$/, "")
   );
 }
+async function transport(
+  c: Pick<Connection, "host" | "port" | "bastion" | "vpn">,
+  l: Limits,
+) {
+  const vpn = c.vpn || c.bastion?.vpn;
+  const tunnel = vpn ? await prepareVpn(vpn, l.vpnGateway) : undefined;
+  const address = await resolveAllowed(
+    c.host,
+    l.cidrs,
+    vpn?.config.dns.length ? tunnel?.resolve : undefined,
+  );
+  let bastion: Client | undefined;
+  let sock: Duplex | undefined;
+  try {
+    if (c.bastion) {
+      if (c.bastion.bastion)
+        throw new Error("Only one bastion hop is supported");
+      if (c.vpn && c.bastion.vpn && c.vpn.id !== c.bastion.vpn.id)
+        throw new Error("Conflicting VPN profiles on target and bastion");
+      bastion = await connect({ ...c.bastion, vpn }, l);
+      sock = await new Promise<ClientChannel>((resolve, reject) =>
+        bastion!.forwardOut("127.0.0.1", 0, address, c.port, (e, s) =>
+          e ? reject(e) : resolve(s),
+        ),
+      );
+    } else if (tunnel) sock = await tunnel.dial(address, c.port);
+    return {
+      address,
+      sock,
+      close: () => {
+        sock?.destroy();
+        bastion?.end();
+      },
+    };
+  } catch (e) {
+    sock?.destroy();
+    bastion?.end();
+    throw e;
+  }
+}
 export async function connect(c: Connection, l: Limits): Promise<Client> {
   if (!c.fingerprint)
     throw new Error(
       "Verify and save the SSH host fingerprint before connecting",
     );
-  const address = await resolveAllowed(c.host, l.cidrs);
+  const route = await transport(c, l);
   const client = new Client();
-  let bastion: Client | undefined;
-  let sock: ClientChannel | undefined;
-  if (c.bastion) {
-    if (c.bastion.bastion) throw new Error("Only one bastion hop is supported");
-    bastion = await connect(c.bastion, l);
-    sock = await new Promise((resolve, reject) =>
-      bastion!.forwardOut("127.0.0.1", 0, address, c.port, (e, s) =>
-        e ? reject(e) : resolve(s),
-      ),
-    );
-    client.once("close", () => bastion?.end());
-  }
+  client.once("close", route.close);
   return new Promise((resolve, reject) => {
     client.once("ready", () => resolve(client));
     client.on("error", (e) => {
-      bastion?.end();
+      route.close();
       reject(e);
     });
     client.connect({
-      host: address,
+      host: route.address,
       port: c.port,
-      sock,
+      sock: route.sock,
       username: c.username,
       ...c.credential,
       readyTimeout: l.connectTimeout,
@@ -106,9 +146,11 @@ export async function scanHostKey(
   host: string,
   port: number,
   l: Limits,
+  via: Pick<Connection, "vpn" | "bastion"> = {},
 ): Promise<string> {
-  const address = await resolveAllowed(host, l.cidrs);
+  const route = await transport({ host, port, ...via }, l);
   const client = new Client();
+  client.once("close", route.close);
   return new Promise((resolve, reject) => {
     let seen: string | undefined;
     client.on("error", (e) => (seen ? resolve(seen) : reject(e)));
@@ -116,7 +158,8 @@ export async function scanHostKey(
       seen ? resolve(seen) : reject(new Error("No host key received")),
     );
     client.connect({
-      host: address,
+      host: route.address,
+      sock: route.sock,
       port,
       username: "nexusssh-scan",
       readyTimeout: l.connectTimeout,

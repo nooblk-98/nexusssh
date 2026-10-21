@@ -54,6 +54,7 @@ export function mainMenu(admin: boolean): MenuItem[] {
     { label: "Account", onClick: go("account") },
     { label: "Preferences", onClick: go("preferences") },
     ...(admin ? [{ label: "Identities", onClick: go("identities") }] : []),
+    ...(admin ? [{ label: "VPN", onClick: go("vpn") }] : []),
     "sep",
     ...(admin
       ? ([

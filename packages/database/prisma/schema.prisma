@@ -18,6 +18,7 @@ model Organization {
   groups ServerGroup[]
   tags ServerTag[]
   identities SSHIdentity[]
+  vpnProfiles VpnProfile[]
   agents Agent[]
   audit AuditEvent[]
   settings SystemSetting[]
@@ -130,6 +131,20 @@ model SSHIdentity {
   @@index([organizationId])
 }
 
+model VpnProfile {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organizationId String
+  organization Organization @relation(fields: [organizationId], references: [id])
+  name String
+  description String @default("")
+  encryptedConfig String
+  summary String
+  servers Server[]
+  @@index([organizationId])
+}
+
 model Server {
   id String @id @default(uuid())
   createdAt DateTime @default(now())
@@ -156,6 +171,8 @@ model Server {
   status String @default("unknown")
   lastCheckedAt DateTime?
   bastionId String?
+  vpnProfileId String?
+  vpnProfile VpnProfile? @relation(fields: [vpnProfileId], references: [id], onDelete: Restrict)
   bastion Server? @relation("Bastion", fields: [bastionId], references: [id])
   targets Server[] @relation("Bastion")
   permissions ServerPermission[]

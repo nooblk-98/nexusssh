@@ -57,6 +57,7 @@ const schema = z.object({
   MCP_PUBLIC_URL: z.url().optional(),
   MCP_AUTH_ISSUER: z.url().optional(),
   SSH_ALLOWED_CIDRS: z.string().min(1),
+  VPN_GATEWAY_URL: z.url().default("http://127.0.0.1:3003"),
   // "true" ignores networks added in Settings > Security and disables editing.
   SSH_ALLOWLIST_LOCKED: z
     .enum(["true", "false"])

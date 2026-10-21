@@ -27,6 +27,8 @@ import {
   UsersPage,
 } from "./admin";
 import { Agents, Approvals, AuditLog, McpServer } from "./mcp";
+import { VpnProfiles } from "./vpn";
+import { Network } from "lucide-react";
 
 type Page = {
   slug: string;
@@ -63,6 +65,13 @@ const sections: { label: string; pages: Page[] }[] = [
   {
     label: "Administration",
     pages: [
+      {
+        slug: "vpn",
+        label: "VPN",
+        icon: Network,
+        admin: true,
+        render: () => <VpnProfiles />,
+      },
       {
         slug: "users",
         label: "Users",

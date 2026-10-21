@@ -9,6 +9,9 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { connect, operate } from "../../packages/ssh-core/index.js";
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { createServer } from "node:http";
+import { connect as tcpConnect, type Socket } from "node:net";
+import { scanHostKey } from "../../packages/ssh-core/index.js";
 import { hash } from "../../packages/shared/crypto.js";
 const enabled = process.env.RUN_INTEGRATION === "1";
 describe.runIf(enabled)(
@@ -862,6 +865,238 @@ describe.runIf(enabled)(
       await expect(
         operate(c, l, "ssh_execute", { command: "sleep 3", timeoutMs: 100 }),
       ).rejects.toThrow("timed out");
+    });
+    it("uses the VPN transport for SSH, host-key scans and SSH bastions", async () => {
+      // This adapter isolates the Node transport from WireGuard itself (tested
+      // with two real encrypted peers in the Go suite). SSH is the real fixture.
+      let tunnels = 0;
+      const sockets = new Set<Socket>();
+      const gateway = createServer((req, res) => {
+        if (req.headers["x-nexus-internal"] !== env.INTERNAL_SECRET) {
+          res.writeHead(401).end();
+          return;
+        }
+        req.resume();
+        req.on("end", () => res.writeHead(204).end());
+      });
+      gateway.on("connect", (req, socket, head) => {
+        if (
+          req.headers["x-nexus-internal"] !== env.INTERNAL_SECRET ||
+          req.url !== "127.0.0.1:22222"
+        ) {
+          socket.destroy();
+          return;
+        }
+        tunnels++;
+        const upstream = tcpConnect(22222, "127.0.0.1", () => {
+          socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+          if (head.length) upstream.write(head);
+          socket.pipe(upstream);
+          upstream.pipe(socket);
+        });
+        sockets.add(upstream);
+        sockets.add(socket as Socket);
+        socket.on("close", () => {
+          upstream.destroy();
+          sockets.delete(socket as Socket);
+        });
+        upstream.on("close", () => {
+          socket.destroy();
+          sockets.delete(upstream);
+        });
+        socket.on("error", () => upstream.destroy());
+        upstream.on("error", () => socket.destroy());
+      });
+      await new Promise<void>((resolve) =>
+        gateway.listen(0, "127.0.0.1", resolve),
+      );
+      const address = gateway.address() as { port: number };
+      const limits = {
+        cidrs: ["127.0.0.1/32"],
+        connectTimeout: 5000,
+        outputLimit: 1024,
+        vpnGateway: {
+          url: `http://127.0.0.1:${address.port}`,
+          secret: env.INTERNAL_SECRET!,
+        },
+      };
+      const vpn = {
+        id: randomUUID(),
+        config: {
+          privateKey: randomBytes(32).toString("base64"),
+          addresses: ["10.77.0.2/32"],
+          dns: [],
+          mtu: 1420,
+          peers: [],
+        },
+      };
+      const c = {
+        host: "127.0.0.1",
+        port: 22222,
+        username: "nexus",
+        fingerprint,
+        fileRoot: "/home/nexus/files",
+        credential: { privateKey },
+        vpn,
+      };
+      try {
+        expect(await scanHostKey(c.host, c.port, limits, { vpn })).toBe(
+          fingerprint,
+        );
+        expect(
+          (await operate(c, limits, "server_test_connection", {})).connected,
+        ).toBe(true);
+        expect(
+          (
+            await operate(
+              { ...c, port: 22, bastion: c },
+              limits,
+              "system_info",
+              {},
+            )
+          ).stdout,
+        ).toContain("Linux");
+        expect(tunnels).toBe(3);
+      } finally {
+        for (const socket of sockets) socket.destroy();
+        await new Promise<void>((resolve) => gateway.close(() => resolve()));
+      }
+    });
+    it("stores VPN secrets encrypted, scopes profiles, and preserves server selections", async () => {
+      const key = randomBytes(32).toString("base64");
+      const config = `[Interface]\nPrivateKey = ${key}\nAddress = 10.77.0.2/32\n[Peer]\nPublicKey = ${key}\nEndpoint = 127.0.0.1:51820\nAllowedIPs = 10.77.0.0/24`;
+      const created = await request("vpn-profiles", {
+        name: "Test VPN",
+        config,
+      });
+      expect(created.r.status).toBe(201);
+      const profileId = created.data.id;
+      expect(JSON.stringify(created.data)).not.toContain(key);
+      const check = new PrismaClient({
+        datasources: { db: { url: env.DATABASE_URL } },
+      });
+      try {
+        const stored = await check.vpnProfile.findUniqueOrThrow({
+          where: { id: profileId },
+        });
+        expect(stored.encryptedConfig).not.toContain(key);
+        expect(
+          JSON.stringify((await request("vpn-profiles")).data),
+        ).not.toContain(key);
+        expect(
+          (
+            await request(
+              "servers/" + serverId,
+              { vpnProfileId: profileId },
+              undefined,
+              "PATCH",
+            )
+          ).r.status,
+        ).toBe(200);
+        const patched = await request(
+          "servers/" + serverId,
+          { description: "VPN selection preserved" },
+          undefined,
+          "PATCH",
+        );
+        expect(patched.data.vpnProfileId).toBe(profileId);
+        expect(
+          (
+            await request(
+              "vpn-profiles/" + profileId,
+              undefined,
+              undefined,
+              "DELETE",
+            )
+          ).r.status,
+        ).toBe(400);
+        const other = await request("auth/login", {
+          email: "other@example.test",
+          password: "other-fixture-password-123",
+        });
+        const otherCookie = other.r.headers.get("set-cookie")!.split(";")[0];
+        const response = await fetch(
+          `http://127.0.0.1:${port}/api/vpn-profiles/${profileId}`,
+          {
+            method: "PATCH",
+            headers: {
+              cookie: otherCookie,
+              origin,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({ name: "Wrong owner" }),
+          },
+        );
+        expect(response.status).toBe(404);
+        const rename = await request(
+          "vpn-profiles/" + profileId,
+          { name: "Renamed VPN" },
+          undefined,
+          "PATCH",
+        );
+        expect(rename.r.status).toBe(200);
+        expect(
+          (
+            await check.vpnProfile.findUniqueOrThrow({
+              where: { id: profileId },
+            })
+          ).encryptedConfig,
+        ).toBe(stored.encryptedConfig);
+      } finally {
+        await request(
+          "servers/" + serverId,
+          { vpnProfileId: null, description: "" },
+          undefined,
+          "PATCH",
+        );
+        await request(
+          "vpn-profiles/" + profileId,
+          undefined,
+          undefined,
+          "DELETE",
+        );
+        await check.$disconnect();
+      }
+      expect(
+        (
+          await request(
+            "servers/" + serverId,
+            { vpnProfileId: randomUUID() },
+            undefined,
+            "PATCH",
+          )
+        ).r.status,
+      ).toBe(400);
+    });
+    it("does not fall back to a direct SSH connection when a selected VPN fails", async () => {
+      await expect(
+        connect(
+          {
+            host: "127.0.0.1",
+            port: 22222,
+            username: "nexus",
+            fingerprint,
+            fileRoot: "/home/nexus",
+            credential: { privateKey },
+            vpn: {
+              id: randomUUID(),
+              config: {
+                privateKey: randomBytes(32).toString("base64"),
+                addresses: ["10.77.0.2/32"],
+                dns: [],
+                mtu: 1420,
+                peers: [],
+              },
+            },
+          },
+          {
+            cidrs: ["127.0.0.1/32"],
+            connectTimeout: 1000,
+            outputLimit: 1024,
+            vpnGateway: { url: "http://127.0.0.1:1", secret: "test" },
+          },
+        ),
+      ).rejects.toThrow();
     });
     it("backs up live WAL consistently and restores a verified copy", () => {
       const backup = path.join(directory, "backup.db"),

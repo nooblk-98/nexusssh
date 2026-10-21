@@ -15,6 +15,7 @@ import express from "express";
 import { ZodError } from "zod";
 import { randomUUID } from "node:crypto";
 import { AppController } from "./controller.js";
+import { VpnController } from "./vpn.js";
 import {
   config,
   generatedSecrets,
@@ -24,7 +25,7 @@ import { db, initializeDatabase } from "../../../packages/database/index.js";
 import { terminals } from "./terminal.js";
 import { SftpController } from "./sftp.js";
 import { queue, events } from "./domain.js";
-@Module({ controllers: [AppController, SftpController] })
+@Module({ controllers: [AppController, SftpController, VpnController] })
 class AppModule {}
 @Catch()
 class Errors implements ExceptionFilter {

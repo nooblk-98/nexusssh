@@ -35,6 +35,7 @@ export function serverBody(s: Row, patch: Row = {}) {
     fileRoot: s.fileRoot,
     groupId: s.groupId || null,
     bastionId: s.bastionId || null,
+    vpnProfileId: s.vpnProfileId || null,
     favorite: !!s.favorite,
     archived: false,
     tags: (s.tags || []).map((t: Row) => t.name),

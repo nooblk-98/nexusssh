@@ -55,7 +55,12 @@ export function HostKeyPrompt({
   useEffect(() => {
     if (!admin || kind === "blocked") return;
     setError("");
-    api<Row>("servers/scan-host-key", { host: server.host, port: server.port })
+    api<Row>("servers/scan-host-key", {
+      host: server.host,
+      port: server.port,
+      vpnProfileId: server.vpnProfileId || null,
+      bastionId: server.bastionId || null,
+    })
       .then((r) => setFingerprint(r.fingerprint))
       .catch((e) => {
         if (hostKeyProblem(e.message) === "blocked") {
@@ -63,7 +68,15 @@ export function HostKeyPrompt({
           setKind("blocked");
         } else setError(e.message);
       });
-  }, [admin, kind, attempt, server.host, server.port]);
+  }, [
+    admin,
+    kind,
+    attempt,
+    server.host,
+    server.port,
+    server.vpnProfileId,
+    server.bastionId,
+  ]);
   async function allow() {
     setBusy(true);
     try {

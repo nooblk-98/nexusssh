@@ -4,6 +4,8 @@ Last verification: 21 October 2026. This file distinguishes a functioning implem
 
 ## Executed checks
 
+VPN feature update (21 October 2026): encrypted WireGuard profile CRUD, server selection, private DNS, and VPN plus bastion routing are implemented in the customized workspace. The full TypeScript test suite passed (38 tests before the added transport test); the three VPN integration checks passed after adding real SSH/scanning/bastion transport coverage. The userspace gateway's two-peer WireGuard test passed with Go's race detector, and the import/edit/select/delete browser workflow passed at desktop and 390px width. Native and production Docker builds passed. See [VPN configuration and runtime details](VPN.md). A user-provided live WireGuard peer has not been tested.
+
 - TypeScript checks for API, MCP, worker, shared packages and Next.js: passed.
 - ESLint: passed for application and test sources; generated Monaco distribution files are excluded.
 - Native production Next.js/backend build: passed.
@@ -20,7 +22,7 @@ Integration coverage includes real password and private-key SSH, unknown/changed
 | Phase | Implemented | Remaining |
 |---|---|---|
 | Foundation | Monorepo, Next/Nest, all requested Prisma models, migrations, owner enrollment/login, real dashboard, Compose | Further module decomposition and complete request-body schemas in OpenAPI |
-| Servers | CRUD/edit, archive, duplicate, folders/tags/favorites, credential rotation API, pinned keys, CIDR validation, one-hop bastion core | Nested folders, restore-from-archive UI, bastion selector and credential-rotation UI |
+| Servers | CRUD/edit, archive, duplicate, folders/tags/favorites, credential rotation, pinned keys, CIDR validation, one-hop bastion selector, encrypted WireGuard profiles and server routing | Nested folders, restore-from-archive UI |
 | Terminal | Real PTY, concurrent sessions, split panes, resize, search, font size, copy/paste, buffer download, disconnect/reconnect, snippet insertion | Full keyboard shortcut suite, configurable encrypted recording, saved workspace layouts |
 | SFTP | Browse/read/write, upload/download, mkdir, rename/move, delete approval, permission display, local Monaco assets, atomic replacement | Streaming progress percentages, recursive search, remote copy, file preview types, optional configuration backups |
 | MCP | All requested tool names, official v2 modern/legacy handler, bearer machine credentials, strict schemas, approvals, tasks | Product-specific external-app certification, OAuth server/consent integration for clients requiring it |

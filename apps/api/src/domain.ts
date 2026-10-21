@@ -125,7 +125,12 @@ export async function listServers(p: Principal) {
               ],
             }),
     },
-    include: { group: true, tags: true },
+    include: {
+      group: true,
+      tags: true,
+      vpnProfile: { select: { id: true, name: true } },
+      bastion: { select: { id: true, name: true } },
+    },
     orderBy: [{ favorite: "desc" }, { name: "asc" }],
     take: 500,
   });
@@ -172,6 +177,7 @@ export async function workspaceCidrs(org: string): Promise<string[]> {
 }
 export async function sshLimits(org: string) {
   return {
+    vpnGateway: { url: config.VPN_GATEWAY_URL, secret: config.INTERNAL_SECRET },
     cidrs: [
       ...config.SSH_ALLOWED_CIDRS.split(","),
       ...(config.SSH_ALLOWLIST_LOCKED ? [] : await workspaceCidrs(org)),
@@ -191,18 +197,22 @@ export async function acceptsNewHostKeys(org: string) {
   });
   return row?.value === "true";
 }
-async function pinNewHostKey(s: {
-  id: string;
-  organizationId: string;
-  host: string;
-  port: number;
-  fingerprint: string | null;
-}) {
+async function pinNewHostKey(
+  s: {
+    id: string;
+    organizationId: string;
+    host: string;
+    port: number;
+    fingerprint: string | null;
+  },
+  via: Pick<Connection, "vpn" | "bastion"> = {},
+) {
   if (s.fingerprint) return s.fingerprint;
   const fingerprint = await scanHostKey(
     s.host,
     s.port,
     await sshLimits(s.organizationId),
+    via,
   );
   // Only the first key seen is pinned, even if two connections race.
   const pinned = await db.server.updateMany({
@@ -229,17 +239,29 @@ async function pinNewHostKey(s: {
 export async function connection(
   serverId: string,
   org: string,
+  inheritedVpn?: Connection["vpn"],
 ): Promise<Connection> {
   const s = await db.server.findFirstOrThrow({
     where: { id: serverId, organizationId: org },
-    include: { identity: true, bastion: { include: { identity: true } } },
+    include: {
+      identity: true,
+      vpnProfile: true,
+      bastion: { include: { identity: true, vpnProfile: true } },
+    },
   });
-  if (await acceptsNewHostKeys(org)) {
-    if (s.bastion) s.bastion.fingerprint = await pinNewHostKey(s.bastion);
-    // A host behind a jump host cannot be scanned directly; it keeps the prompt.
-    else s.fingerprint = await pinNewHostKey(s);
-  }
   const map = (s: any): Connection => ({
+    ...(s.vpnProfile
+      ? {
+          vpn: {
+            id: s.vpnProfile.id,
+            config: unseal(
+              s.vpnProfile.encryptedConfig,
+              config.ENCRYPTION_KEY,
+              org + ":vpn:" + s.vpnProfile.id,
+            ),
+          },
+        }
+      : {}),
     host: s.host,
     port: s.port,
     username: s.username,
@@ -251,7 +273,60 @@ export async function connection(
       org + ":" + s.identityId,
     ),
   });
-  return { ...map(s), ...(s.bastion ? { bastion: map(s.bastion) } : {}) };
+  const result = {
+    ...map(s),
+    ...(s.bastion ? { bastion: map(s.bastion) } : {}),
+  };
+  if (inheritedVpn) {
+    if (result.vpn && result.vpn.id !== inheritedVpn.id)
+      throw new BadRequestException(
+        "Conflicting VPN profiles on target and bastion",
+      );
+    result.vpn = inheritedVpn;
+  }
+  if (s.bastion?.archived || s.bastion?.bastionId)
+    throw new BadRequestException("Bastion is unavailable");
+  if (await acceptsNewHostKeys(org)) {
+    if (s.bastion && result.bastion)
+      result.bastion.fingerprint = await pinNewHostKey(s.bastion, {
+        vpn: result.vpn || result.bastion.vpn,
+      });
+    result.fingerprint = await pinNewHostKey(s, result);
+  }
+  return result;
+}
+export async function connectionPath(
+  org: string,
+  a: { vpnProfileId?: string | null; bastionId?: string | null },
+): Promise<Pick<Connection, "vpn" | "bastion">> {
+  const via: Pick<Connection, "vpn" | "bastion"> = {};
+  if (a.vpnProfileId) {
+    const profile = await db.vpnProfile.findFirst({
+      where: { id: a.vpnProfileId, organizationId: org },
+    });
+    if (!profile) throw new NotFoundException("VPN profile unavailable");
+    via.vpn = {
+      id: profile.id,
+      config: unseal(
+        profile.encryptedConfig,
+        config.ENCRYPTION_KEY,
+        org + ":vpn:" + profile.id,
+      ),
+    };
+  }
+  if (a.bastionId) {
+    const bastion = await db.server.findFirst({
+      where: {
+        id: a.bastionId,
+        organizationId: org,
+        archived: false,
+        bastionId: null,
+      },
+    });
+    if (!bastion) throw new NotFoundException("Bastion unavailable");
+    via.bastion = await connection(bastion.id, org, via.vpn);
+  }
+  return via;
 }
 export async function operation(
   p: Principal,

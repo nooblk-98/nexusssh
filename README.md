@@ -12,13 +12,14 @@ A self-hosted infrastructure console with real browser SSH, SFTP, and a remote M
 - Host keys are read with **Scan** in the server form and pinned only after you compare and save them.
 - Owner setup, password login, opaque HttpOnly sessions, TOTP MFA, role and server permissions.
 - Encrypted password/key identities, pinned host keys, destination CIDR allowlists, one-hop bastions.
+- Encrypted [WireGuard VPN profiles](docs/VPN.md), selected per server and optionally combined with an SSH bastion; terminals, SFTP and MCP use the same route.
 - Interactive xterm.js shells over authenticated WebSockets, multiple sessions, split panes, resizing, search and reconnect.
 - SFTP browsing, bounded uploads/downloads, Monaco editing, atomic saves, mkdir, rename/move and deletion.
 - Remote MCP SDK v2 using explicit 2026-07-28 handling, with tested legacy stateless compatibility.
 - Agents with explicit server/tool grants, expiring hashed machine tokens, revocation, and exact single-use approvals.
 - System information, journal logs and systemd service control through SSH; background execution and cancellation through BullMQ. Docker management and metrics monitoring are out of scope; use a dedicated monitoring tool.
 - SQLite migrations, WAL, integrity checks, online backup and offline restore.
-- Two Compose services: `nexusssh` (web, API, MCP and worker behind one built-in gateway port) and Redis.
+- Two production Compose services: `nexusssh` (web, API, MCP, SSH worker and userspace WireGuard behind one application port) and Redis. Native development also starts a small WireGuard container.
 
 ## Quick start: local Compose
 

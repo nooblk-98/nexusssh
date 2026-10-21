@@ -1,0 +1,10 @@
+name: nexusssh-vpn-dev
+services:
+  vpn-gateway:
+    build: ./services/vpn-gateway
+    ports: ['127.0.0.1:3003:3003']
+    environment:
+      INTERNAL_SECRET: ${INTERNAL_SECRET:?Run npm run setup first}
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]

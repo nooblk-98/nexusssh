@@ -59,6 +59,7 @@ export function ServerDrawerHost() {
 function ServerDrawer({ o, close }: { o: Open; close: () => void }) {
   const s = o.server;
   const identities = useApi<Row[]>("identities");
+  const vpnProfiles = useApi<Row[]>("vpn-profiles");
   const settings = useApi<Row>("settings");
   const { servers, groups } = useServers();
   const [advanced, setAdvanced] = useState(false);
@@ -83,6 +84,7 @@ function ServerDrawer({ o, close }: { o: Open; close: () => void }) {
     fileRoot: s?.fileRoot || "/home",
     environment: s?.environment || "development",
     bastionId: s?.bastionId || "",
+    vpnProfileId: s?.vpnProfileId || "",
     tags: (s?.tags || []).map((t: Row) => t.name).join(", "),
   }));
   const [term, setTerm] = useState({
@@ -99,6 +101,8 @@ function ServerDrawer({ o, close }: { o: Open; close: () => void }) {
       const r = await api<Row>("servers/scan-host-key", {
         host: v.host.trim(),
         port: Number(v.port) || 22,
+        vpnProfileId: v.vpnProfileId || null,
+        bastionId: v.bastionId || null,
       });
       setV((x) => ({ ...x, fingerprint: r.fingerprint }));
       notify.info(
@@ -166,6 +170,7 @@ function ServerDrawer({ o, close }: { o: Open; close: () => void }) {
         fileRoot: v.fileRoot,
         environment: v.environment,
         bastionId: v.bastionId || null,
+        vpnProfileId: v.vpnProfileId || null,
         tags: String(v.tags)
           .split(",")
           .map((t: string) => t.trim())
@@ -291,6 +296,26 @@ function ServerDrawer({ o, close }: { o: Open; close: () => void }) {
             <option value="staging">Staging</option>
             <option value="production">Production</option>
           </select>
+        </Field>
+        <Field
+          label="VPN profile"
+          hint="With a jump host, the VPN reaches the jump host first. None inherits the jump host’s VPN, if configured."
+        >
+          <select
+            className="select"
+            value={v.vpnProfileId}
+            onChange={put("vpnProfileId")}
+          >
+            <option value="">None / inherit from jump host</option>
+            {(vpnProfiles.data || []).map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {profile.name}
+              </option>
+            ))}
+          </select>
+          {vpnProfiles.error && (
+            <span className="error-text">Could not load VPN profiles.</span>
+          )}
         </Field>
         <Field
           label="Jump host"

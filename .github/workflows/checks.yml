@@ -8,6 +8,10 @@ jobs:
       - uses: actions/setup-node@v4
         with: {node-version: 24, cache: npm}
       - run: npm ci
+      - uses: actions/setup-go@v5
+        with: {go-version-file: services/vpn-gateway/go.mod, cache-dependency-path: services/vpn-gateway/go.sum}
+      - run: go test -race ./...
+        working-directory: services/vpn-gateway
       - run: npm run setup && npm run db:generate && npm run db:migrate
       - run: npm run lint && npm run typecheck && npm run build
       - run: docker compose -f tests/fixtures/compose.yml up -d --build

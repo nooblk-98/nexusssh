@@ -1,3 +1,9 @@
+FROM golang:1.25-bookworm AS vpn-build
+WORKDIR /src
+COPY services/vpn-gateway/go.mod services/vpn-gateway/go.sum ./
+RUN go mod download
+COPY services/vpn-gateway/ ./
+RUN go test ./... && CGO_ENABLED=0 go build -trimpath -o /vpn-gateway .
 FROM node:24-bookworm-slim AS build
 RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates python3 make g++ && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
@@ -8,6 +14,7 @@ COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run db:generate && npx tsc && npm run assets && npm run build -w @nexus/web
 FROM node:24-bookworm-slim AS app
+COPY --from=vpn-build /vpn-gateway /usr/local/bin/nexus-vpn-gateway
 RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates python3 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /app/node_modules ./node_modules
