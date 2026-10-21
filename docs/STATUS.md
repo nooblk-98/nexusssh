@@ -5,12 +5,12 @@ Last verification: 21 October 2026. This file distinguishes a functioning implem
 ## Executed checks
 
 - TypeScript checks for API, MCP, worker, shared packages and Next.js: passed.
-- ESLint: passed before the final documentation pass; rerun with `npm run lint` after edits.
+- ESLint: passed for application and test sources; generated Monaco distribution files are excluded.
 - Native production Next.js/backend build: passed.
 - Docker images for all four application services: built successfully.
 - Docker Compose with the development Nginx override: all six services started; API/web/MCP/Redis health checks passed.
 - Vitest: **27 tests passed** with `RUN_INTEGRATION=1` against a disposable Linux OpenSSH container and Redis.
-- Playwright/Edge: **1 browser workflow passed**, covering first-owner setup/login, empty dashboard, server dialog, agent/MCP/settings screens, desktop and 390px mobile layout. Desktop/mobile screenshots inspected.
+- Playwright/Edge: **1 browser workflow passed** against both native development and the production images behind development Nginx, covering first-owner setup/login, empty dashboard, server dialog, agent/MCP/settings screens, desktop and 390px mobile layout. Desktop/mobile screenshots inspected. The test account remained usable after API/container recreation, verifying SQLite volume persistence and the incremental migration.
 - npm dependency audit: **0 known vulnerabilities** at the time checked. This is not a security certification.
 
 Integration coverage includes real password and private-key SSH, unknown/changed host-key rejection, PTY input/output and cleanup, atomic SFTP writes/downloads, traversal and symlink rejection, exact approval races/replay denial, per-agent grants, organization isolation, expired/revoked credentials, numeric Linux metrics, truthful missing-Docker errors, asynchronous cancellation, single-use invitations, team creation, and consistent WAL backup/restore. Official MCP v2 clients exercised discovery, real SSH commands, files and server listing over actual HTTP sockets in both protocol eras.
