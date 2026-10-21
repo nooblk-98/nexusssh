@@ -1,7 +1,14 @@
 "use client";
 import { useEffect, useMemo, useState, type DragEvent } from "react";
 import { ChevronDown, ChevronLeft, Folder, Menu, Plus } from "lucide-react";
-import { api, notify, queryClient, refresh, type Row } from "../lib/api";
+import {
+  api,
+  copyText,
+  notify,
+  queryClient,
+  refresh,
+  type Row,
+} from "../lib/api";
 import { navigate } from "../lib/router";
 import { connectServer, updateServer, useServers } from "../lib/servers";
 import { useWorkspace } from "../lib/store";
@@ -108,18 +115,18 @@ export function Sidebar({ me }: { me: Row }) {
       items: [
         {
           label: "Name",
-          onClick: () => void navigator.clipboard.writeText(s.name),
+          onClick: () => void copyText(s.name).catch(notify.error),
         },
         {
           label: "Address",
-          onClick: () => void navigator.clipboard.writeText(s.host),
+          onClick: () => void copyText(s.host).catch(notify.error),
         },
         {
           label: "SSH command",
           onClick: () =>
-            void navigator.clipboard.writeText(
+            void copyText(
               `ssh ${s.port === 22 ? "" : "-p " + s.port + " "}${s.username}@${s.host}`,
-            ),
+            ).catch(notify.error),
         },
       ],
     },

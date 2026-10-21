@@ -2,6 +2,12 @@
 import { QueryClient, useQuery } from "@tanstack/react-query";
 import { create } from "zustand";
 export type Row = Record<string, any>;
+// crypto.randomUUID exists only on HTTPS and localhost; workspaces are often
+// opened over plain HTTP on a LAN address, where getRandomValues still works.
+export const uid = () =>
+  Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("");
 export const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
 });
@@ -57,6 +63,20 @@ export async function operation<T = Row>(op: string, args: Row): Promise<T> {
     );
   }
   return result as T;
+}
+// navigator.clipboard is also limited to secure origins; fall back to a
+// temporary textarea so Copy works over plain HTTP too.
+export async function copyText(text: string) {
+  if (navigator.clipboard) return navigator.clipboard.writeText(text);
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.style.position = "fixed";
+  area.style.opacity = "0";
+  document.body.appendChild(area);
+  area.select();
+  const ok = document.execCommand("copy");
+  area.remove();
+  if (!ok) throw new Error("Copy is not available in this browser");
 }
 export function saveFile(data: BlobPart, name: string, type = "text/plain") {
   const url = URL.createObjectURL(new Blob([data], { type }));

@@ -17,7 +17,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { useApi, type Row } from "../lib/api";
+import { copyText, useApi, type Row } from "../lib/api";
 import {
   loadHistory,
   remember,
@@ -205,7 +205,7 @@ export default function TerminalView({
     });
     const selection = t.onSelectionChange(() => {
       if (live.current.prefs.copyOnSelect && t.hasSelection())
-        void navigator.clipboard?.writeText(t.getSelection()).catch(() => {});
+        void copyText(t.getSelection()).catch(() => {});
     });
     t.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
@@ -239,13 +239,20 @@ export default function TerminalView({
         e.key.toLowerCase() === "c" &&
         t.hasSelection()
       ) {
-        void navigator.clipboard?.writeText(t.getSelection());
+        void copyText(t.getSelection()).catch(() => {});
         t.clearSelection();
         return false;
       }
-      if (mod && settings.ctrlVPaste && e.key.toLowerCase() === "v") {
+      // Without the async clipboard API (plain HTTP) the browser's own paste
+      // event still reaches the terminal, so the key is left alone.
+      if (
+        mod &&
+        settings.ctrlVPaste &&
+        e.key.toLowerCase() === "v" &&
+        navigator.clipboard?.readText
+      ) {
         void navigator.clipboard
-          ?.readText()
+          .readText()
           .then((text) => sendInput(tab.id, text.slice(0, 16384)))
           .catch(() => {});
         return false;

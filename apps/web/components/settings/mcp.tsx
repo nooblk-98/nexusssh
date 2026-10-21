@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import {
   api,
+  copyText,
   notify,
   operation,
   refresh,
@@ -32,9 +33,9 @@ import {
 import { PageHead } from "./page-head";
 
 const copy = (text: string) =>
-  void navigator.clipboard
-    .writeText(text)
-    .then(() => notify.success("Copied to clipboard."));
+  void copyText(text)
+    .then(() => notify.success("Copied to clipboard."))
+    .catch(notify.error);
 export function McpServer() {
   const q = useApi<Row>("settings");
   const endpoint = q.data?.endpoint || "";

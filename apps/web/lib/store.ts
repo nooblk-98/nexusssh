@@ -1,7 +1,7 @@
 "use client";
 import { useEffect } from "react";
 import { create } from "zustand";
-import { api, notify, queryClient, useApi, type Row } from "./api";
+import { api, notify, queryClient, uid, useApi, type Row } from "./api";
 
 export type Prefs = {
   uiTheme: "auto" | "light" | "dark";
@@ -107,7 +107,7 @@ export const useWorkspace = create<Workspace>((set, get) => ({
       set({ active: existing.id });
       return existing.id;
     }
-    const id = crypto.randomUUID();
+    const id = uid();
     set((s) => ({ tabs: [...s.tabs, { ...t, id }], active: id }));
     return id;
   },

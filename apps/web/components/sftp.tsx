@@ -29,6 +29,7 @@ import {
   notify,
   operation,
   saveFile,
+  uid,
   useApi,
   type Row,
 } from "../lib/api";
@@ -180,7 +181,7 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
         args({ path: join(base, d) }),
       ).catch(() => {});
     for (const { file, rel } of files) {
-      const id = crypto.randomUUID();
+      const id = uid();
       setTransfers((t) => [
         { id, name: rel, dir: "up", state: "queued", size: file.size },
         ...t,
@@ -210,7 +211,7 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
     if (base === path) void load(path);
   }
   async function download(e: Entry) {
-    const id = crypto.randomUUID();
+    const id = uid();
     setTransfers((t) => [
       { id, name: e.name, dir: "down", state: "running", size: e.size },
       ...t,

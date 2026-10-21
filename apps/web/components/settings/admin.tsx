@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import {
   api,
+  copyText,
   notify,
   refresh,
   saveFile,
@@ -519,7 +520,7 @@ export function UsersPage({ me }: { me: Row }) {
               </Field>
               <Button
                 variant="outline"
-                onClick={() => void navigator.clipboard.writeText(invite.url!)}
+                onClick={() => void copyText(invite.url!).catch(notify.error)}
               >
                 Copy link
               </Button>
