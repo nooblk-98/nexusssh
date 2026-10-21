@@ -8,6 +8,7 @@ import {
   Plug,
   ScrollText,
   ShieldCheck,
+  ShieldHalf,
   SlidersHorizontal,
   User,
   Users,
@@ -18,7 +19,13 @@ import type { Row } from "../../lib/api";
 import { navigate } from "../../lib/router";
 import { Logo } from "../ui";
 import { Account, Identities, Preferences } from "./personal";
-import { ActiveSessions, SessionHistory, Teams, UsersPage } from "./admin";
+import {
+  ActiveSessions,
+  Security,
+  SessionHistory,
+  Teams,
+  UsersPage,
+} from "./admin";
 import { Agents, Approvals, AuditLog, McpServer } from "./mcp";
 
 type Page = {
@@ -81,6 +88,13 @@ const sections: { label: string; pages: Page[] }[] = [
         label: "History",
         icon: History,
         render: () => <SessionHistory />,
+      },
+      {
+        slug: "security",
+        label: "Security",
+        icon: ShieldHalf,
+        admin: true,
+        render: () => <Security />,
       },
     ],
   },

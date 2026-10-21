@@ -17,6 +17,7 @@ import {
   api,
   copyText,
   notify,
+  queryClient,
   refresh,
   saveFile,
   timeAgo,
@@ -898,6 +899,49 @@ export function SessionHistory() {
           </Empty>
         )}
       </div>
+    </div>
+  );
+}
+
+export function Security() {
+  const q = useApi<Row>("settings");
+  const set = (acceptNewHostKeys: boolean) => {
+    const put = (v: boolean) =>
+      queryClient.setQueryData<Row>(["settings"], (old) => ({
+        ...old,
+        acceptNewHostKeys: v,
+      }));
+    put(acceptNewHostKeys);
+    void api("settings", { acceptNewHostKeys }, "PATCH")
+      .then(() => notify.success("Security settings saved."))
+      .catch((e) => {
+        put(!acceptNewHostKeys);
+        notify.error(e);
+      });
+  };
+  return (
+    <div className="page narrow">
+      <PageHead title="Security" sub="Workspace-wide connection safeguards" />
+      <div className="section-title">SSH Host Keys</div>
+      <Check
+        label="Accept unknown host keys automatically"
+        checked={!!q.data?.acceptNewHostKeys}
+        onChange={set}
+      />
+      <p className="small muted" style={{ lineHeight: 1.6, marginLeft: 28 }}>
+        The first time anyone connects to a server without a saved host key, its
+        key is trusted and saved without asking (like OpenSSH{" "}
+        <span className="mono">StrictHostKeyChecking accept-new</span>). If a
+        server later presents a different key, the connection is still refused
+        and an administrator must confirm the new key. Servers reached through a
+        jump host always ask.
+      </p>
+      {q.data?.acceptNewHostKeys && (
+        <div className="alert info" style={{ marginTop: 14 }}>
+          First connections are not verified while this is on. Turn it off once
+          your servers’ keys are saved if you need every new host checked.
+        </div>
+      )}
     </div>
   );
 }

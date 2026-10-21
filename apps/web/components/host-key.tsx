@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { ShieldAlert, ShieldQuestion } from "lucide-react";
 import { api, notify, refresh, useApi, type Row } from "../lib/api";
+import { navigate } from "../lib/router";
 import { serverBody } from "../lib/servers";
 import { Button } from "./ui";
 
@@ -106,6 +107,14 @@ export function HostKeyPrompt({
       )}
       {admin && !error && (
         <div className="row" style={{ justifyContent: "flex-end" }}>
+          {!changed && (
+            <a
+              className="small grow"
+              onClick={() => navigate("/settings/security")}
+            >
+              Always trust new hosts…
+            </a>
+          )}
           <Button
             variant={changed ? "danger" : "primary"}
             disabled={!fingerprint || busy}

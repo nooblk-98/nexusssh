@@ -40,6 +40,8 @@ import {
 } from "../../../packages/policy-engine/index.js";
 import { authenticate, admin, human, internal } from "./auth.js";
 import {
+  ACCEPT_NEW_HOST_KEYS,
+  acceptsNewHostKeys,
   audit,
   listServers,
   authorize,
@@ -1003,7 +1005,38 @@ export class AppController {
       sessionLimit: config.SSH_MAX_SESSIONS,
       recording: false,
       operations: allOperations,
+      acceptNewHostKeys: await acceptsNewHostKeys(p.organizationId),
     };
+  }
+  @Patch("settings") async updateSettings(
+    @Req() req: Request,
+    @Body() body: unknown,
+  ) {
+    const p = await authenticate(req);
+    admin(p);
+    const a = z.object({ acceptNewHostKeys: z.boolean() }).strict().parse(body);
+    await db.systemSetting.upsert({
+      where: {
+        organizationId_key: {
+          organizationId: p.organizationId,
+          key: ACCEPT_NEW_HOST_KEYS,
+        },
+      },
+      create: {
+        organizationId: p.organizationId,
+        key: ACCEPT_NEW_HOST_KEYS,
+        value: String(a.acceptNewHostKeys),
+      },
+      update: { value: String(a.acceptNewHostKeys) },
+    });
+    await audit(
+      p,
+      a.acceptNewHostKeys
+        ? "host_key_auto_accept_enabled"
+        : "host_key_auto_accept_disabled",
+      "success",
+    );
+    return a;
   }
   @Get("teams") async teams(@Req() req: Request) {
     const p = await authenticate(req);

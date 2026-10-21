@@ -59,6 +59,7 @@ export function ServerDrawerHost() {
 function ServerDrawer({ o, close }: { o: Open; close: () => void }) {
   const s = o.server;
   const identities = useApi<Row[]>("identities");
+  const settings = useApi<Row>("settings");
   const { servers, groups } = useServers();
   const [advanced, setAdvanced] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -523,7 +524,11 @@ function ServerDrawer({ o, close }: { o: Open; close: () => void }) {
         <Field
           label="Host Key Fingerprint"
           error={errors.fingerprint}
-          hint="Connections are refused until a verified host key is saved. Compare with: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub"
+          hint={
+            settings.data?.acceptNewHostKeys
+              ? "Optional. Left empty, the key is trusted and saved on the first connection (Settings → Security)."
+              : "Left empty, you will be asked to trust the key on the first connection. Compare with: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub"
+          }
         >
           <div className="input-group">
             <input

@@ -22,7 +22,10 @@ import {
   needsApproval,
   type Principal,
 } from "../../../packages/policy-engine/index.js";
-import type { Connection } from "../../../packages/ssh-core/index.js";
+import {
+  scanHostKey,
+  type Connection,
+} from "../../../packages/ssh-core/index.js";
 export const queue = new Queue("nexus-ssh", {
   connection: redisConnection,
   defaultJobOptions: {
@@ -91,6 +94,52 @@ export async function listServers(p: Principal) {
     take: 500,
   });
 }
+// Workspace setting: trust a host's key on first connection and pin it
+// (OpenSSH accept-new). Keys that differ from a pinned one are still refused.
+export const ACCEPT_NEW_HOST_KEYS = "ssh.acceptNewHostKeys";
+export async function acceptsNewHostKeys(org: string) {
+  const row = await db.systemSetting.findUnique({
+    where: {
+      organizationId_key: { organizationId: org, key: ACCEPT_NEW_HOST_KEYS },
+    },
+  });
+  return row?.value === "true";
+}
+async function pinNewHostKey(s: {
+  id: string;
+  organizationId: string;
+  host: string;
+  port: number;
+  fingerprint: string | null;
+}) {
+  if (s.fingerprint) return s.fingerprint;
+  const fingerprint = await scanHostKey(s.host, s.port, {
+    cidrs: config.SSH_ALLOWED_CIDRS.split(","),
+    connectTimeout: config.SSH_CONNECT_TIMEOUT,
+    outputLimit: config.SSH_OUTPUT_LIMIT,
+  });
+  // Only the first key seen is pinned, even if two connections race.
+  const pinned = await db.server.updateMany({
+    where: { id: s.id, fingerprint: null },
+    data: { fingerprint },
+  });
+  if (pinned.count)
+    await db.auditEvent.create({
+      data: {
+        organizationId: s.organizationId,
+        principalId: "system",
+        action: "host_key_auto_accepted",
+        status: "success",
+        serverId: s.id,
+        correlationId: randomUUID(),
+      },
+    });
+  const row = await db.server.findUniqueOrThrow({
+    where: { id: s.id },
+    select: { fingerprint: true },
+  });
+  return row.fingerprint;
+}
 export async function connection(
   serverId: string,
   org: string,
@@ -99,6 +148,11 @@ export async function connection(
     where: { id: serverId, organizationId: org },
     include: { identity: true, bastion: { include: { identity: true } } },
   });
+  if (await acceptsNewHostKeys(org)) {
+    if (s.bastion) s.bastion.fingerprint = await pinNewHostKey(s.bastion);
+    // A host behind a jump host cannot be scanned directly; it keeps the prompt.
+    else s.fingerprint = await pinNewHostKey(s);
+  }
   const map = (s: any): Connection => ({
     host: s.host,
     port: s.port,

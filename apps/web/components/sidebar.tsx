@@ -54,6 +54,7 @@ export function mainMenu(admin: boolean): MenuItem[] {
       : []),
     { label: "Active Sessions", onClick: go("active-sessions") },
     { label: "History", onClick: go("history") },
+    ...(admin ? [{ label: "Security", onClick: go("security") }] : []),
     "sep",
     { label: "MCP Server", onClick: go("mcp") },
     ...(admin
