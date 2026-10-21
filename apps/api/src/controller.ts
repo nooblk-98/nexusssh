@@ -47,6 +47,39 @@ import {
   claimTask,
 } from "./domain.js";
 import { verifyTotp, newTotp, totpStep } from "./totp.js";
+import { scanHostKey } from "../../../packages/ssh-core/index.js";
+// Keep in sync with the icon picker in apps/web/components/icons.tsx.
+const serverIcons = [
+  "linux",
+  "windows",
+  "apple",
+  "server",
+  "database",
+  "storage",
+  "router",
+  "cluster",
+  "cloud",
+  "container",
+  "terminal",
+  "monitor",
+  "firewall",
+  "globe",
+] as const;
+const preferences = z
+  .object({
+    uiTheme: z.enum(["auto", "light", "dark"]),
+    terminalTheme: z.string().max(40),
+    terminalFont: z.string().max(60),
+    terminalFontSize: z.number().int().min(8).max(32),
+    copyOnSelect: z.boolean(),
+    suggestHistory: z.boolean(),
+    suggestArguments: z.boolean(),
+    compactSuggestions: z.boolean(),
+    editorTheme: z.string().max(40),
+    editorWrap: z.boolean(),
+  })
+  .partial()
+  .strict();
 const credentials = z
   .object({
     name: z.string().min(1).max(100),
@@ -81,6 +114,12 @@ const serverSchema = z
       .enum(["development", "staging", "production"])
       .default("development"),
     description: z.string().max(2000).default(""),
+    icon: z.enum(serverIcons).default("linux"),
+    terminalSettings: z
+      .record(z.string().max(40), z.union([z.string().max(40), z.boolean()]))
+      .default({})
+      .refine((v) => Object.keys(v).length <= 30, "Too many settings")
+      .transform((v) => JSON.stringify(v)),
     fileRoot: z
       .string()
       .startsWith("/")
@@ -250,6 +289,70 @@ export class AppController {
       },
     });
   }
+  @Patch("auth/me") async updateMe(@Req() req: Request, @Body() body: unknown) {
+    const p = await authenticate(req);
+    human(p);
+    const a = z.object({ name: z.string().trim().min(1).max(100) }).parse(body);
+    await db.user.update({ where: { id: p.id }, data: a });
+    await audit(p, "profile_updated", "success");
+    return { updated: true };
+  }
+  @Post("auth/password") async changePassword(
+    @Req() req: Request,
+    @Body() body: unknown,
+  ) {
+    const p = await authenticate(req);
+    human(p);
+    const a = z
+      .object({
+        current: z.string().min(1).max(200),
+        password: z.string().min(12).max(200),
+      })
+      .parse(body);
+    const u = await db.user.findUniqueOrThrow({ where: { id: p.id } });
+    if (!(await bcrypt.compare(a.current, u.passwordHash)))
+      throw new BadRequestException("Current password is incorrect");
+    await db.user.update({
+      where: { id: p.id },
+      data: { passwordHash: await bcrypt.hash(a.password, 12) },
+    });
+    // Other browsers signed in as this user must sign in again.
+    const current = req.cookies?.nexus_session
+      ? hash(req.cookies.nexus_session)
+      : "";
+    await db.webSession.deleteMany({
+      where: { userId: p.id, tokenHash: { not: current } },
+    });
+    await audit(p, "password_changed", "success");
+    return { updated: true };
+  }
+  @Get("preferences") async getPreferences(@Req() req: Request) {
+    const p = await authenticate(req);
+    human(p);
+    const u = await db.user.findUniqueOrThrow({
+      where: { id: p.id },
+      select: { preferences: true, totpSecret: true },
+    });
+    return { ...JSON.parse(u.preferences), mfaEnabled: !!u.totpSecret };
+  }
+  @Patch("preferences") async setPreferences(
+    @Req() req: Request,
+    @Body() body: unknown,
+  ) {
+    const p = await authenticate(req);
+    human(p);
+    const a = preferences.parse(body);
+    const u = await db.user.findUniqueOrThrow({
+      where: { id: p.id },
+      select: { preferences: true },
+    });
+    const merged = { ...JSON.parse(u.preferences), ...a };
+    await db.user.update({
+      where: { id: p.id },
+      data: { preferences: JSON.stringify(merged) },
+    });
+    return merged;
+  }
   @Post("auth/mfa/prepare") async prepareMfa(@Req() req: Request) {
     const p = await authenticate(req);
     human(p);
@@ -338,7 +441,13 @@ export class AppController {
     admin(p);
     return db.sSHIdentity.findMany({
       where: { organizationId: p.organizationId },
-      select: { id: true, name: true, kind: true, createdAt: true },
+      select: {
+        id: true,
+        name: true,
+        kind: true,
+        createdAt: true,
+        _count: { select: { servers: true } },
+      },
     });
   }
   @Post("identities") async identity(
@@ -392,6 +501,26 @@ export class AppController {
     if (!result.count) throw new NotFoundException();
     await audit(p, "identity_rotated", "success");
     return { id };
+  }
+  @Delete("identities/:id") async deleteIdentity(
+    @Req() req: Request,
+    @Param("id") id: string,
+  ) {
+    const p = await authenticate(req);
+    admin(p);
+    const used = await db.server.count({
+      where: { identityId: id, organizationId: p.organizationId },
+    });
+    if (used)
+      throw new ConflictException(
+        `This identity is used by ${used} server${used === 1 ? "" : "s"}`,
+      );
+    const result = await db.sSHIdentity.deleteMany({
+      where: { id, organizationId: p.organizationId },
+    });
+    if (!result.count) throw new NotFoundException();
+    await audit(p, "identity_deleted", "success");
+    return { deleted: true };
   }
   @Get("servers") async servers(@Req() req: Request) {
     return listServers(await authenticate(req));
@@ -519,6 +648,60 @@ export class AppController {
     });
     await audit(p, "folder_created", "success");
     return group;
+  }
+  @Patch("groups/:id") async renameGroup(
+    @Req() req: Request,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    const p = await authenticate(req);
+    admin(p);
+    const a = z.object({ name: z.string().trim().min(1).max(80) }).parse(body);
+    if (
+      await db.serverGroup.findFirst({
+        where: {
+          organizationId: p.organizationId,
+          name: a.name,
+          id: { not: id },
+        },
+      })
+    )
+      throw new ConflictException("A folder with this name already exists");
+    const result = await db.serverGroup.updateMany({
+      where: { id, organizationId: p.organizationId },
+      data: a,
+    });
+    if (!result.count) throw new NotFoundException();
+    await audit(p, "folder_renamed", "success");
+    return { id, ...a };
+  }
+  @Post("servers/scan-host-key") async scan(
+    @Req() req: Request,
+    @Body() body: unknown,
+  ) {
+    const p = await authenticate(req);
+    admin(p);
+    const a = z
+      .object({
+        host: z
+          .string()
+          .min(1)
+          .max(253)
+          .regex(/^[a-zA-Z0-9.:-]+$/),
+        port: z.number().int().min(1).max(65535).default(22),
+      })
+      .parse(body);
+    try {
+      return {
+        fingerprint: await scanHostKey(a.host, a.port, {
+          cidrs: config.SSH_ALLOWED_CIDRS.split(","),
+          connectTimeout: config.SSH_CONNECT_TIMEOUT,
+          outputLimit: config.SSH_OUTPUT_LIMIT,
+        }),
+      };
+    } catch (e) {
+      throw new BadRequestException((e as Error).message);
+    }
   }
   @Delete("groups/:id") async removeGroup(
     @Req() req: Request,
@@ -860,6 +1043,45 @@ export class AppController {
     });
     await audit(p, "team_created", "success");
     return team;
+  }
+  @Patch("teams/:id") async updateTeam(
+    @Req() req: Request,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    const p = await authenticate(req);
+    admin(p);
+    const a = z
+      .object({
+        name: z.string().min(1).max(80),
+        userIds: z.array(z.uuid()).max(100),
+      })
+      .parse(body);
+    const ids = [...new Set(a.userIds)];
+    if (
+      (await db.user.count({
+        where: { id: { in: ids }, organizationId: p.organizationId },
+      })) !== ids.length
+    )
+      throw new BadRequestException("Member unavailable");
+    if (
+      !(await db.team.findFirst({
+        where: { id, organizationId: p.organizationId },
+      }))
+    )
+      throw new NotFoundException();
+    await db.$transaction([
+      db.teamMember.deleteMany({ where: { teamId: id } }),
+      db.team.update({
+        where: { id },
+        data: {
+          name: a.name,
+          members: { create: ids.map((userId) => ({ userId })) },
+        },
+      }),
+    ]);
+    await audit(p, "team_updated", "success");
+    return { id };
   }
   @Delete("teams/:id") async removeTeam(
     @Req() req: Request,

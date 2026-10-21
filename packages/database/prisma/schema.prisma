@@ -38,6 +38,7 @@ model User {
   disabled Boolean @default(false)
   totpSecret String?
   totpLastStep Int @default(-1)
+  preferences String @default("{}")
   sessions WebSession[]
   teams TeamMember[]
   permissions ServerPermission[]
@@ -142,6 +143,8 @@ model Server {
   fingerprint String?
   environment String @default("development")
   description String @default("")
+  icon String @default("linux")
+  terminalSettings String @default("{}")
   groupId String?
   group ServerGroup? @relation(fields: [groupId], references: [id])
   tags ServerTag[]

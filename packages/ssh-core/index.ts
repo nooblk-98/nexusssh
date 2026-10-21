@@ -76,6 +76,33 @@ export async function connect(c: Connection, l: Limits): Promise<Client> {
     });
   });
 }
+// Reads the host key a server presents without authenticating, so the user can
+// compare it with a trusted value before it is pinned.
+export async function scanHostKey(
+  host: string,
+  port: number,
+  l: Limits,
+): Promise<string> {
+  const address = await resolveAllowed(host, l.cidrs);
+  const client = new Client();
+  return new Promise((resolve, reject) => {
+    let seen: string | undefined;
+    client.on("error", (e) => (seen ? resolve(seen) : reject(e)));
+    client.on("close", () =>
+      seen ? resolve(seen) : reject(new Error("No host key received")),
+    );
+    client.connect({
+      host: address,
+      port,
+      username: "nexusssh-scan",
+      readyTimeout: l.connectTimeout,
+      hostVerifier: (key: Buffer) => {
+        seen = fingerprint(key);
+        return false;
+      },
+    });
+  });
+}
 export async function exec(
   client: Client,
   command: string,

@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { parse } from "dotenv";
 const env = parse(readFileSync(".env"));
-test("first-run setup, login, empty dashboard, responsive layout and navigation", async ({
+test("first-run setup, login, workspace, settings and responsive layout", async ({
   page,
 }) => {
   await page.goto("/");
@@ -27,42 +27,42 @@ test("first-run setup, login, empty dashboard, responsive layout and navigation"
     await page.getByRole("button", { name: "Sign in" }).click();
   }
   await expect(
-    page.getByRole("heading", { name: "Infrastructure overview" }),
+    page.getByRole("heading", { name: "Quick Connect" }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Your first connection starts here" }),
-  ).toBeVisible();
+  await expect(page.getByText("Recent Connections")).toBeVisible();
   await page.screenshot({
-    path: "test-results/dashboard-desktop.png",
+    path: "test-results/workspace-desktop.png",
     fullPage: true,
   });
-  await page.getByRole("button", { name: "Add server", exact: true }).click();
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Server" }).click();
+  await expect(page.getByRole("dialog", { name: "New Server" })).toBeVisible();
+  await page.getByRole("button", { name: "Advanced Settings" }).click();
   await expect(
-    page.getByRole("dialog", { name: "Add a server" }),
+    page.getByRole("dialog", { name: "Advanced Settings" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Close dialog" }).click();
-  await page.getByRole("button", { name: "MCP Server", exact: true }).click();
+  await page.getByRole("button", { name: "Close" }).click();
+  await page.getByRole("button", { name: "Menu" }).click();
+  await page.getByRole("menuitem", { name: "MCP Server" }).click();
+  await expect(page.getByRole("heading", { name: "MCP Server" })).toBeVisible();
+  await page.getByRole("button", { name: "AI Agents" }).click();
   await expect(
-    page.getByRole("heading", { name: "Remote MCP gateway" }),
+    page.getByRole("heading", { name: "No Agents Registered" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "AI Agents", exact: true }).click();
+  await page.getByRole("button", { name: "Account" }).click();
   await expect(
-    page.getByRole("heading", { name: "No agents registered" }),
+    page.getByRole("heading", { name: "Two-Factor Authentication" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await expect(
-    page.getByRole("heading", { name: "Account security" }),
-  ).toBeVisible();
+  await page.getByRole("button", { name: "Back" }).click();
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByLabel("Navigation").selectOption("Dashboard");
   await expect(
-    page.getByRole("heading", { name: "Infrastructure overview" }),
+    page.getByRole("heading", { name: "Quick Connect" }),
   ).toBeVisible();
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth),
   ).toBeLessThanOrEqual(390);
   await page.screenshot({
-    path: "test-results/dashboard-mobile.png",
+    path: "test-results/workspace-mobile.png",
     fullPage: true,
   });
 });
