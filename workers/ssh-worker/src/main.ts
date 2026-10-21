@@ -1,6 +1,10 @@
 import { Worker } from "bullmq";
 import { config, redisConnection } from "../../../packages/shared/config.js";
-import { operate, type Connection } from "../../../packages/ssh-core/index.js";
+import {
+  connectionFailures,
+  operate,
+  type Connection,
+} from "../../../packages/ssh-core/index.js";
 const headers = {
   "content-type": "application/json",
   "x-nexus-internal": config.INTERNAL_SECRET,
@@ -56,7 +60,8 @@ const worker = new Worker(
     try {
       const result = await operate(
         claim.connection,
-        {
+        // The API includes networks added under Settings > Security.
+        claim.limits ?? {
           cidrs: config.SSH_ALLOWED_CIDRS.split(","),
           connectTimeout: config.SSH_CONNECT_TIMEOUT,
           outputLimit: config.SSH_OUTPUT_LIMIT,
@@ -77,13 +82,18 @@ const worker = new Worker(
         status: "completed",
         ...redact(result, claim.connection),
       };
-    } catch {
+    } catch (e) {
       await api(`tasks/${id}/finish`, {
         lease: claim.lease,
         status: abort.signal.aborted ? "cancelled" : "failed",
       }).catch(() => {});
+      // Connection-stage reasons carry no remote output or secrets, so the
+      // browser can act on them; everything else stays generic.
+      const message = e instanceof Error ? e.message : "";
       throw new Error(
-        "SSH operation failed. Check connectivity, host fingerprint, path permissions, and timeout.",
+        connectionFailures.some((r) => r.test(message))
+          ? message
+          : "SSH operation failed. Check connectivity, host fingerprint, path permissions, and timeout.",
       );
     } finally {
       clearInterval(timer);

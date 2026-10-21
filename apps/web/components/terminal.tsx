@@ -486,8 +486,10 @@ export default function TerminalView({
             {hostKey ? (
               <div>
                 <HostKeyPrompt
+                  key={message}
                   server={server}
                   kind={hostKey}
+                  message={message}
                   onTrusted={() => setGeneration((g) => g + 1)}
                 />
               </div>

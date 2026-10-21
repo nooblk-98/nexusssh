@@ -449,8 +449,10 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
           {error && hostKeyProblem(error) ? (
             <div className="empty-state">
               <HostKeyPrompt
+                key={error}
                 server={server}
                 kind={hostKeyProblem(error)!}
+                message={error}
                 onTrusted={() => void load(path)}
               />
             </div>

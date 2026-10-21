@@ -17,6 +17,14 @@ export type Limits = {
   connectTimeout: number;
   outputLimit: number;
 };
+// Connection-stage failures whose text carries no remote output or secrets,
+// so they can be shown to the user as-is.
+export const connectionFailures = [
+  /^Verify and save the SSH host fingerprint before connecting$/,
+  /^Host denied \(verification failed\)$/,
+  /^SSH destination is outside the configured allowlist \([0-9a-fA-F.:, ]*\)$/,
+  /^All configured authentication methods failed$/,
+];
 export function allowedIP(address: string, cidrs: string[]) {
   let ip = ipaddr.parse(address);
   if (ip.kind() === "ipv6" && (ip as ipaddr.IPv6).isIPv4MappedAddress())
@@ -28,8 +36,13 @@ export function allowedIP(address: string, cidrs: string[]) {
 }
 export async function resolveAllowed(host: string, cidrs: string[]) {
   const addresses = await lookup(host, { all: true, verbatim: true });
-  if (!addresses.length || addresses.some((a) => !allowedIP(a.address, cidrs)))
-    throw new Error("SSH destination is outside the configured allowlist");
+  const blocked = addresses.filter((a) => !allowedIP(a.address, cidrs));
+  if (!addresses.length || blocked.length)
+    throw new Error(
+      "SSH destination is outside the configured allowlist (" +
+        blocked.map((a) => a.address).join(", ") +
+        ")",
+    );
   return addresses[0].address;
 }
 export function fingerprint(key: Buffer) {

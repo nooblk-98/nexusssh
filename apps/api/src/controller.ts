@@ -20,6 +20,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
+import ipaddr from "ipaddr.js";
 import { db } from "../../../packages/database/index.js";
 import {
   config,
@@ -41,7 +42,10 @@ import {
 import { authenticate, admin, human, internal } from "./auth.js";
 import {
   ACCEPT_NEW_HOST_KEYS,
+  EXTRA_CIDRS,
   acceptsNewHostKeys,
+  sshLimits,
+  workspaceCidrs,
   audit,
   listServers,
   authorize,
@@ -67,6 +71,23 @@ const serverIcons = [
   "firewall",
   "globe",
 ] as const;
+// An IP address or CIDR network; a bare address becomes a single-host network.
+const cidr = z
+  .string()
+  .trim()
+  .transform((v, ctx) => {
+    const value = v.includes("/") ? v : v + (v.includes(":") ? "/128" : "/32");
+    try {
+      const [net, bits] = ipaddr.parseCIDR(value);
+      return net.toString() + "/" + bits;
+    } catch {
+      ctx.addIssue({
+        code: "custom",
+        message: "Invalid IP address or CIDR: " + v,
+      });
+      return z.NEVER;
+    }
+  });
 const preferences = z
   .object({
     uiTheme: z.enum(["auto", "light", "dark"]),
@@ -695,11 +716,11 @@ export class AppController {
       .parse(body);
     try {
       return {
-        fingerprint: await scanHostKey(a.host, a.port, {
-          cidrs: config.SSH_ALLOWED_CIDRS.split(","),
-          connectTimeout: config.SSH_CONNECT_TIMEOUT,
-          outputLimit: config.SSH_OUTPUT_LIMIT,
-        }),
+        fingerprint: await scanHostKey(
+          a.host,
+          a.port,
+          await sshLimits(p.organizationId),
+        ),
       };
     } catch (e) {
       throw new BadRequestException((e as Error).message);
@@ -1006,6 +1027,8 @@ export class AppController {
       recording: false,
       operations: allOperations,
       acceptNewHostKeys: await acceptsNewHostKeys(p.organizationId),
+      deploymentCidrs: config.SSH_ALLOWED_CIDRS.split(","),
+      workspaceCidrs: await workspaceCidrs(p.organizationId),
     };
   }
   @Patch("settings") async updateSettings(
@@ -1014,28 +1037,35 @@ export class AppController {
   ) {
     const p = await authenticate(req);
     admin(p);
-    const a = z.object({ acceptNewHostKeys: z.boolean() }).strict().parse(body);
-    await db.systemSetting.upsert({
-      where: {
-        organizationId_key: {
-          organizationId: p.organizationId,
-          key: ACCEPT_NEW_HOST_KEYS,
+    const a = z
+      .object({
+        acceptNewHostKeys: z.boolean().optional(),
+        workspaceCidrs: z.array(cidr).max(100).optional(),
+      })
+      .strict()
+      .parse(body);
+    const save = (key: string, value: string) =>
+      db.systemSetting.upsert({
+        where: {
+          organizationId_key: { organizationId: p.organizationId, key },
         },
-      },
-      create: {
-        organizationId: p.organizationId,
-        key: ACCEPT_NEW_HOST_KEYS,
-        value: String(a.acceptNewHostKeys),
-      },
-      update: { value: String(a.acceptNewHostKeys) },
-    });
-    await audit(
-      p,
-      a.acceptNewHostKeys
-        ? "host_key_auto_accept_enabled"
-        : "host_key_auto_accept_disabled",
-      "success",
-    );
+        create: { organizationId: p.organizationId, key, value },
+        update: { value },
+      });
+    if (a.acceptNewHostKeys !== undefined) {
+      await save(ACCEPT_NEW_HOST_KEYS, String(a.acceptNewHostKeys));
+      await audit(
+        p,
+        a.acceptNewHostKeys
+          ? "host_key_auto_accept_enabled"
+          : "host_key_auto_accept_disabled",
+        "success",
+      );
+    }
+    if (a.workspaceCidrs) {
+      await save(EXTRA_CIDRS, JSON.stringify([...new Set(a.workspaceCidrs)]));
+      await audit(p, "ssh_allowlist_updated", "success");
+    }
     return a;
   }
   @Get("teams") async teams(@Req() req: Request) {

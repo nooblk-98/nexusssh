@@ -4,7 +4,7 @@ import type { Request } from "express";
 import type { Client, ClientChannel } from "ssh2";
 import { z } from "zod";
 import { authenticate } from "./auth.js";
-import { authorize, connection, audit } from "./domain.js";
+import { authorize, connection, audit, sshLimits } from "./domain.js";
 import { connect } from "../../../packages/ssh-core/index.js";
 import { config, sameOrigin } from "../../../packages/shared/config.js";
 import { db } from "../../../packages/database/index.js";
@@ -66,11 +66,10 @@ export function terminals(server: Server) {
       ws.on("close", cleanup);
       ws.on("error", cleanup);
       idle = setTimeout(cleanup, config.SSH_IDLE_TIMEOUT);
-      client = await connect(await connection(id, p.organizationId), {
-        cidrs: config.SSH_ALLOWED_CIDRS.split(","),
-        connectTimeout: config.SSH_CONNECT_TIMEOUT,
-        outputLimit: config.SSH_OUTPUT_LIMIT,
-      });
+      client = await connect(
+        await connection(id, p.organizationId),
+        await sshLimits(p.organizationId),
+      );
       if (closed) {
         client.end();
         return;

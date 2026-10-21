@@ -905,20 +905,36 @@ export function SessionHistory() {
 
 export function Security() {
   const q = useApi<Row>("settings");
-  const set = (acceptNewHostKeys: boolean) => {
-    const put = (v: boolean) =>
-      queryClient.setQueryData<Row>(["settings"], (old) => ({
-        ...old,
-        acceptNewHostKeys: v,
-      }));
-    put(acceptNewHostKeys);
-    void api("settings", { acceptNewHostKeys }, "PATCH")
-      .then(() => notify.success("Security settings saved."))
+  const [cidr, setCidr] = useState("");
+  // Updates show immediately and roll back if the API refuses them.
+  const save = (patch: Row, success: string) => {
+    const before = q.data;
+    queryClient.setQueryData<Row>(["settings"], (old) => ({
+      ...old,
+      ...patch,
+    }));
+    return api<Row>("settings", patch, "PATCH")
+      .then((saved) => {
+        queryClient.setQueryData<Row>(["settings"], (old) => ({
+          ...old,
+          ...saved,
+        }));
+        notify.success(success);
+        return true;
+      })
       .catch((e) => {
-        put(!acceptNewHostKeys);
+        queryClient.setQueryData(["settings"], before);
         notify.error(e);
+        return false;
       });
   };
+  const workspace: string[] = q.data?.workspaceCidrs || [];
+  const add = () =>
+    cidr.trim() &&
+    void save(
+      { workspaceCidrs: [...workspace, cidr.trim()] },
+      "Destination allowed.",
+    ).then((ok) => ok && setCidr(""));
   return (
     <div className="page narrow">
       <PageHead title="Security" sub="Workspace-wide connection safeguards" />
@@ -926,7 +942,9 @@ export function Security() {
       <Check
         label="Accept unknown host keys automatically"
         checked={!!q.data?.acceptNewHostKeys}
-        onChange={set}
+        onChange={(v) =>
+          void save({ acceptNewHostKeys: v }, "Security settings saved.")
+        }
       />
       <p className="small muted" style={{ lineHeight: 1.6, marginLeft: 28 }}>
         The first time anyone connects to a server without a saved host key, its
@@ -940,6 +958,77 @@ export function Security() {
         <div className="alert info" style={{ marginTop: 14 }}>
           First connections are not verified while this is on. Turn it off once
           your servers’ keys are saved if you need every new host checked.
+        </div>
+      )}
+      <div className="section-title" style={{ marginTop: 28 }}>
+        Allowed SSH Destinations
+      </div>
+      <p className="small muted" style={{ lineHeight: 1.6, marginBottom: 14 }}>
+        NexusSSH only connects to addresses in these networks. Entries from the
+        deployment’s <span className="mono">SSH_ALLOWED_CIDRS</span> can only be
+        changed there; add more for this workspace below.
+      </p>
+      <table className="table" style={{ marginBottom: 14 }}>
+        <thead>
+          <tr>
+            <th>Network</th>
+            <th>Source</th>
+            <th style={{ width: 60 }} />
+          </tr>
+        </thead>
+        <tbody>
+          {(q.data?.deploymentCidrs || []).map((c: string) => (
+            <tr key={"d" + c}>
+              <td className="mono">{c}</td>
+              <td className="muted">Deployment (.env)</td>
+              <td />
+            </tr>
+          ))}
+          {workspace.map((c) => (
+            <tr key={"w" + c}>
+              <td className="mono">{c}</td>
+              <td>Workspace</td>
+              <td>
+                <IconButton
+                  label={"Remove " + c}
+                  size="sm"
+                  danger
+                  onClick={() =>
+                    void save(
+                      { workspaceCidrs: workspace.filter((x) => x !== c) },
+                      "Destination removed.",
+                    )
+                  }
+                >
+                  <Trash2 size={15} />
+                </IconButton>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <form
+        className="input-group"
+        onSubmit={(e) => {
+          e.preventDefault();
+          add();
+        }}
+      >
+        <input
+          className="input mono"
+          aria-label="IP address or network"
+          placeholder="203.0.113.10 or 10.0.0.0/24"
+          value={cidr}
+          onChange={(e) => setCidr(e.target.value)}
+        />
+        <button className="btn btn-primary" disabled={!cidr.trim()}>
+          Allow
+        </button>
+      </form>
+      {workspace.some((c) => c.endsWith("/0")) && (
+        <div className="alert" style={{ marginTop: 14 }}>
+          A /0 entry allows every address, including internal services reachable
+          from this server.
         </div>
       )}
     </div>

@@ -1,41 +1,92 @@
 "use client";
 import { useEffect, useState } from "react";
-import { ShieldAlert, ShieldQuestion } from "lucide-react";
+import { ShieldAlert, ShieldQuestion, ShieldX } from "lucide-react";
 import { api, notify, refresh, useApi, type Row } from "../lib/api";
 import { navigate } from "../lib/router";
 import { serverBody } from "../lib/servers";
 import { Button } from "./ui";
 
-// Connection errors that mean the host key still needs a human decision.
-export const hostKeyProblem = (message: string) =>
+type Kind = "unknown" | "changed" | "blocked";
+// Connection errors that need an administrator's decision before connecting.
+export const hostKeyProblem = (message: string): Kind | null =>
   /fingerprint before connecting/i.test(message)
     ? "unknown"
     : /Host denied \(verification failed\)/i.test(message)
       ? "changed"
-      : null;
+      : /outside the configured allowlist/i.test(message)
+        ? "blocked"
+        : null;
+// "…allowlist (203.0.113.7, 2001:db8::1)" lists the addresses that were refused.
+const blockedAddresses = (message: string, host: string) => {
+  const listed = message.match(/allowlist \(([^)]*)\)/)?.[1];
+  const found = listed
+    ? listed
+        .split(",")
+        .map((a) => a.trim())
+        .filter(Boolean)
+    : [];
+  return found.length ? found : /^[0-9a-fA-F.:]+$/.test(host) ? [host] : [];
+};
 
 // Shown in place of a terminal or file list when the server's host key is not
-// pinned yet (first connection) or no longer matches the pinned one.
+// pinned yet, no longer matches, or the server is outside the SSH allowlist.
 export function HostKeyPrompt({
   server,
-  kind,
+  kind: initial,
+  message = "",
   onTrusted,
 }: {
   server: Row;
-  kind: "unknown" | "changed";
+  kind: Kind;
+  message?: string;
   onTrusted: () => void;
 }) {
   const me = useApi<Row>("auth/me");
+  const settings = useApi<Row>("settings");
   const admin = ["owner", "administrator"].includes(me.data?.role);
+  const [kind, setKind] = useState<Kind>(initial);
+  const [blocked, setBlocked] = useState<string[]>(() =>
+    initial === "blocked" ? blockedAddresses(message, server.host) : [],
+  );
   const [fingerprint, setFingerprint] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
-    if (!admin) return;
+    if (!admin || kind === "blocked") return;
+    setError("");
     api<Row>("servers/scan-host-key", { host: server.host, port: server.port })
       .then((r) => setFingerprint(r.fingerprint))
-      .catch((e) => setError(e.message));
-  }, [admin, server.host, server.port]);
+      .catch((e) => {
+        if (hostKeyProblem(e.message) === "blocked") {
+          setBlocked(blockedAddresses(e.message, server.host));
+          setKind("blocked");
+        } else setError(e.message);
+      });
+  }, [admin, kind, attempt, server.host, server.port]);
+  async function allow() {
+    setBusy(true);
+    try {
+      const current: string[] = settings.data?.workspaceCidrs || [];
+      await api(
+        "settings",
+        { workspaceCidrs: [...current, ...blocked] },
+        "PATCH",
+      );
+      await refresh("settings");
+      notify.success(`Allowed ${blocked.join(", ")} as an SSH destination.`);
+      // A pinned key, or automatic acceptance, means the connection can go ahead.
+      if (server.fingerprint || settings.data?.acceptNewHostKeys) onTrusted();
+      else {
+        setKind("unknown");
+        setAttempt((n) => n + 1);
+      }
+    } catch (e) {
+      notify.error(e);
+    } finally {
+      setBusy(false);
+    }
+  }
   async function trust() {
     setBusy(true);
     try {
@@ -54,6 +105,45 @@ export function HostKeyPrompt({
     }
   }
   const changed = kind === "changed";
+  if (kind === "blocked")
+    return (
+      <div
+        style={{ maxWidth: 460, textAlign: "left", display: "grid", gap: 12 }}
+      >
+        <div className="row" style={{ color: "var(--text-strong)" }}>
+          <ShieldX size={22} />
+          <b>Destination not allowed</b>
+        </div>
+        <p className="small" style={{ lineHeight: 1.6 }}>
+          <b>{blocked.join(", ") || server.host}</b> is not in this workspace’s
+          list of allowed SSH destinations, so NexusSSH will not connect to it
+          or read its host key.
+        </p>
+        {!admin ? (
+          <div className="alert info">
+            Ask an administrator to allow this server under Settings → Security.
+          </div>
+        ) : !blocked.length ? (
+          <div className="alert">
+            {server.host} could not be resolved to an address. Add its network
+            under Settings → Security.
+          </div>
+        ) : (
+          <div className="row" style={{ justifyContent: "flex-end" }}>
+            <a
+              className="small grow"
+              onClick={() => navigate("/settings/security")}
+            >
+              Manage allowed destinations…
+            </a>
+            <Button disabled={busy} onClick={() => void allow()}>
+              Allow {blocked.length === 1 ? blocked[0] : "these addresses"} and
+              Continue
+            </Button>
+          </div>
+        )}
+      </div>
+    );
   return (
     <div style={{ maxWidth: 460, textAlign: "left", display: "grid", gap: 12 }}>
       <div

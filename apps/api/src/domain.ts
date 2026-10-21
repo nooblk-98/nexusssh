@@ -23,6 +23,7 @@ import {
   type Principal,
 } from "../../../packages/policy-engine/index.js";
 import {
+  connectionFailures,
   scanHostKey,
   type Connection,
 } from "../../../packages/ssh-core/index.js";
@@ -94,6 +95,25 @@ export async function listServers(p: Principal) {
     take: 500,
   });
 }
+// SSH destinations allowed for a workspace: the deployment's SSH_ALLOWED_CIDRS
+// plus networks administrators add under Settings > Security.
+export const EXTRA_CIDRS = "ssh.allowedCidrs";
+export async function workspaceCidrs(org: string): Promise<string[]> {
+  const row = await db.systemSetting.findUnique({
+    where: { organizationId_key: { organizationId: org, key: EXTRA_CIDRS } },
+  });
+  return row ? JSON.parse(row.value) : [];
+}
+export async function sshLimits(org: string) {
+  return {
+    cidrs: [
+      ...config.SSH_ALLOWED_CIDRS.split(","),
+      ...(await workspaceCidrs(org)),
+    ],
+    connectTimeout: config.SSH_CONNECT_TIMEOUT,
+    outputLimit: config.SSH_OUTPUT_LIMIT,
+  };
+}
 // Workspace setting: trust a host's key on first connection and pin it
 // (OpenSSH accept-new). Keys that differ from a pinned one are still refused.
 export const ACCEPT_NEW_HOST_KEYS = "ssh.acceptNewHostKeys";
@@ -113,11 +133,11 @@ async function pinNewHostKey(s: {
   fingerprint: string | null;
 }) {
   if (s.fingerprint) return s.fingerprint;
-  const fingerprint = await scanHostKey(s.host, s.port, {
-    cidrs: config.SSH_ALLOWED_CIDRS.split(","),
-    connectTimeout: config.SSH_CONNECT_TIMEOUT,
-    outputLimit: config.SSH_OUTPUT_LIMIT,
-  });
+  const fingerprint = await scanHostKey(
+    s.host,
+    s.port,
+    await sshLimits(s.organizationId),
+  );
   // Only the first key seen is pinned, even if two connections race.
   const pinned = await db.server.updateMany({
     where: { id: s.id, fingerprint: null },
@@ -330,7 +350,10 @@ export async function operation(
   if (signal?.aborted) cancel();
   try {
     return await job.waitUntilFinished(events, 90000);
-  } catch {
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : "";
+    if (connectionFailures.some((r) => r.test(reason)))
+      throw new BadRequestException(reason);
     throw new BadRequestException({
       message:
         "Operation failed or did not finish in time. Inspect the task status.",
@@ -387,6 +410,7 @@ export async function claimTask(id: string) {
   return {
     lease,
     connection: await connection(t.serverId, t.organizationId),
+    limits: await sshLimits(t.organizationId),
     operation: t.operation,
     args: unseal(t.encryptedArguments, config.ENCRYPTION_KEY, t.organizationId),
   };
