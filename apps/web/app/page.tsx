@@ -9,12 +9,10 @@ import {
 } from "@tanstack/react-query";
 import { create } from "zustand";
 import {
-  Activity,
   ArrowDownToLine,
   ArrowRight,
   ArrowUpRight,
   Bell,
-  Box,
   Clock,
   Code2,
   Copy,
@@ -113,8 +111,6 @@ const menu = [
   ["Servers", Server],
   ["Terminal", TerminalIcon],
   ["File Manager", Folder],
-  ["Docker", Box],
-  ["Monitoring", Activity],
   ["AI Agents", GitBranch],
   ["MCP Server", Code2],
   ["Automation", Workflow],
@@ -435,8 +431,6 @@ function App() {
     Servers: "Every connection, in one place.",
     Terminal: "A direct line to your infrastructure.",
     "File Manager": "Browse and edit files over verified SFTP.",
-    Docker: "Inspect and manage your remote containers.",
-    Monitoring: "Live diagnostics from your Linux servers.",
     "AI Agents": "Give your agents the access they need.",
     "MCP Server": "One remote endpoint. Centralized access.",
     Automation: "Track queued operations and cancel running work.",
@@ -857,24 +851,6 @@ function App() {
                 <Empty
                   title="No server selected"
                   body="Add a server to browse its permitted files."
-                />
-              )}
-            </>
-          )}
-          {["Docker", "Monitoring"].includes(page) && (
-            <>
-              <div className="toolbar">{selection}</div>
-              {current ? (
-                <Diagnostics
-                  key={current.id + page}
-                  server={current}
-                  docker={page === "Docker"}
-                  run={run}
-                />
-              ) : (
-                <Empty
-                  title="No server selected"
-                  body="Diagnostics will appear after you add and connect a server."
                 />
               )}
             </>
@@ -1553,206 +1529,6 @@ function FileManager({ server, run }: { server: Row; run: Run }) {
         operations remain subject to the remote account’s filesystem
         permissions.
       </p>
-    </div>
-  );
-}
-function Diagnostics({
-  server,
-  docker,
-  run,
-}: {
-  server: Row;
-  docker: boolean;
-  run: Run;
-}) {
-  const [op, setOp] = useState(docker ? "docker_list" : "server_metrics"),
-    [target, setTarget] = useState(""),
-    [output, setOutput] = useState<Row | null>(null),
-    [busy, setBusy] = useState(false),
-    [interval, setIntervalSeconds] = useState(0),
-    [approval, setApproval] = useState("");
-  const choices = docker
-    ? [
-        "docker_list",
-        "docker_stats",
-        "docker_images",
-        "docker_networks",
-        "docker_volumes",
-        "docker_compose_status",
-        "docker_inspect",
-        "docker_logs",
-        "docker_start",
-        "docker_stop",
-        "docker_restart",
-      ]
-    : [
-        "server_metrics",
-        "system_info",
-        "server_uptime",
-        "system_processes",
-        "system_disk_usage",
-        "system_memory_usage",
-        "system_cpu_usage",
-        "system_logs",
-        "service_status",
-        "service_start",
-        "service_stop",
-        "service_restart",
-        "ssh_execute",
-      ];
-  const mutating = /_(start|stop|restart|execute)$/.test(op);
-  async function collect() {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const args: Row = { serverId: server.id };
-      if (op.startsWith("service_")) args.service = target;
-      if (
-        [
-          "docker_inspect",
-          "docker_logs",
-          "docker_start",
-          "docker_stop",
-          "docker_restart",
-        ].includes(op)
-      )
-        args.container = target;
-      if (op === "ssh_execute") args.command = target;
-      if (approval) args.approvalId = approval;
-      setOutput(await run(op, args));
-    } catch {
-    } finally {
-      setBusy(false);
-    }
-  }
-  useEffect(() => {
-    if (!interval || mutating) return;
-    const timer = window.setInterval(() => void collect(), interval * 1000);
-    return () => clearInterval(timer);
-  }, [interval, op, target, server.id]);
-  return (
-    <div className="stack">
-      <div className="toolbar">
-        <select value={op} onChange={(e) => setOp(e.target.value)}>
-          {choices.map((o) => (
-            <option key={o} value={o}>
-              {o.replaceAll("_", " ")}
-            </option>
-          ))}
-        </select>
-        <select
-          aria-label="Refresh interval"
-          value={interval}
-          onChange={(e) => setIntervalSeconds(Number(e.target.value))}
-        >
-          <option value={0}>Manual refresh</option>
-          <option value={30}>Every 30 seconds</option>
-          <option value={60}>Every minute</option>
-        </select>
-        <Button disabled={busy} onClick={() => void collect()}>
-          <RefreshCw size={14} />
-          {busy ? "Collecting…" : "Run operation"}
-        </Button>
-      </div>
-      {(op.startsWith("service_") ||
-        [
-          "docker_inspect",
-          "docker_logs",
-          "docker_start",
-          "docker_stop",
-          "docker_restart",
-          "ssh_execute",
-        ].includes(op)) && (
-        <Field
-          label={
-            op === "ssh_execute"
-              ? "Exact shell command"
-              : "Service or container name"
-          }
-        >
-          <input value={target} onChange={(e) => setTarget(e.target.value)} />
-        </Field>
-      )}
-      {mutating && (
-        <>
-          <div className="callout">
-            This operation requires a single-use human approval. Arbitrary shell
-            commands can perform any action permitted to the SSH account.
-          </div>
-          <Field label="Approval ID (for retry)">
-            <input
-              value={approval}
-              onChange={(e) => setApproval(e.target.value)}
-            />
-          </Field>
-        </>
-      )}
-      <section className="panel">
-        <div className="panel-head">
-          <h2>{docker ? "Docker inspection" : "Server diagnostics"}</h2>
-          <span className="badge">{server.name}</span>
-        </div>
-        <div className="panel-body">
-          {output ? (
-            <>
-              {output.metrics && (
-                <div className="stats">
-                  {[
-                    ["CPU", output.metrics.cpuPercent],
-                    ["Memory", output.metrics.memory?.usedPercent],
-                    [
-                      "Root disk",
-                      output.metrics.disks?.find((d: Row) => d.mount === "/")
-                        ?.usedPercent,
-                    ],
-                  ].map(([name, value]) => (
-                    <div className="stat" key={name}>
-                      <div className="stat-label">{name}</div>
-                      <div
-                        className="stat-value"
-                        style={{
-                          color:
-                            typeof value === "number" && value >= 85
-                              ? "var(--danger)"
-                              : undefined,
-                        }}
-                      >
-                        {value === null || value === undefined
-                          ? "Unavailable"
-                          : value + "%"}
-                      </div>
-                    </div>
-                  ))}
-                  <div className="stat">
-                    <div className="stat-label">Uptime</div>
-                    <div className="stat-value">
-                      {output.metrics.uptimeSeconds === null
-                        ? "—"
-                        : Math.floor(output.metrics.uptimeSeconds / 3600) + "h"}
-                    </div>
-                  </div>
-                </div>
-              )}
-              <pre className="output">
-                {output.stdout !== undefined
-                  ? output.stdout +
-                    (output.stderr ? "\nSTDERR:\n" + output.stderr : "")
-                  : JSON.stringify(output, null, 2)}
-              </pre>
-              <p className="footnote">
-                Exit code: {output.exitCode ?? "—"} · Duration:{" "}
-                {output.durationMs ?? "—"} ms{" "}
-                {output.truncated ? "· Output truncated" : ""}
-              </p>
-            </>
-          ) : (
-            <Empty
-              title="Ready to collect real data"
-              body="Run an inspection to retrieve current information over SSH. Nothing is collected until you request it."
-            />
-          )}
-        </div>
-      </section>
     </div>
   );
 }

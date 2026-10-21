@@ -49,7 +49,6 @@ describe("policy boundaries", () => {
       "ssh_execute",
       "ssh_write_file",
       "ssh_delete_file",
-      "docker_restart",
       "service_stop",
     ])
       expect(needsApproval(op)).toBe(true);

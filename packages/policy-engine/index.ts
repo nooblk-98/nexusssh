@@ -9,8 +9,6 @@ export type Principal = {
 export const readOperations = [
   "server_get_info",
   "server_test_connection",
-  "server_metrics",
-  "server_uptime",
   "ssh_connect",
   "ssh_disconnect",
   "ssh_session_status",
@@ -18,20 +16,8 @@ export const readOperations = [
   "ssh_read_file",
   "ssh_download_file",
   "system_info",
-  "system_processes",
-  "system_disk_usage",
-  "system_memory_usage",
-  "system_cpu_usage",
   "system_logs",
   "service_status",
-  "docker_list",
-  "docker_inspect",
-  "docker_logs",
-  "docker_stats",
-  "docker_compose_status",
-  "docker_images",
-  "docker_networks",
-  "docker_volumes",
 ];
 export const writeOperations = [
   "ssh_execute",
@@ -43,9 +29,6 @@ export const writeOperations = [
   "service_start",
   "service_stop",
   "service_restart",
-  "docker_start",
-  "docker_stop",
-  "docker_restart",
 ];
 export const allOperations = [
   ...readOperations,

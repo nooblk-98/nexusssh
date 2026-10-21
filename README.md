@@ -14,7 +14,7 @@ A self-hosted infrastructure console with real browser SSH, SFTP, and a remote M
 - SFTP browsing, bounded uploads/downloads, Monaco editing, atomic saves, mkdir, rename/move and deletion.
 - Remote MCP SDK v2 using explicit 2026-07-28 handling, with tested legacy stateless compatibility.
 - Agents with explicit server/tool grants, expiring hashed machine tokens, revocation, and exact single-use approvals.
-- Linux, service and Docker diagnostics through SSH; background execution and cancellation through BullMQ.
+- System information, journal logs and systemd service control through SSH; background execution and cancellation through BullMQ. Docker management and metrics monitoring are out of scope; use a dedicated monitoring tool.
 - SQLite migrations, WAL, integrity checks, online backup and offline restore.
 - Two Compose services: `nexusssh` (web, API, MCP and worker behind one built-in gateway port) and Redis.
 

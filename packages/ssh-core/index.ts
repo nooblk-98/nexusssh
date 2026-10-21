@@ -3,7 +3,6 @@ import { lookup } from "node:dns/promises";
 import { createHash, randomUUID } from "node:crypto";
 import posix from "node:path/posix";
 import ipaddr from "ipaddr.js";
-import { parseMetrics } from "./metrics.js";
 export type Connection = {
   host: string;
   port: number;
@@ -225,21 +224,7 @@ export async function safePath(
 const quote = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
 export function diagnostic(op: string, a: any): string | undefined {
   const fixed: Record<string, string> = {
-    server_uptime: "uptime",
-    server_metrics:
-      "printf -- '--- uptime ---\\n'; cat /proc/uptime; printf '\\n--- load ---\\n'; cat /proc/loadavg; printf '\\n--- memory ---\\n'; free -b; printf '\\n--- disk ---\\n'; df -P -B1; printf '\\n--- cpu ---\\n'; head -1 /proc/stat; sleep 1; head -1 /proc/stat",
     system_info: "uname -a; cat /etc/os-release",
-    system_processes: "ps aux --sort=-%mem | head -51",
-    system_disk_usage: "df -P -B1",
-    system_memory_usage: "free -b",
-    system_cpu_usage:
-      "head -1 /proc/stat; sleep 1; head -1 /proc/stat; cat /proc/loadavg",
-    docker_list: "docker ps -a --format '{{json .}}'",
-    docker_stats: "docker stats --no-stream --format '{{json .}}'",
-    docker_compose_status: "docker compose ls --format json",
-    docker_images: "docker image ls --format json",
-    docker_networks: "docker network ls --format json",
-    docker_volumes: "docker volume ls --format json",
   };
   if (fixed[op]) return fixed[op];
   if (op === "ssh_execute") return a.command;
@@ -247,16 +232,6 @@ export function diagnostic(op: string, a: any): string | undefined {
     return `journalctl --no-pager -n ${a.lines}${a.service ? " -u " + quote(a.service) : ""}`;
   if (op.startsWith("service_"))
     return `systemctl ${op.slice(8)} -- ${quote(a.service)}`;
-  if (
-    [
-      "docker_inspect",
-      "docker_logs",
-      "docker_start",
-      "docker_stop",
-      "docker_restart",
-    ].includes(op)
-  )
-    return `docker ${op.slice(7)} ${op === "docker_logs" ? "--tail 100 " : ""}-- ${quote(a.container)}`;
 }
 export async function operate(
   c: Connection,
@@ -286,9 +261,7 @@ export async function operate(
         l.outputLimit,
         signal,
       );
-      return op === "server_metrics"
-        ? { ...result, metrics: parseMetrics(result.stdout) }
-        : result;
+      return result;
     }
     const s = await sftp(client);
     const writing = [

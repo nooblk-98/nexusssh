@@ -308,7 +308,7 @@ describe.runIf(enabled)(
         ).r.status,
       ).toBe(404);
       expect(
-        (await request("operations/docker_list", { serverId }, token)).r.status,
+        (await request("operations/system_logs", { serverId }, token)).r.status,
       ).toBe(403);
     });
     it("enforces organization isolation and expired machine credentials", async () => {
@@ -330,14 +330,6 @@ describe.runIf(enabled)(
       } finally {
         cookie = original;
       }
-    });
-    it("collects numerical Linux metrics and reports missing Docker truthfully", async () => {
-      const metrics = await request("operations/server_metrics", { serverId });
-      expect(metrics.data.metrics.cpuPercent).toBeGreaterThanOrEqual(0);
-      expect(metrics.data.metrics.memory.totalBytes).toBeGreaterThan(0);
-      const docker = await request("operations/docker_list", { serverId });
-      expect(docker.data.exitCode).not.toBe(0);
-      expect(docker.data.stderr).toMatch(/not found/);
     });
     it("creates single-use invitations and explicit team membership", async () => {
       const invite = await request("invitations", {

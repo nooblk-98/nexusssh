@@ -13,7 +13,7 @@ Last verification: 21 October 2026. This file distinguishes a functioning implem
 - Playwright/Edge: **1 browser workflow passed** against both native development and the production images behind development Nginx, covering first-owner setup/login, empty dashboard, server dialog, agent/MCP/settings screens, desktop and 390px mobile layout. Desktop/mobile screenshots inspected. The test account remained usable after API/container recreation, verifying SQLite volume persistence and the incremental migration.
 - npm dependency audit: **0 known vulnerabilities** at the time checked. This is not a security certification.
 
-Integration coverage includes real password and private-key SSH, unknown/changed host-key rejection, PTY input/output and cleanup, atomic SFTP writes/downloads, traversal and symlink rejection, exact approval races/replay denial, per-agent grants, organization isolation, expired/revoked credentials, numeric Linux metrics, truthful missing-Docker errors, asynchronous cancellation, single-use invitations, team creation, and consistent WAL backup/restore. Official MCP v2 clients exercised discovery, real SSH commands, files and server listing over actual HTTP sockets in both protocol eras.
+Integration coverage includes real password and private-key SSH, unknown/changed host-key rejection, PTY input/output and cleanup, atomic SFTP writes/downloads, traversal and symlink rejection, exact approval races/replay denial, per-agent grants, organization isolation, expired/revoked credentials, asynchronous cancellation, single-use invitations, team creation, and consistent WAL backup/restore. Official MCP v2 clients exercised discovery, real SSH commands, files and server listing over actual HTTP sockets in both protocol eras.
 
 ## Phase status
 
@@ -25,7 +25,7 @@ Integration coverage includes real password and private-key SSH, unknown/changed
 | SFTP | Browse/read/write, upload/download, mkdir, rename/move, delete approval, permission display, local Monaco assets, atomic replacement | Streaming progress percentages, recursive search, remote copy, file preview types, optional configuration backups |
 | MCP | All requested tool names, official v2 modern/legacy handler, bearer machine credentials, strict schemas, approvals, tasks | Product-specific external-app certification, OAuth server/consent integration for clients requiring it |
 | Security/approvals | Shared policy, explicit grants, exact single-use approval, revocation, encryption, MFA replay prevention, audit metadata | Independent security review, comprehensive denial-event auditing, MFA recovery, secret-manager adapters, stronger isolated egress/mTLS |
-| DevOps | Linux diagnostics/metrics, process/log/service tools, Docker/Compose inspection and container mutations | Successful Docker-daemon fixture coverage, systemd-capable fixture, alert delivery, historical charts |
+| DevOps | System information, journal logs and systemd service tools (Docker management and metrics monitoring intentionally removed) | systemd-capable fixture |
 | Deployment | Non-root app images, single application container with a built-in HTTP gateway for an external TLS reverse proxy, named SQLite volume, migrations, backup/restore docs and tests, CI configuration | Real domain/certificate deployment, external HTTPS client certification, restore disaster drill on target host |
 | Premium | Responsive original dashboard, light mode, teams/invitations APIs, member access UI | Embedded LLM assistant, OIDC/SSO, scheduled runbooks, RDP/VNC, sharing, PWA, richer notifications and team/agent detail editors |
 
@@ -37,5 +37,5 @@ Integration coverage includes real password and private-key SSH, unknown/changed
 - A process can outlive SSH cancellation; no automatic retry of side effects is attempted.
 - Agent token and permission edits currently use revoke-and-recreate through the UI. New grants require explicit selection.
 - Servers are archived to preserve historical foreign-key references, rather than destroying audit history.
-- No fake server statistics, command results, Docker containers or MCP responses are used.
+- No fake command results or MCP responses are used.
 - Test-only passwords in `tests/` belong to disposable fixtures. Application secrets, private keys, database files, local test accounts and build outputs are excluded from Git.
