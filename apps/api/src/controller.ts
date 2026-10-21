@@ -64,10 +64,7 @@ const serverSchema = z
       .max(253)
       .regex(/^[a-zA-Z0-9.:-]+$/),
     port: z.number().int().min(1).max(65535).default(22),
-    username: z
-      .string()
-      .regex(/^[a-z_][a-z0-9_-]{0,31}$/)
-      .refine((v) => v !== "root", "Use a restricted non-root SSH account"),
+    username: z.string().regex(/^[a-z_][a-z0-9_-]{0,31}$/),
     identityId: z.uuid(),
     fingerprint: z
       .string()
