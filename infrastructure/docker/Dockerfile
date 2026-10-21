@@ -12,6 +12,8 @@ RUN npm run assets && npm run build -w @nexus/web
 USER node
 EXPOSE 3000
 CMD ["npm","run","start","-w","@nexus/web"]
+FROM nginx:1.28-alpine AS proxy
+COPY infrastructure/nginx/nginx.conf /etc/nginx/conf.d/default.conf
 FROM node:24-bookworm-slim AS backend
 RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates python3 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
