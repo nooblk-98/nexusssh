@@ -2,11 +2,11 @@
 
 ## Linux VPS, Lightsail and EC2
 
-Use a Linux host with Docker Engine and Compose 2.24.4+. Ubuntu/Debian are straightforward defaults. Ordinary target SSH connections do not need AWS API credentials. Provision the host, domain and security-group/firewall rules yourself: allow HTTPS, optional HTTP redirect, and your administrative maintenance channel. Allow SSH egress only to approved target networks.
+Use a Linux host with Docker Engine and Compose 2.24.4+. Ubuntu/Debian are straightforward defaults. Ordinary target SSH connections do not need AWS API credentials. Provision the host, domain, reverse proxy and security-group/firewall rules yourself: allow HTTPS to your reverse proxy, and your administrative maintenance channel. Allow SSH egress only to approved target networks.
 
 1. Copy the repository and run `npm ci && npm run setup` once with Node 24, or generate equally strong random secrets using your secret manager.
-2. Set `APP_URL=https://ssh.example.com`, `AUTH_ISSUER` and `MCP_AUTH_ISSUER` to that origin, `MCP_PUBLIC_URL=https://ssh.example.com/mcp`, and the destination `SSH_ALLOWED_CIDRS` in `.env`.
-3. Place a trusted certificate chain at `certs/fullchain.pem` and its private key at `certs/privkey.pem`. Restrict key access. Automate renewal and reload Nginx after renewal. No certificate verification is disabled.
+2. Set `APP_URL=https://ssh.example.com`, `AUTH_ISSUER` and `MCP_AUTH_ISSUER` to that origin, `MCP_PUBLIC_URL=https://ssh.example.com/mcp`, and the destination `SSH_ALLOWED_CIDRS` in `.env`. Compose reads these for variable interpolation; no `env_file` is required, so on Portainer or another stack manager you can set the same variables as stack environment variables instead of creating `.env`. Compose refuses to start if a required variable is missing.
+3. The bundled Nginx serves plain HTTP on `HTTP_PORT` (default `8080`). Put your own TLS-terminating reverse proxy (Caddy, Traefik, Nginx Proxy Manager, Cloudflare Tunnel, a load balancer) in front of it and forward your HTTPS domain to that port, including WebSocket upgrades for `/ws/`. Do not expose the HTTP port publicly without TLS in front; browser session cookies are `Secure` in production.
 4. Run `docker compose up -d --build`. The API applies versioned migrations without dropping existing records. The named volume mounts at `/app/data`, only in the API service.
 5. Open your HTTPS origin, create the first owner with `SETUP_TOKEN`, and verify a restricted SSH identity against a disposable target before onboarding production servers.
 

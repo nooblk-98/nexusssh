@@ -53,7 +53,7 @@ The native SQLite URL is resolved relative to `packages/database/prisma`. `npm r
 
 ## Production installation
 
-Follow [deployment and upgrades](docs/DEPLOYMENT.md). Configure a real domain, trusted TLS certificate, network allowlist, secrets and restricted target accounts before using the production Compose file. Production startup refuses an HTTP `APP_URL`.
+Follow [deployment and upgrades](docs/DEPLOYMENT.md). Configure a real domain behind your own TLS reverse proxy, network allowlist, secrets and restricted target accounts before using the production Compose file. Production startup refuses an HTTP `APP_URL`.
 
 The application uses no PostgreSQL, MySQL, MongoDB or external database server. Redis contains bounded transient jobs/results, not application records.
 
