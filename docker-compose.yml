@@ -2,23 +2,19 @@ name: nexusssh
 # Works with no configuration. Secrets are generated on first start and kept in
 # the nexusssh_secrets volume; back it up, losing it makes stored SSH identities
 # unrecoverable.
-x-app-env: &app-env
-  APP_URL: ${APP_URL:-http://localhost:${HTTP_PORT:-8080}}
-  SETUP_TOKEN: ${SETUP_TOKEN:-}
-  ENCRYPTION_KEY_PROVIDER: ${ENCRYPTION_KEY_PROVIDER:-environment}
-  SSH_ALLOWED_CIDRS: ${SSH_ALLOWED_CIDRS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
-  LOG_LEVEL: ${LOG_LEVEL:-info}
 services:
-  api:
-    image: nexusssh-api:latest
-    build: {context: ., dockerfile: infrastructure/docker/Dockerfile, target: backend}
+  nexusssh:
+    image: nexusssh:latest
+    build: {context: ., dockerfile: infrastructure/docker/Dockerfile}
     pull_policy: build
+    ports: ['${HTTP_PORT:-8080}:8080']
     environment:
-      <<: *app-env
-      NODE_ENV: production
-      DATABASE_URL: file:/app/data/nexusssh.db
+      APP_URL: ${APP_URL:-http://localhost:${HTTP_PORT:-8080}}
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
+      ENCRYPTION_KEY_PROVIDER: ${ENCRYPTION_KEY_PROVIDER:-environment}
+      SSH_ALLOWED_CIDRS: ${SSH_ALLOWED_CIDRS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       REDIS_URL: redis://redis:6379
-      INTERNAL_API_URL: http://api:3001
     volumes: [nexusssh_data:/app/data, nexusssh_secrets:/app/secrets]
     restart: unless-stopped
     init: true
@@ -27,65 +23,11 @@ services:
     depends_on:
       redis: {condition: service_healthy}
     healthcheck:
-      test: [CMD, node, -e, "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8080/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
       timeout: 5s
+      start_period: 60s
       retries: 10
-  web:
-    image: nexusssh-web:latest
-    build: {context: ., dockerfile: infrastructure/docker/Dockerfile, target: web}
-    pull_policy: build
-    environment: {API_URL: 'http://api:3001', NEXT_TELEMETRY_DISABLED: '1'}
-    restart: unless-stopped
-    init: true
-    security_opt: [no-new-privileges:true]
-    cap_drop: [ALL]
-    depends_on:
-      api: {condition: service_healthy}
-    healthcheck:
-      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 20s
-      timeout: 5s
-      retries: 10
-  mcp:
-    image: nexusssh-mcp:latest
-    build: {context: ., dockerfile: infrastructure/docker/Dockerfile, target: backend}
-    pull_policy: build
-    command: [node, dist/apps/mcp/src/main.js]
-    environment:
-      <<: *app-env
-      NODE_ENV: production
-      INTERNAL_API_URL: http://api:3001
-      REDIS_URL: redis://redis:6379
-    volumes: [nexusssh_secrets:/app/secrets]
-    restart: unless-stopped
-    init: true
-    security_opt: [no-new-privileges:true]
-    cap_drop: [ALL]
-    depends_on:
-      api: {condition: service_healthy}
-    healthcheck:
-      test: [CMD, node, -e, "fetch('http://127.0.0.1:3002/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 20s
-      timeout: 5s
-      retries: 5
-  ssh-worker:
-    image: nexusssh-ssh-worker:latest
-    build: {context: ., dockerfile: infrastructure/docker/Dockerfile, target: backend}
-    pull_policy: build
-    command: [node, dist/workers/ssh-worker/src/main.js]
-    environment:
-      <<: *app-env
-      NODE_ENV: production
-      INTERNAL_API_URL: http://api:3001
-      REDIS_URL: redis://redis:6379
-    volumes: [nexusssh_secrets:/app/secrets]
-    restart: unless-stopped
-    init: true
-    security_opt: [no-new-privileges:true]
-    cap_drop: [ALL]
-    depends_on:
-      api: {condition: service_healthy}
   redis:
     image: redis:7.4-alpine
     command: [redis-server, --save, '', --appendonly, 'no', --maxmemory, 128mb, --maxmemory-policy, noeviction]
@@ -96,15 +38,6 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
-  nginx:
-    image: nexusssh-nginx:latest
-    build: {context: ., dockerfile: infrastructure/docker/Dockerfile, target: proxy}
-    pull_policy: build
-    ports: ['${HTTP_PORT:-8080}:80']
-    restart: unless-stopped
-    depends_on:
-      web: {condition: service_healthy}
-      mcp: {condition: service_healthy}
 volumes:
   nexusssh_data:
   nexusssh_secrets:

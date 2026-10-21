@@ -16,7 +16,7 @@ A self-hosted infrastructure console with real browser SSH, SFTP, and a remote M
 - Agents with explicit server/tool grants, expiring hashed machine tokens, revocation, and exact single-use approvals.
 - Linux, service and Docker diagnostics through SSH; background execution and cancellation through BullMQ.
 - SQLite migrations, WAL, integrity checks, online backup and offline restore.
-- Compose services for web, API, MCP, worker, Redis and Nginx. Only the API mounts SQLite.
+- Two Compose services: `nexusssh` (web, API, MCP and worker behind one built-in gateway port) and Redis.
 
 ## Quick start: local Compose
 
@@ -68,7 +68,7 @@ packages/ssh-core/     Verified ssh2 connections, commands and SFTP
 packages/policy-engine/ Shared grants and approval classification
 packages/shared/       Strict schemas, encryption and configuration
 workers/ssh-worker/    BullMQ execution; credentials fetched via authenticated API leases
-infrastructure/       Container builds, Nginx, setup, backup/restore
+infrastructure/       Container build, entrypoint/gateway, setup, backup/restore
 tests/                 Unit, real Linux integration and browser tests
 docs/                  Architecture, operations, security and verification
 ```

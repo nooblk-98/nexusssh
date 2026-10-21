@@ -26,7 +26,7 @@ Integration coverage includes real password and private-key SSH, unknown/changed
 | MCP | All requested tool names, official v2 modern/legacy handler, bearer machine credentials, strict schemas, approvals, tasks | Product-specific external-app certification, OAuth server/consent integration for clients requiring it |
 | Security/approvals | Shared policy, explicit grants, exact single-use approval, revocation, encryption, MFA replay prevention, audit metadata | Independent security review, comprehensive denial-event auditing, MFA recovery, secret-manager adapters, stronger isolated egress/mTLS |
 | DevOps | Linux diagnostics/metrics, process/log/service tools, Docker/Compose inspection and container mutations | Successful Docker-daemon fixture coverage, systemd-capable fixture, alert delivery, historical charts |
-| Deployment | Non-root app images, Nginx HTTP entrypoint for an external TLS reverse proxy, named SQLite volume, migrations, backup/restore docs and tests, CI configuration | Real domain/certificate deployment, external HTTPS client certification, restore disaster drill on target host |
+| Deployment | Non-root app images, single application container with a built-in HTTP gateway for an external TLS reverse proxy, named SQLite volume, migrations, backup/restore docs and tests, CI configuration | Real domain/certificate deployment, external HTTPS client certification, restore disaster drill on target host |
 | Premium | Responsive original dashboard, light mode, teams/invitations APIs, member access UI | Embedded LLM assistant, OIDC/SSO, scheduled runbooks, RDP/VNC, sharing, PWA, richer notifications and team/agent detail editors |
 
 ## Deliberate boundaries

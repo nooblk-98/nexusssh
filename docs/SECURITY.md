@@ -24,7 +24,7 @@ Cancellation and timeouts close the SSH channel/connection. Detached processes a
 
 ## Deployment
 
-Only Nginx publishes ports in the production Compose configuration. Do not publish Redis, API, MCP or worker ports separately. Keep the Compose network trusted, use host/firewall egress rules in addition to the application allowlist, and limit access to the Docker host. Internal services currently use a shared internal credential on the private network, not mTLS.
+Only the `nexusssh` gateway port is published in the production Compose configuration. The API, web, MCP and worker processes listen on container-internal ports; do not publish Redis. Keep the Compose network trusted, use host/firewall egress rules in addition to the application allowlist, and limit access to the Docker host. Internal services currently use a shared internal credential on the private network, not mTLS.
 
 TLS termination (your reverse proxy) and encryption keys are deployment responsibilities. Production requires HTTPS. The development override binds only loopback HTTP. Never expose the development override publicly.
 

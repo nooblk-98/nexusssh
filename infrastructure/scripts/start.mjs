@@ -1,0 +1,171 @@
+// Single-container entrypoint: applies migrations, runs the API, web, MCP and
+// SSH worker processes, and serves them on one port. Any process exiting stops
+// the container so the restart policy brings everything back together.
+import { spawn, execFileSync } from "node:child_process";
+import { closeSync, openSync } from "node:fs";
+import http from "node:http";
+import net from "node:net";
+
+const PORT = Number(process.env.PORT || 8080);
+const API = 3001;
+const MCP = 3002;
+const WEB = 3000;
+const BODY_LIMIT = 2 * 1024 * 1024;
+
+const database = (process.env.DATABASE_URL || "").replace(/^file:/, "");
+if (database) closeSync(openSync(database, "a"));
+execFileSync(
+  "npx",
+  [
+    "prisma",
+    "migrate",
+    "deploy",
+    "--schema",
+    "packages/database/prisma/schema.prisma",
+  ],
+  { stdio: "inherit" },
+);
+
+const children = new Set();
+let stopping = false;
+let exitCode = 0;
+function run(name, command, args, env = {}) {
+  if (stopping) return;
+  const child = spawn(command, args, {
+    stdio: "inherit",
+    env: { ...process.env, ...env },
+  });
+  children.add(child);
+  child.on("exit", (code, signal) => {
+    children.delete(child);
+    if (stopping) {
+      if (!children.size) process.exit(exitCode);
+      return;
+    }
+    console.error(`${name} exited (${signal || code}); stopping container`);
+    stop(1);
+  });
+}
+function stop(code) {
+  if (stopping) return;
+  stopping = true;
+  exitCode = code;
+  for (const child of children) child.kill("SIGTERM");
+  setTimeout(() => process.exit(code), 10000).unref();
+  if (!children.size) process.exit(code);
+}
+process.on("SIGTERM", () => stop(0));
+process.on("SIGINT", () => stop(0));
+
+async function waitFor(url) {
+  for (;;) {
+    if (stopping) return;
+    try {
+      if ((await fetch(url)).ok) return;
+    } catch {}
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
+run("api", "node", ["dist/apps/api/src/main.js"], { API_PORT: String(API) });
+await waitFor(`http://127.0.0.1:${API}/api/health`);
+run("mcp", "node", ["dist/apps/mcp/src/main.js"], { MCP_PORT: String(MCP) });
+run("ssh-worker", "node", ["dist/workers/ssh-worker/src/main.js"]);
+run("web", "node_modules/.bin/next", [
+  "start",
+  "apps/web",
+  "-H",
+  "127.0.0.1",
+  "-p",
+  String(WEB),
+]);
+
+// Per-client token bucket for /mcp: 10 requests/second, burst 30.
+const buckets = new Map();
+function allowMcp(ip) {
+  const now = Date.now();
+  const b = buckets.get(ip) || { tokens: 30, at: now };
+  b.tokens = Math.min(30, b.tokens + ((now - b.at) / 1000) * 10);
+  b.at = now;
+  buckets.set(ip, b);
+  if (b.tokens < 1) return false;
+  b.tokens -= 1;
+  return true;
+}
+setInterval(() => {
+  const cutoff = Date.now() - 60000;
+  for (const [ip, b] of buckets) if (b.at < cutoff) buckets.delete(ip);
+}, 60000).unref();
+
+function route(url = "/") {
+  const path = url.split("?")[0];
+  if (path.startsWith("/api/internal/")) return null;
+  if (path.startsWith("/api/") || path.startsWith("/ws/")) return API;
+  if (path === "/mcp" || path.startsWith("/mcp/")) return MCP;
+  return WEB;
+}
+
+const server = http.createServer((req, res) => {
+  const port = route(req.url);
+  if (!port) return void res.writeHead(404).end();
+  if (Number(req.headers["content-length"] || 0) > BODY_LIMIT)
+    return void res.writeHead(413).end();
+  if (port === MCP && !allowMcp(req.socket.remoteAddress))
+    return void res.writeHead(503).end();
+  const upstream = http.request(
+    {
+      host: "127.0.0.1",
+      port,
+      method: req.method,
+      path: req.url,
+      headers: {
+        ...req.headers,
+        "x-forwarded-proto": req.headers["x-forwarded-proto"] || "http",
+      },
+      timeout: port === WEB ? 0 : 110000,
+    },
+    (up) => {
+      res.writeHead(up.statusCode || 502, up.headers);
+      up.pipe(res);
+    },
+  );
+  upstream.on("timeout", () => upstream.destroy());
+  upstream.on("error", () => {
+    if (!res.headersSent) res.writeHead(502);
+    res.end();
+  });
+  let size = 0;
+  req.on("data", (chunk) => {
+    size += chunk.length;
+    if (size > BODY_LIMIT) {
+      upstream.destroy();
+      if (!res.headersSent) res.writeHead(413);
+      res.end();
+      req.destroy();
+    }
+  });
+  req.pipe(upstream);
+});
+
+server.on("upgrade", (req, socket, head) => {
+  if (route(req.url) !== API || !req.url.startsWith("/ws/"))
+    return void socket.destroy();
+  const upstream = net.connect(API, "127.0.0.1", () => {
+    const headers = Object.entries(req.headers)
+      .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`)
+      .join("\r\n");
+    upstream.write(`${req.method} ${req.url} HTTP/1.1\r\n${headers}\r\n\r\n`);
+    if (head.length) upstream.write(head);
+    upstream.pipe(socket);
+    socket.pipe(upstream);
+  });
+  upstream.setTimeout(360000, () => upstream.destroy());
+  upstream.on("error", () => socket.destroy());
+  socket.on("error", () => upstream.destroy());
+  socket.on("close", () => upstream.destroy());
+  upstream.on("close", () => socket.destroy());
+});
+
+server.listen(PORT, "0.0.0.0", () =>
+  console.log(`NexusSSH listening on port ${PORT}`),
+);
