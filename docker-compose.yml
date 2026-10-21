@@ -12,6 +12,7 @@ services:
   api:
     image: nexusssh-api:latest
     build: {context: ., dockerfile: infrastructure/docker/Dockerfile, target: backend}
+    pull_policy: build
     environment:
       <<: *app-env
       NODE_ENV: production
@@ -33,6 +34,7 @@ services:
   web:
     image: nexusssh-web:latest
     build: {context: ., dockerfile: infrastructure/docker/Dockerfile, target: web}
+    pull_policy: build
     environment: {API_URL: 'http://api:3001', NEXT_TELEMETRY_DISABLED: '1'}
     restart: unless-stopped
     init: true
@@ -48,6 +50,7 @@ services:
   mcp:
     image: nexusssh-mcp:latest
     build: {context: ., dockerfile: infrastructure/docker/Dockerfile, target: backend}
+    pull_policy: build
     command: [node, dist/apps/mcp/src/main.js]
     environment:
       <<: *app-env
@@ -69,6 +72,7 @@ services:
   ssh-worker:
     image: nexusssh-ssh-worker:latest
     build: {context: ., dockerfile: infrastructure/docker/Dockerfile, target: backend}
+    pull_policy: build
     command: [node, dist/workers/ssh-worker/src/main.js]
     environment:
       <<: *app-env
