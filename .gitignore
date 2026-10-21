@@ -1,0 +1,16 @@
+node_modules/
+.env
+*.db*
+.next/
+dist/
+coverage/
+test-results/
+playwright-report/
+*.log
+*.tsbuildinfo
+.env.*
+!.env.example
+certs/
+data/
+
+apps/web/public/monaco/

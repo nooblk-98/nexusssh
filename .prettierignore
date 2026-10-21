@@ -1,0 +1,8 @@
+node_modules
+dist
+.next
+**/.next
+apps/web/public/monaco
+data
+package-lock.json
+test-results

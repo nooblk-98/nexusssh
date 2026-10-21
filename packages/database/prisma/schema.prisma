@@ -1,0 +1,360 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "sqlite"
+  url = env("DATABASE_URL")
+}
+
+model Organization {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  name String
+  users User[]
+  teams Team[]
+  roles Role[]
+  servers Server[]
+  groups ServerGroup[]
+  tags ServerTag[]
+  identities SSHIdentity[]
+  agents Agent[]
+  audit AuditEvent[]
+  settings SystemSetting[]
+  savedCommands SavedCommand[]
+  notifications Notification[]
+}
+
+model User {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organizationId String
+  organization Organization @relation(fields: [organizationId], references: [id])
+  email String @unique
+  name String
+  passwordHash String
+  role String @default("viewer")
+  disabled Boolean @default(false)
+  totpSecret String?
+  totpLastStep Int @default(-1)
+  sessions WebSession[]
+  teams TeamMember[]
+  permissions ServerPermission[]
+  agents Agent[]
+  @@index([organizationId])
+}
+
+model WebSession {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String @unique
+  expiresAt DateTime
+}
+
+model Team {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organizationId String
+  organization Organization @relation(fields: [organizationId], references: [id])
+  name String
+  members TeamMember[]
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+model TeamMember {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  teamId String
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([teamId, userId])
+}
+
+model Role {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organizationId String
+  organization Organization @relation(fields: [organizationId], references: [id])
+  name String
+  permissions String
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+model ServerGroup {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organizationId String
+  organization Organization @relation(fields: [organizationId], references: [id])
+  name String
+  servers Server[]
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+model ServerTag {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organizationId String
+  organization Organization @relation(fields: [organizationId], references: [id])
+  name String
+  servers Server[]
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+model SSHIdentity {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organizationId String
+  organization Organization @relation(fields: [organizationId], references: [id])
+  name String
+  kind String
+  encryptedSecret String
+  servers Server[]
+  @@index([organizationId])
+}
+
+model Server {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organizationId String
+  organization Organization @relation(fields: [organizationId], references: [id])
+  name String
+  host String
+  port Int @default(22)
+  username String
+  identityId String
+  identity SSHIdentity @relation(fields: [identityId], references: [id])
+  fingerprint String?
+  environment String @default("development")
+  description String @default("")
+  groupId String?
+  group ServerGroup? @relation(fields: [groupId], references: [id])
+  tags ServerTag[]
+  favorite Boolean @default(false)
+  archived Boolean @default(false)
+  fileRoot String @default("/home")
+  status String @default("unknown")
+  lastCheckedAt DateTime?
+  bastionId String?
+  bastion Server? @relation("Bastion", fields: [bastionId], references: [id])
+  targets Server[] @relation("Bastion")
+  permissions ServerPermission[]
+  agentPermissions AgentPermission[]
+  sessions SSHSession[]
+  history SSHConnectionHistory[]
+  executions CommandExecution[]
+  approvals ApprovalRequest[]
+  transfers FileTransfer[]
+  tasks BackgroundTask[]
+  @@index([organizationId])
+}
+
+model ServerPermission {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  serverId String
+  server Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  operations String
+  @@unique([serverId, userId])
+}
+
+model Agent {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organizationId String
+  organization Organization @relation(fields: [organizationId], references: [id])
+  ownerId String
+  owner User @relation(fields: [ownerId], references: [id])
+  name String
+  level String @default("viewer")
+  revoked Boolean @default(false)
+  lastActivityAt DateTime?
+  permissions AgentPermission[]
+  tokens AgentToken[]
+  @@index([organizationId])
+}
+
+model AgentPermission {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  agentId String
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  serverId String
+  server Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  operations String
+  @@unique([agentId, serverId])
+}
+
+model AgentToken {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  agentId String
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  tokenHash String @unique
+  issuer String
+  audience String
+  scopes String
+  expiresAt DateTime
+  revoked Boolean @default(false)
+}
+
+model SSHSession {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  serverId String
+  server Server @relation(fields: [serverId], references: [id])
+  principalId String
+  organizationId String
+  status String
+  endedAt DateTime?
+  @@index([organizationId])
+}
+
+model SSHConnectionHistory {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  serverId String
+  server Server @relation(fields: [serverId], references: [id])
+  organizationId String
+  principalId String
+  status String
+  @@index([organizationId])
+}
+
+model CommandExecution {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  serverId String
+  server Server @relation(fields: [serverId], references: [id])
+  organizationId String
+  principalId String
+  operation String
+  argumentDigest String
+  status String
+  exitCode Int?
+  durationMs Int?
+  @@index([organizationId])
+}
+
+model SavedCommand {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organizationId String
+  organization Organization @relation(fields: [organizationId], references: [id])
+  name String
+  command String
+  @@index([organizationId])
+}
+
+model ApprovalRequest {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  serverId String
+  server Server @relation(fields: [serverId], references: [id])
+  organizationId String
+  principalId String
+  operation String
+  argumentDigest String
+  encryptedArguments String
+  status String @default("pending")
+  decidedBy String?
+  expiresAt DateTime
+  consumedAt DateTime?
+  @@index([organizationId])
+}
+
+model AuditEvent {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organizationId String
+  organization Organization @relation(fields: [organizationId], references: [id])
+  principalId String
+  serverId String?
+  action String
+  status String
+  correlationId String
+  durationMs Int?
+  @@index([organizationId, createdAt])
+}
+
+model FileTransfer {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  serverId String
+  server Server @relation(fields: [serverId], references: [id])
+  organizationId String
+  principalId String
+  direction String
+  bytes Int
+  status String
+  @@index([organizationId])
+}
+
+model BackgroundTask {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  serverId String
+  server Server @relation(fields: [serverId], references: [id])
+  organizationId String
+  principalId String
+  operation String
+  encryptedArguments String
+  status String
+  leaseHash String?
+  tokenId String?
+  expiresAt DateTime
+  @@index([organizationId])
+}
+
+model SystemSetting {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organizationId String
+  organization Organization @relation(fields: [organizationId], references: [id])
+  key String
+  value String
+  @@unique([organizationId, key])
+  @@index([organizationId])
+}
+
+model Notification {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organizationId String
+  organization Organization @relation(fields: [organizationId], references: [id])
+  principalId String
+  message String
+  read Boolean @default(false)
+  @@index([organizationId])
+}

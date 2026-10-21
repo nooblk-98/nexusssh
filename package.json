@@ -1,0 +1,73 @@
+{
+  "name": "nexusssh",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "workers/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:api\" \"npm:dev:web\" \"npm:dev:mcp\" \"npm:dev:worker\"",
+    "dev:api": "tsx watch apps/api/src/main.ts",
+    "dev:web": "npm run assets && npm run dev -w @nexus/web",
+    "dev:mcp": "tsx watch apps/mcp/src/main.ts",
+    "dev:worker": "tsx watch workers/ssh-worker/src/main.ts",
+    "db:generate": "prisma generate --schema packages/database/prisma/schema.prisma",
+    "db:migrate": "tsx infrastructure/scripts/migrate.ts",
+    "typecheck": "tsc --noEmit && npm run typecheck -w @nexus/web",
+    "lint": "eslint apps packages workers tests",
+    "test": "vitest run",
+    "build": "npm run assets && tsc && npm run build -w @nexus/web",
+    "test:e2e": "playwright test",
+    "setup": "tsx infrastructure/scripts/setup.ts",
+    "assets": "node infrastructure/scripts/web-assets.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.3.1",
+    "@modelcontextprotocol/node": "2.1.1",
+    "@nestjs/common": "^11.1.0",
+    "@nestjs/core": "^11.1.0",
+    "@nestjs/platform-express": "^11.1.0",
+    "@nestjs/swagger": "^11.2.0",
+    "@prisma/client": "6.19.0",
+    "bcryptjs": "^3.0.2",
+    "bullmq": "^5.61.0",
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^17.2.0",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0",
+    "helmet": "^8.1.0",
+    "ipaddr.js": "^2.2.0",
+    "jose": "^6.1.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "ssh2": "^1.17.0",
+    "ws": "^8.18.3",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.36.0",
+    "@modelcontextprotocol/client": "^2.3.1",
+    "@playwright/test": "^1.56.0",
+    "@types/cookie-parser": "^1.4.9",
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.0.0",
+    "@types/ssh2": "^1.15.5",
+    "@types/ws": "^8.18.1",
+    "concurrently": "^9.2.1",
+    "eslint": "^9.36.0",
+    "prisma": "6.19.0",
+    "tsx": "^4.20.0",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.44.0",
+    "vitest": "^5.0.5",
+    "prettier": "^3.6.2"
+  },
+  "overrides": {
+    "effect": "^3.20.0",
+    "deepmerge-ts": "^8.0.0",
+    "js-yaml": "^5.4.1"
+  }
+}

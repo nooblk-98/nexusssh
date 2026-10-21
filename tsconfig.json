@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "types": ["node"]
+  },
+  "include": [
+    "apps/api/**/*.ts",
+    "apps/mcp/**/*.ts",
+    "packages/**/*.ts",
+    "workers/**/*.ts",
+    "infrastructure/scripts/**/*.ts"
+  ],
+  "exclude": ["node_modules", "packages/ui"]
+}
