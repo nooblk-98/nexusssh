@@ -1,22 +1,12 @@
 name: nexusssh
+# Works with no configuration. Secrets are generated on first start and kept in
+# the nexusssh_secrets volume; back it up, losing it makes stored SSH identities
+# unrecoverable.
 x-app-env: &app-env
-  APP_URL: ${APP_URL:?set APP_URL}
-  DATABASE_URL: file:/app/data/nexusssh.db
-  ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY}
-  SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET}
-  INTERNAL_SECRET: ${INTERNAL_SECRET:?set INTERNAL_SECRET}
+  APP_URL: ${APP_URL:-http://localhost:${HTTP_PORT:-8080}}
   SETUP_TOKEN: ${SETUP_TOKEN:-}
-  AUTH_ISSUER: ${AUTH_ISSUER:?set AUTH_ISSUER}
-  AUTH_AUDIENCE: ${AUTH_AUDIENCE:-nexusssh}
-  MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:?set MCP_PUBLIC_URL}
-  MCP_AUTH_ISSUER: ${MCP_AUTH_ISSUER:?set MCP_AUTH_ISSUER}
   ENCRYPTION_KEY_PROVIDER: ${ENCRYPTION_KEY_PROVIDER:-environment}
-  SSH_ALLOWED_CIDRS: ${SSH_ALLOWED_CIDRS:?set SSH_ALLOWED_CIDRS}
-  SSH_CONNECT_TIMEOUT: ${SSH_CONNECT_TIMEOUT:-10000}
-  SSH_IDLE_TIMEOUT: ${SSH_IDLE_TIMEOUT:-300000}
-  SSH_MAX_SESSIONS: ${SSH_MAX_SESSIONS:-20}
-  SSH_OUTPUT_LIMIT: ${SSH_OUTPUT_LIMIT:-1048576}
-  AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-90}
+  SSH_ALLOWED_CIDRS: ${SSH_ALLOWED_CIDRS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
   LOG_LEVEL: ${LOG_LEVEL:-info}
 services:
   api:
@@ -28,7 +18,7 @@ services:
       DATABASE_URL: file:/app/data/nexusssh.db
       REDIS_URL: redis://redis:6379
       INTERNAL_API_URL: http://api:3001
-    volumes: [nexusssh_data:/app/data]
+    volumes: [nexusssh_data:/app/data, nexusssh_secrets:/app/secrets]
     restart: unless-stopped
     init: true
     security_opt: [no-new-privileges:true]
@@ -64,6 +54,7 @@ services:
       NODE_ENV: production
       INTERNAL_API_URL: http://api:3001
       REDIS_URL: redis://redis:6379
+    volumes: [nexusssh_secrets:/app/secrets]
     restart: unless-stopped
     init: true
     security_opt: [no-new-privileges:true]
@@ -84,6 +75,7 @@ services:
       NODE_ENV: production
       INTERNAL_API_URL: http://api:3001
       REDIS_URL: redis://redis:6379
+    volumes: [nexusssh_secrets:/app/secrets]
     restart: unless-stopped
     init: true
     security_opt: [no-new-privileges:true]
@@ -111,4 +103,5 @@ services:
       mcp: {condition: service_healthy}
 volumes:
   nexusssh_data:
+  nexusssh_secrets:
   redis_data:

@@ -297,7 +297,7 @@ function Auth({ onLogin }: { onLogin: () => void }) {
                   type="password"
                   required
                   name="setupToken"
-                  placeholder="SETUP_TOKEN from your .env"
+                  placeholder="Setup token (SETUP_TOKEN or API container logs)"
                 />
               </Field>
             </>

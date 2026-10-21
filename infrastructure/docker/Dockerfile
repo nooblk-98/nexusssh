@@ -20,7 +20,8 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/packages/database ./packages/database
 COPY --from=build /app/package*.json ./
 COPY infrastructure/scripts/backup.py infrastructure/scripts/backup.py
-RUN mkdir /app/data && chown node:node /app/data
+RUN mkdir /app/data /app/secrets && chown node:node /app/data /app/secrets
+ENV DATABASE_URL=file:/app/data/nexusssh.db SECRETS_FILE=/app/secrets/secrets.json
 USER node
 EXPOSE 3001
 CMD ["sh","-c","touch /app/data/nexusssh.db && npx prisma migrate deploy --schema packages/database/prisma/schema.prisma && node dist/apps/api/src/main.js"]

@@ -15,7 +15,7 @@ import express from "express";
 import { ZodError } from "zod";
 import { randomUUID } from "node:crypto";
 import { AppController } from "./controller.js";
-import { config } from "../../../packages/shared/config.js";
+import { config, generatedSecrets } from "../../../packages/shared/config.js";
 import { db, initializeDatabase } from "../../../packages/database/index.js";
 import { terminals } from "./terminal.js";
 import { queue, events } from "./domain.js";
@@ -49,6 +49,8 @@ class Errors implements ExceptionFilter {
   }
 }
 await initializeDatabase();
+if (generatedSecrets.includes("SETUP_TOKEN") && (await db.user.count()) === 0)
+  console.log(`First-run setup token: ${process.env.SETUP_TOKEN}`);
 const app = await NestFactory.create(AppModule, { bodyParser: false });
 app.use(helmet());
 app.use(express.json({ limit: "2mb" }));
