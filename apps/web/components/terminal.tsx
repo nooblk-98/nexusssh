@@ -34,6 +34,7 @@ import {
 } from "../lib/store";
 import { terminalFonts, terminalThemes } from "../lib/themes";
 import { terminalDefaults } from "./server-drawer";
+import { HostKeyPrompt, hostKeyProblem } from "./host-key";
 import { openSnippets } from "./snippets";
 import { Button, IconButton, openMenuAt, type MenuItem } from "./ui";
 
@@ -76,6 +77,7 @@ export default function TerminalView({
   live.current = { intelli, popup, prefs, settings };
   const line = useRef<string | null>("");
   const broadcasting = broadcast.includes(tab.id);
+  const hostKey = state === "error" ? hostKeyProblem(message) : null;
 
   useEffect(() => {
     const t = new XTerm({
@@ -481,15 +483,25 @@ export default function TerminalView({
         )}
         {(state === "closed" || state === "error") && (
           <div className="term-overlay">
-            <div>
-              <b>
-                {state === "error" ? "Connection failed" : "Session closed"}
-              </b>
-              {message && <span className="small muted">{message}</span>}
-              <Button onClick={() => setGeneration((g) => g + 1)}>
-                Reconnect
-              </Button>
-            </div>
+            {hostKey ? (
+              <div>
+                <HostKeyPrompt
+                  server={server}
+                  kind={hostKey}
+                  onTrusted={() => setGeneration((g) => g + 1)}
+                />
+              </div>
+            ) : (
+              <div>
+                <b>
+                  {state === "error" ? "Connection failed" : "Session closed"}
+                </b>
+                {message && <span className="small muted">{message}</span>}
+                <Button onClick={() => setGeneration((g) => g + 1)}>
+                  Reconnect
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </div>

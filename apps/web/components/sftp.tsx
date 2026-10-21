@@ -34,6 +34,7 @@ import {
   type Row,
 } from "../lib/api";
 import { useWorkspace, type Tab } from "../lib/store";
+import { HostKeyPrompt, hostKeyProblem } from "./host-key";
 import {
   confirmDialog,
   IconButton,
@@ -445,7 +446,15 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
             openMenu(e.clientX, e.clientY, generalMenu);
           }}
         >
-          {error ? (
+          {error && hostKeyProblem(error) ? (
+            <div className="empty-state">
+              <HostKeyPrompt
+                server={server}
+                kind={hostKeyProblem(error)!}
+                onTrusted={() => void load(path)}
+              />
+            </div>
+          ) : error ? (
             <div className="empty-state">
               <Folder size={40} />
               <h3>Unable to open this folder</h3>
