@@ -2,7 +2,11 @@ import { UnauthorizedException, ForbiddenException } from "@nestjs/common";
 import type { Request } from "express";
 import { db } from "../../../packages/database/index.js";
 import { hash, equal } from "../../../packages/shared/crypto.js";
-import { config } from "../../../packages/shared/config.js";
+import {
+  config,
+  mcpAudience,
+  sameOrigin,
+} from "../../../packages/shared/config.js";
 import type { Principal } from "../../../packages/policy-engine/index.js";
 export async function authenticate(req: Request): Promise<Principal> {
   const auth = req.headers.authorization;
@@ -18,7 +22,7 @@ export async function authenticate(req: Request): Promise<Principal> {
       token.agent.owner.disabled ||
       token.expiresAt < new Date() ||
       token.issuer !== config.MCP_AUTH_ISSUER ||
-      token.audience !== config.MCP_PUBLIC_URL
+      token.audience !== mcpAudience
     )
       throw new UnauthorizedException(
         "Invalid, expired, or revoked agent credential",
@@ -66,6 +70,6 @@ export function internal(req: Request) {
     throw new UnauthorizedException();
 }
 export function origin(req: Request) {
-  if (req.headers.origin !== new URL(config.APP_URL).origin)
+  if (!sameOrigin(req.headers))
     throw new ForbiddenException("Invalid request origin");
 }

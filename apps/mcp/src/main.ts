@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { toNodeHandler } from "@modelcontextprotocol/node";
-import { config } from "../../../packages/shared/config.js";
+import { config, sameOrigin } from "../../../packages/shared/config.js";
 import { schemas } from "../../../packages/shared/operations.js";
 import { needsApproval } from "../../../packages/policy-engine/index.js";
 export function buildMcp(token: string) {
@@ -62,12 +62,15 @@ const server = createServer(async (req, res) => {
     return;
   }
   const origin = req.headers.origin;
-  if (origin && origin !== new URL(config.APP_URL).origin) {
+  if (origin && !sameOrigin(req.headers)) {
     res.writeHead(403).end();
     return;
   }
   const host = req.headers.host?.split(":")[0];
+  // With no configured public URL the endpoint answers on any host; the bearer
+  // token remains required.
   if (
+    config.MCP_PUBLIC_URL &&
     ![
       new URL(config.MCP_PUBLIC_URL).hostname,
       "127.0.0.1",

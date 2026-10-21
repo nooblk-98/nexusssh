@@ -46,7 +46,7 @@ const schema = z.object({
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),
-  APP_URL: z.url(),
+  APP_URL: z.url().optional(),
   DATABASE_URL: z.string().startsWith("file:"),
   REDIS_URL: z.url(),
   ENCRYPTION_KEY: z.string().regex(/^[a-f0-9]{64}$/),
@@ -72,22 +72,49 @@ const schema = z.object({
   AUDIT_RETENTION_DAYS: z.coerce.number().int().min(1).default(90),
 });
 const parsed = schema.parse(process.env);
-const origin = new URL(parsed.APP_URL).origin;
+// Without APP_URL the platform serves whatever address it is reached on: browser
+// requests must come from the same host they were sent to, and agent tokens use
+// fixed identifiers so they stay valid across addresses.
+const configured = parsed.APP_URL && new URL(parsed.APP_URL).origin;
 export const config = {
   ...parsed,
-  AUTH_ISSUER: parsed.AUTH_ISSUER ?? origin,
-  MCP_AUTH_ISSUER: parsed.MCP_AUTH_ISSUER ?? origin,
-  MCP_PUBLIC_URL: parsed.MCP_PUBLIC_URL ?? origin + "/mcp",
+  AUTH_ISSUER: parsed.AUTH_ISSUER ?? configured ?? "urn:nexusssh",
+  MCP_AUTH_ISSUER: parsed.MCP_AUTH_ISSUER ?? configured ?? "urn:nexusssh",
+  MCP_PUBLIC_URL:
+    parsed.MCP_PUBLIC_URL ?? (configured ? configured + "/mcp" : undefined),
 };
-const localhost = ["localhost", "127.0.0.1", "[::1]"].includes(
-  new URL(config.APP_URL).hostname,
-);
+export const mcpAudience = config.MCP_PUBLIC_URL ?? "urn:nexusssh:mcp";
 if (
   config.NODE_ENV === "production" &&
+  config.APP_URL &&
   !config.APP_URL.startsWith("https://") &&
-  !localhost
+  !["localhost", "127.0.0.1", "[::1]"].includes(
+    new URL(config.APP_URL).hostname,
+  )
 )
   throw new Error("Production APP_URL must use HTTPS");
+type Headers = Record<string, string | string[] | undefined>;
+const first = (v: string | string[] | undefined) =>
+  (Array.isArray(v) ? v[0] : v)?.split(",")[0].trim();
+export function sameOrigin(headers: Headers) {
+  const origin = first(headers.origin);
+  if (!origin) return false;
+  if (configured) return origin === configured;
+  try {
+    return new URL(origin).host === first(headers.host);
+  } catch {
+    return false;
+  }
+}
+export function publicOrigin(headers: Headers) {
+  if (configured) return configured;
+  const proto =
+    first(headers["x-forwarded-proto"]) === "https" ? "https" : "http";
+  return `${proto}://${first(headers.host)}`;
+}
+export function mcpEndpoint(headers: Headers) {
+  return config.MCP_PUBLIC_URL ?? publicOrigin(headers) + "/mcp";
+}
 export const redisConnection = (() => {
   const u = new URL(config.REDIS_URL);
   return {

@@ -20,7 +20,12 @@ import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
 import { db } from "../../../packages/database/index.js";
-import { config } from "../../../packages/shared/config.js";
+import {
+  config,
+  mcpAudience,
+  mcpEndpoint,
+  publicOrigin,
+} from "../../../packages/shared/config.js";
 import {
   hash,
   secret,
@@ -138,6 +143,7 @@ export class AppController {
     return { created: true };
   }
   @Post("auth/login") async login(
+    @Req() req: Request,
     @Body() body: unknown,
     @Res({ passthrough: true }) res: Response,
   ) {
@@ -208,7 +214,9 @@ export class AppController {
     });
     res.cookie("nexus_session", token, {
       httpOnly: true,
-      secure: config.NODE_ENV === "production",
+      secure: config.APP_URL
+        ? config.NODE_ENV === "production"
+        : req.headers.origin?.startsWith("https://") === true,
       sameSite: "strict",
       path: "/",
       maxAge: 28800000,
@@ -586,7 +594,7 @@ export class AppController {
           create: {
             tokenHash: hash(token),
             issuer: config.MCP_AUTH_ISSUER,
-            audience: config.MCP_PUBLIC_URL,
+            audience: mcpAudience,
             scopes: JSON.stringify(a.operations),
             expiresAt: new Date(Date.now() + a.expiresInDays * 86400000),
           },
@@ -594,7 +602,7 @@ export class AppController {
       },
     });
     await audit(p, "agent_created", "success");
-    return { agent, token, endpoint: config.MCP_PUBLIC_URL };
+    return { agent, token, endpoint: mcpEndpoint(req.headers) };
   }
   @Delete("agents/:id") async revoke(
     @Req() req: Request,
@@ -777,7 +785,7 @@ export class AppController {
     const p = await authenticate(req);
     human(p);
     return {
-      endpoint: config.MCP_PUBLIC_URL,
+      endpoint: mcpEndpoint(req.headers),
       protocol: "2026-07-28",
       legacy: "2025 stateless",
       fileLimit: config.SSH_OUTPUT_LIMIT,
@@ -862,7 +870,10 @@ export class AppController {
       },
     });
     await audit(p, "invitation_created", "success");
-    return { url: config.APP_URL + "/?invite=" + token, expiresInHours: 24 };
+    return {
+      url: publicOrigin(req.headers) + "/?invite=" + token,
+      expiresInHours: 24,
+    };
   }
   @Post("auth/invitation") async acceptInvite(@Body() body: unknown) {
     const a = login

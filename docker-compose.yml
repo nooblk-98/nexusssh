@@ -9,7 +9,7 @@ services:
     pull_policy: build
     ports: ['${HTTP_PORT:-8080}:8080']
     environment:
-      APP_URL: ${APP_URL:-http://localhost:${HTTP_PORT:-8080}}
+      APP_URL: ${APP_URL:-}
       SETUP_TOKEN: ${SETUP_TOKEN:-}
       ENCRYPTION_KEY_PROVIDER: ${ENCRYPTION_KEY_PROVIDER:-environment}
       SSH_ALLOWED_CIDRS: ${SSH_ALLOWED_CIDRS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}

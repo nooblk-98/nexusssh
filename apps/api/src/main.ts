@@ -15,7 +15,11 @@ import express from "express";
 import { ZodError } from "zod";
 import { randomUUID } from "node:crypto";
 import { AppController } from "./controller.js";
-import { config, generatedSecrets } from "../../../packages/shared/config.js";
+import {
+  config,
+  generatedSecrets,
+  sameOrigin,
+} from "../../../packages/shared/config.js";
 import { db, initializeDatabase } from "../../../packages/database/index.js";
 import { terminals } from "./terminal.js";
 import { queue, events } from "./domain.js";
@@ -62,7 +66,7 @@ app.use((req: any, res: any, next: any) => {
     ["POST", "PATCH", "DELETE", "PUT"].includes(req.method) &&
     !req.headers.authorization &&
     !req.path.startsWith("/api/internal/") &&
-    req.headers.origin !== new URL(config.APP_URL).origin
+    !sameOrigin(req.headers)
   ) {
     res.status(403).json({ message: "Invalid request origin" });
     return;

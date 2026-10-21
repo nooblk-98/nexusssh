@@ -6,7 +6,7 @@ import { z } from "zod";
 import { authenticate } from "./auth.js";
 import { authorize, connection, audit } from "./domain.js";
 import { connect } from "../../../packages/ssh-core/index.js";
-import { config } from "../../../packages/shared/config.js";
+import { config, sameOrigin } from "../../../packages/shared/config.js";
 import { db } from "../../../packages/database/index.js";
 export function terminals(server: Server) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 65536 });
@@ -41,11 +41,8 @@ export function terminals(server: Server) {
           .catch(() => {});
     };
     try {
-      const url = new URL(req.url || "/", config.APP_URL);
-      if (
-        url.pathname !== "/ws/terminal" ||
-        req.headers.origin !== new URL(config.APP_URL).origin
-      )
+      const url = new URL(req.url || "/", "http://localhost");
+      if (url.pathname !== "/ws/terminal" || !sameOrigin(req.headers))
         throw new Error("Invalid WebSocket origin");
       const cookies = Object.fromEntries(
         (req.headers.cookie || "").split(";").map((v) => v.trim().split("=")),
