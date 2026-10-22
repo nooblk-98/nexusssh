@@ -934,6 +934,376 @@ describe.runIf(enabled)(
         cookie = owner;
       }
     });
+    it("manages workspace resources through real MCP tools without exposing stored credentials", async () => {
+      const registered = await request("agents", {
+        name: "Workspace manager",
+        level: "administrator",
+        workspaceManagement: true,
+        serverIds: [],
+        operations: ["server_get_info", "server_test_connection"],
+        expiresInDays: 1,
+      });
+      expect(registered.r.status).toBe(201);
+      const managerToken = registered.data.token;
+      const c = new Client({ name: "workspace-test", version: "1.0.0" });
+      await c.connect(
+        new StreamableHTTPClientTransport(new URL(env.MCP_PUBLIC_URL!), {
+          requestInit: { headers: { authorization: "Bearer " + managerToken } },
+        }),
+      );
+      const call = async (name: string, args: any = {}) => {
+        const result: any = await c.callTool({ name, arguments: args });
+        expect(result.isError, name + ": " + result.content?.[0]?.text).toBe(
+          false,
+        );
+        return JSON.parse(result.content[0].text);
+      };
+      try {
+        const tools = (await c.listTools()).tools.map((t) => t.name);
+        expect(tools).toEqual(
+          expect.arrayContaining([
+            "identity_create",
+            "vpn_profile_create",
+            "folder_create",
+            "server_create",
+            "agent_update_access",
+            "team_set_servers",
+            "settings_update",
+          ]),
+        );
+        expect(tools).not.toContain("approval_decide");
+        const root = await call("folder_create", { name: "MCP Root" });
+        const child = await call("folder_create", {
+          name: "MCP Child",
+          parentId: root.id,
+        });
+        expect(
+          (await call("folders_list")).items.find((g: any) => g.id === child.id)
+            .parentId,
+        ).toBe(root.id);
+        const cycle: any = await c.callTool({
+          name: "folder_update",
+          arguments: { id: root.id, parentId: child.id },
+        });
+        expect(cycle.isError).toBe(true);
+        const identity = await call("identity_create", {
+          name: "MCP SSH key",
+          kind: "key",
+          privateKey,
+        });
+        await call("identity_update", {
+          id: identity.id,
+          name: "MCP Rotated key",
+          kind: "key",
+          privateKey,
+        });
+        expect(JSON.stringify(await call("identities_list"))).not.toContain(
+          privateKey,
+        );
+        const disposable = await call("identity_create", {
+          name: "Unused",
+          kind: "password",
+          password: "not-a-real-password",
+        });
+        await call("identity_delete", { id: disposable.id });
+        const wgKey = randomBytes(32).toString("base64");
+        const vpn = await call("vpn_profile_create", {
+          name: "MCP VPN",
+          description: "Keep description",
+          config: `[Interface]\nPrivateKey = ${wgKey}\nAddress = 10.79.0.2/32\nListenPort = 0\n[Peer]\nPublicKey = ${wgKey}\nEndpoint = 127.0.0.1:51820\nAllowedIPs = 10.79.0.0/24`,
+        });
+        const updatedVpn = await call("vpn_profile_update", {
+          id: vpn.id,
+          changes: { name: "Renamed MCP VPN" },
+        });
+        expect(updatedVpn.description).toBe("Keep description");
+        expect(JSON.stringify(await call("vpn_profiles_list"))).not.toContain(
+          wgKey,
+        );
+        const created = await call("server_create", {
+          name: "MCP provisioned SSH",
+          host: "127.0.0.1",
+          port: 22222,
+          username: "nexus",
+          identityId: identity.id,
+          fingerprint,
+          fileRoot: "/home/nexus/files",
+          groupId: child.id,
+          vpnProfileId: vpn.id,
+        });
+        expect(created.vpnProfileId).toBe(vpn.id);
+        expect(
+          (await call("workspace_servers_list")).items.some(
+            (s: any) => s.id === created.id,
+          ),
+        ).toBe(true);
+        await call("server_update", {
+          id: created.id,
+          changes: { vpnProfileId: null, description: "Updated through MCP" },
+        });
+        expect(
+          (await call("server_test_connection", { serverId: created.id }))
+            .connected,
+        ).toBe(true);
+        expect(
+          (
+            await call("server_scan_host_key", {
+              host: "127.0.0.1",
+              port: 22222,
+            })
+          ).fingerprint,
+        ).toBe(fingerprint);
+        await call("server_move", { id: created.id, groupId: root.id });
+        await call("folder_update", {
+          id: child.id,
+          name: "Moved child",
+          parentId: null,
+        });
+        const duplicate = await call("server_duplicate", { id: created.id });
+        await call("server_archive", { id: duplicate.id });
+        const user = await call("user_create", {
+          name: "MCP Viewer",
+          email: "mcp-viewer@example.test",
+          password: "mcp-viewer-password-12345",
+          role: "viewer",
+        });
+        await call("user_update", {
+          id: user.id,
+          role: "viewer",
+          disabled: true,
+        });
+        await call("user_set_permissions", {
+          id: user.id,
+          serverId: created.id,
+          operations: ["server_get_info"],
+        });
+        expect(
+          (await call("users_list")).items.some((u: any) => u.id === user.id),
+        ).toBe(true);
+        const team = await call("team_create", {
+          name: "MCP team",
+          userIds: [user.id],
+        });
+        await call("team_update", {
+          id: team.id,
+          name: "MCP team renamed",
+          userIds: [],
+        });
+        await call("team_set_servers", {
+          id: team.id,
+          servers: [{ serverId: created.id, operations: ["server_get_info"] }],
+        });
+        expect(
+          (await call("teams_list")).items.find((t: any) => t.id === team.id)
+            .servers,
+        ).toHaveLength(1);
+        await call("team_delete", { id: team.id });
+        expect(
+          (
+            await call("invitation_create", {
+              email: "mcp-invite@example.test",
+              role: "viewer",
+            })
+          ).url,
+        ).toContain("invite=");
+        const childAgent = await call("agent_create", {
+          name: "MCP child agent",
+          level: "viewer",
+          serverIds: [created.id],
+          operations: ["server_get_info"],
+          workspaceManagement: false,
+        });
+        expect(childAgent.token).toBeTruthy();
+        await call("agent_update_access", {
+          id: childAgent.agent.id,
+          level: "viewer",
+          serverIds: [],
+          operations: [],
+          workspaceManagement: false,
+        });
+        await call("agent_update_limits", {
+          id: childAgent.agent.id,
+          maxCallsPerMinute: 5,
+        });
+        expect(JSON.stringify(await call("agents_list"))).not.toContain(
+          childAgent.token,
+        );
+        await call("agent_revoke", { id: childAgent.agent.id });
+        const settings = await call("settings_get");
+        await call("settings_update", {
+          acceptNewHostKeys: settings.acceptNewHostKeys,
+        });
+        const snippet = await call("snippet_create", {
+          name: "MCP snippet",
+          command: "uname -a",
+        });
+        expect(
+          (await call("snippets_list")).items.some(
+            (s: any) => s.id === snippet.id,
+          ),
+        ).toBe(true);
+        await call("snippet_delete", { id: snippet.id });
+        await call("sessions_list");
+        await call("approvals_list");
+        await call("workspace_overview");
+        const audit = await call("audit_list", { action: "mcp:" });
+        expect(audit.items.length).toBeGreaterThan(0);
+        expect(JSON.stringify(audit)).not.toContain(privateKey);
+        expect(JSON.stringify(audit)).not.toContain(wgKey);
+        expect(
+          (
+            await call("agent_activity", { id: registered.data.agent.id })
+          ).items.some((r: any) => r.operation === "identity_create"),
+        ).toBe(true);
+        // Human approval cannot be supplied by a workspace-management token.
+        expect(
+          (
+            await request(
+              "approvals/" + randomUUID(),
+              { decision: "approved" },
+              managerToken,
+            )
+          ).r.status,
+        ).toBe(403);
+        await call("server_archive", { id: created.id });
+        await call("vpn_profile_delete", { id: vpn.id });
+        await call("folder_delete", { id: root.id });
+        await call("folder_delete", { id: child.id });
+      } finally {
+        await c.close();
+        await request(
+          "agents/" + registered.data.agent.id,
+          {},
+          undefined,
+          "DELETE",
+        );
+      }
+    });
+    it("requires explicit management access and honors removal, owner roles, workspace isolation and budgets", async () => {
+      const registered = await request("agents", {
+        name: "Scoped manager",
+        level: "administrator",
+        serverIds: [],
+        operations: [],
+      });
+      const agentId = registered.data.agent.id,
+        auth = registered.data.token;
+      expect((await request("groups", { name: "Denied" }, auth)).r.status).toBe(
+        403,
+      );
+      const access = {
+        level: "administrator",
+        serverIds: [],
+        operations: [],
+        workspaceManagement: true,
+      };
+      expect(
+        (
+          await request(
+            "agents/" + agentId + "/access",
+            access,
+            undefined,
+            "PATCH",
+          )
+        ).r.status,
+      ).toBe(200);
+      expect((await request("groups", undefined, auth)).r.status).toBe(200);
+      const other = await request("auth/login", {
+        email: "other@example.test",
+        password: "other-fixture-password-123",
+      });
+      const original = cookie;
+      cookie = other.r.headers.get("set-cookie")!.split(";")[0];
+      const foreign = (await request("groups", { name: "Foreign MCP folder" }))
+        .data.id;
+      cookie = original;
+      try {
+        expect(
+          (
+            await request(
+              "groups/" + foreign,
+              { name: "Wrong workspace" },
+              auth,
+              "PATCH",
+            )
+          ).r.status,
+        ).toBe(404);
+        expect(
+          (
+            await request(
+              "groups",
+              { name: "Wrong child", parentId: foreign },
+              auth,
+            )
+          ).r.status,
+        ).toBe(400);
+        await request(
+          "agents/" + agentId + "/limits",
+          { maxCallsPerMinute: 1 },
+          undefined,
+          "PATCH",
+        );
+        expect((await request("groups", undefined, auth)).r.status).toBe(429);
+        await request(
+          "agents/" + agentId + "/limits",
+          { maxCallsPerMinute: null },
+          undefined,
+          "PATCH",
+        );
+        await request(
+          "agents/" + agentId + "/access",
+          { ...access, workspaceManagement: false },
+          undefined,
+          "PATCH",
+        );
+        expect((await request("groups", undefined, auth)).r.status).toBe(403);
+        expect(
+          (
+            await request(
+              "agents/" + agentId + "/access",
+              { ...access, level: "viewer" },
+              undefined,
+              "PATCH",
+            )
+          ).r.status,
+        ).toBe(400);
+        const check = new PrismaClient({
+          datasources: { db: { url: env.DATABASE_URL } },
+        });
+        try {
+          await request(
+            "agents/" + agentId + "/access",
+            access,
+            undefined,
+            "PATCH",
+          );
+          const row = await check.agent.findUniqueOrThrow({
+            where: { id: agentId },
+          });
+          await check.user.update({
+            where: { id: row.ownerId },
+            data: { role: "operator" },
+          });
+          try {
+            expect((await request("groups", undefined, auth)).r.status).toBe(
+              403,
+            );
+          } finally {
+            await check.user.update({
+              where: { id: row.ownerId },
+              data: { role: "owner" },
+            });
+          }
+        } finally {
+          await check.$disconnect();
+        }
+      } finally {
+        cookie = other.r.headers.get("set-cookie")!.split(";")[0];
+        await request("groups/" + foreign, undefined, undefined, "DELETE");
+        cookie = original;
+        await request("agents/" + agentId, {}, undefined, "DELETE");
+      }
+    });
     it("serves modern 2026-07-28 and legacy clients over real HTTP sockets", async () => {
       for (const mode of ["auto", "legacy"] as const) {
         const c = new Client(
