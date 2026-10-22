@@ -93,6 +93,7 @@ export function Check({
   name,
   value,
   defaultChecked,
+  disabled,
 }: {
   label: ReactNode;
   checked?: boolean;
@@ -100,6 +101,7 @@ export function Check({
   name?: string;
   value?: string;
   defaultChecked?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <label className="check">
@@ -109,6 +111,7 @@ export function Check({
         value={value}
         checked={checked}
         defaultChecked={defaultChecked}
+        disabled={disabled}
         onChange={(e) => onChange?.(e.target.checked)}
       />
       {label}

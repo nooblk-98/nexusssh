@@ -20,7 +20,7 @@ import {
   parseWireGuard,
   wireguardSummary,
 } from "../../../packages/shared/wireguard.js";
-import { authenticate, admin, human } from "./auth.js";
+import { authenticate, admin, workspace } from "./auth.js";
 import { audit } from "./domain.js";
 const input = z
   .object({
@@ -41,7 +41,7 @@ const selection = {
 export class VpnController {
   @Get() async list(@Req() req: Request) {
     const p = await authenticate(req);
-    human(p);
+    workspace(p);
     const rows = await db.vpnProfile.findMany({
       where: { organizationId: p.organizationId },
       select: selection,
@@ -52,14 +52,17 @@ export class VpnController {
   async save(req: Request, body: unknown, id?: string) {
     const p = await authenticate(req);
     admin(p);
-    const a = input.parse(body);
-    if (
-      id &&
-      !(await db.vpnProfile.findFirst({
-        where: { id, organizationId: p.organizationId },
-      }))
-    )
-      throw new NotFoundException("VPN profile unavailable");
+    const existing = id
+      ? await db.vpnProfile.findFirst({
+          where: { id, organizationId: p.organizationId },
+          select: { name: true, description: true },
+        })
+      : undefined;
+    if (id && !existing) throw new NotFoundException("VPN profile unavailable");
+    const a = input.parse({
+      ...existing,
+      ...z.record(z.string(), z.unknown()).parse(body),
+    });
     if (!id && !a.config?.trim())
       throw new BadRequestException("Import a WireGuard client configuration");
     const profileId = id || randomUUID();

@@ -1,4 +1,13 @@
-import { UnauthorizedException, ForbiddenException } from "@nestjs/common";
+import {
+  UnauthorizedException,
+  ForbiddenException,
+  HttpException,
+} from "@nestjs/common";
+import { randomUUID } from "node:crypto";
+import {
+  managementRoute,
+  WORKSPACE_MANAGE,
+} from "../../../packages/shared/management.js";
 import type { Request } from "express";
 import { db } from "../../../packages/database/index.js";
 import { hash, equal } from "../../../packages/shared/crypto.js";
@@ -27,13 +36,74 @@ export async function authenticate(req: Request): Promise<Principal> {
       throw new UnauthorizedException(
         "Invalid, expired, or revoked agent credential",
       );
+    const scopes: string[] = JSON.parse(token.scopes);
+    const managementOperation = managementRoute(
+      req.method,
+      req.originalUrl.split("?")[0],
+    );
+    if (managementOperation) {
+      if (
+        !scopes.includes(WORKSPACE_MANAGE) ||
+        token.agent.level !== "administrator" ||
+        !["owner", "administrator"].includes(token.agent.owner.role)
+      )
+        throw new ForbiddenException(
+          "Enable Workspace management for an administrator agent to use this tool",
+        );
+      const calls = async (ms: number) => {
+        const since = new Date(Date.now() - ms);
+        const [ssh, management] = await Promise.all([
+          db.commandExecution.count({
+            where: { principalId: token.agentId, createdAt: { gt: since } },
+          }),
+          db.auditEvent.count({
+            where: {
+              principalId: token.agentId,
+              action: { startsWith: "mcp:" },
+              createdAt: { gt: since },
+            },
+          }),
+        ]);
+        return ssh + management;
+      };
+      if (
+        (token.agent.maxCallsPerMinute &&
+          (await calls(60000)) >= token.agent.maxCallsPerMinute) ||
+        (token.agent.maxCallsPerDay &&
+          (await calls(86400000)) >= token.agent.maxCallsPerDay)
+      )
+        throw new HttpException("Agent call limit reached", 429);
+      const entry = await db.auditEvent.create({
+        data: {
+          organizationId: token.agent.organizationId,
+          principalId: token.agentId,
+          action: "mcp:" + managementOperation,
+          status: "requested",
+          correlationId: randomUUID(),
+        },
+      });
+      req.res?.once("finish", () => {
+        void db.auditEvent
+          .update({
+            where: { id: entry.id },
+            data: { status: req.res!.statusCode < 400 ? "success" : "failed" },
+          })
+          .catch(() => {});
+      });
+      await db.agent.update({
+        where: { id: token.agentId },
+        data: { lastActivityAt: new Date() },
+      });
+    }
     return {
       id: token.agentId,
       organizationId: token.agent.organizationId,
       kind: "agent",
       role: token.agent.level,
-      scopes: JSON.parse(token.scopes),
+      scopes,
       tokenId: token.id,
+      ownerId: token.agent.ownerId,
+      managementOperation,
     };
   }
   const raw = req.cookies?.nexus_session;
@@ -56,9 +126,14 @@ export function human(p: Principal) {
   if (p.kind !== "user") throw new ForbiddenException("Human account required");
 }
 export function admin(p: Principal) {
+  if (p.kind === "agent" && p.managementOperation) return;
   human(p);
   if (!["owner", "administrator"].includes(p.role))
     throw new ForbiddenException("Administrator required");
+}
+export function workspace(p: Principal) {
+  if (p.kind === "agent" && p.managementOperation) return;
+  human(p);
 }
 export function internal(req: Request) {
   if (

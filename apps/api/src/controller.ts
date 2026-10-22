@@ -39,7 +39,7 @@ import {
   allOperations,
   readOperations,
 } from "../../../packages/policy-engine/index.js";
-import { authenticate, admin, human, internal } from "./auth.js";
+import { authenticate, admin, human, workspace, internal } from "./auth.js";
 import {
   ACCEPT_NEW_HOST_KEYS,
   APPROVAL_WEBHOOK,
@@ -59,6 +59,11 @@ import { scanHostKey } from "../../../packages/ssh-core/index.js";
 import { connectionPath } from "./domain.js";
 import { closeSftp } from "./sftp.js";
 import { saveFolder, deleteFolder } from "./folders.js";
+import {
+  WORKSPACE_MANAGE,
+  managementTools,
+  agentAccessSchema,
+} from "../../../packages/shared/management.js";
 // Keep in sync with the icon picker in apps/web/components/icons.tsx.
 const serverIcons = [
   "linux",
@@ -501,7 +506,7 @@ export class AppController {
   }
   @Get("dashboard") async dashboard(@Req() req: Request) {
     const p = await authenticate(req);
-    human(p);
+    workspace(p);
     const servers = await listServers(p);
     const ids = servers.map((s) => s.id);
     return {
@@ -698,6 +703,18 @@ export class AppController {
     const s = await db.server.create({
       data: { ...data, organizationId: p.organizationId },
     });
+    if (p.kind === "agent")
+      await db.agentPermission.create({
+        data: {
+          agentId: p.id,
+          serverId: s.id,
+          operations: JSON.stringify(
+            p.scopes.filter(
+              (op) => allOperations.includes(op) && op !== "terminal",
+            ),
+          ),
+        },
+      });
     await audit(p, "server_created", "success", s.id);
     return s;
   }
@@ -754,7 +771,7 @@ export class AppController {
     admin(p);
     const old = await authorize(p, id, "server_get_info");
     const { id: _id, createdAt: _c, updatedAt: _u, ...data } = old;
-    return db.server.create({
+    const s = await db.server.create({
       data: {
         ...data,
         name: old.name + " copy",
@@ -763,6 +780,20 @@ export class AppController {
         favorite: false,
       },
     });
+    if (p.kind === "agent")
+      await db.agentPermission.create({
+        data: {
+          agentId: p.id,
+          serverId: s.id,
+          operations: JSON.stringify(
+            p.scopes.filter(
+              (op) => allOperations.includes(op) && op !== "terminal",
+            ),
+          ),
+        },
+      });
+    await audit(p, "server_duplicated", "success", s.id);
+    return s;
   }
   @Patch("servers/:id/move") async moveServer(
     @Req() req: Request,
@@ -930,6 +961,7 @@ export class AppController {
         operations: z
           .array(z.enum(allOperations as [string, ...string[]]))
           .max(60),
+        workspaceManagement: z.boolean().default(false),
         expiresInDays: z.number().int().min(1).max(90).default(30),
         ...agentLimits,
       })
@@ -951,11 +983,15 @@ export class AppController {
       })) !== new Set(a.serverIds).size
     )
       throw new BadRequestException("Server unavailable");
+    if (a.workspaceManagement && a.level !== "administrator")
+      throw new BadRequestException(
+        "Workspace management requires administrator level",
+      );
     const token = secret();
     const agent = await db.agent.create({
       data: {
         organizationId: p.organizationId,
-        ownerId: p.id,
+        ownerId: p.ownerId || p.id,
         name: a.name,
         level: a.level,
         maxCallsPerMinute: a.maxCallsPerMinute ?? null,
@@ -971,7 +1007,12 @@ export class AppController {
             tokenHash: hash(token),
             issuer: config.MCP_AUTH_ISSUER,
             audience: mcpAudience,
-            scopes: JSON.stringify(a.operations),
+            scopes: JSON.stringify([
+              ...new Set([
+                ...a.operations,
+                ...(a.workspaceManagement ? [WORKSPACE_MANAGE] : []),
+              ]),
+            ]),
             expiresAt: new Date(Date.now() + a.expiresInDays * 86400000),
           },
         },
@@ -979,6 +1020,63 @@ export class AppController {
     });
     await audit(p, "agent_created", "success");
     return { agent, token, endpoint: mcpEndpoint(req.headers) };
+  }
+  @Patch("agents/:id/access") async agentAccess(
+    @Req() req: Request,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    const p = await authenticate(req);
+    admin(p);
+    const a = agentAccessSchema.parse(body);
+    if (
+      (a.workspaceManagement && a.level !== "administrator") ||
+      (a.level === "viewer" &&
+        a.operations.some((op) => !readOperations.includes(op)))
+    )
+      throw new BadRequestException("Invalid agent access");
+    await db.$transaction(async (tx) => {
+      const agent = await tx.agent.findFirst({
+        where: { id, organizationId: p.organizationId, revoked: false },
+      });
+      if (!agent) throw new NotFoundException("Agent unavailable");
+      if (
+        (await tx.server.count({
+          where: {
+            id: { in: a.serverIds },
+            organizationId: p.organizationId,
+            archived: false,
+          },
+        })) !== new Set(a.serverIds).size
+      )
+        throw new BadRequestException("Server unavailable");
+      await tx.agentPermission.deleteMany({ where: { agentId: id } });
+      await tx.agent.update({
+        where: { id },
+        data: {
+          level: a.level,
+          permissions: {
+            create: [...new Set(a.serverIds)].map((serverId) => ({
+              serverId,
+              operations: JSON.stringify(a.operations),
+            })),
+          },
+        },
+      });
+      await tx.agentToken.updateMany({
+        where: { agentId: id, revoked: false },
+        data: {
+          scopes: JSON.stringify([
+            ...new Set([
+              ...a.operations,
+              ...(a.workspaceManagement ? [WORKSPACE_MANAGE] : []),
+            ]),
+          ]),
+        },
+      });
+    });
+    await audit(p, "agent_access_updated", "success", undefined, id);
+    return { updated: true };
   }
   @Patch("agents/:id/limits") async agentLimits(
     @Req() req: Request,
@@ -1006,12 +1104,39 @@ export class AppController {
   ) {
     const p = await authenticate(req);
     admin(p);
-    return db.commandExecution.findMany({
-      where: { principalId: id, organizationId: p.organizationId },
-      include: { server: { select: { name: true } } },
-      orderBy: { createdAt: "desc" },
-      take: 200,
-    });
+    if (
+      !(await db.agent.findFirst({
+        where: { id, organizationId: p.organizationId },
+      }))
+    )
+      throw new NotFoundException();
+    const [executions, management] = await Promise.all([
+      db.commandExecution.findMany({
+        where: { principalId: id, organizationId: p.organizationId },
+        include: { server: { select: { name: true } } },
+        orderBy: { createdAt: "desc" },
+        take: 200,
+      }),
+      db.auditEvent.findMany({
+        where: {
+          principalId: id,
+          organizationId: p.organizationId,
+          action: { startsWith: "mcp:" },
+        },
+        orderBy: { createdAt: "desc" },
+        take: 200,
+      }),
+    ]);
+    return [
+      ...executions,
+      ...management.map((event) => ({
+        ...event,
+        operation: event.action.slice(4),
+        server: { name: "Workspace" },
+      })),
+    ]
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, 200);
   }
   @Delete("agents/:id") async revoke(
     @Req() req: Request,
@@ -1033,7 +1158,7 @@ export class AppController {
   }
   @Get("approvals") async approvals(@Req() req: Request) {
     const p = await authenticate(req);
-    human(p);
+    workspace(p);
     const items = await db.approvalRequest.findMany({
       where: {
         organizationId: p.organizationId,
@@ -1136,7 +1261,7 @@ export class AppController {
     const u = await db.user.findFirst({
       where: { id, organizationId: p.organizationId },
     });
-    if (!u || u.role === "owner" || id === p.id)
+    if (!u || u.role === "owner" || id === p.id || id === p.ownerId)
       throw new BadRequestException("Cannot change this account");
     await db.user.update({ where: { id }, data: a });
     await db.webSession.deleteMany({ where: { userId: id } });
@@ -1177,7 +1302,7 @@ export class AppController {
   }
   @Get("sessions") async sessions(@Req() req: Request) {
     const p = await authenticate(req);
-    human(p);
+    workspace(p);
     return db.sSHSession.findMany({
       where: {
         organizationId: p.organizationId,
@@ -1192,7 +1317,7 @@ export class AppController {
   }
   @Get("settings") async settings(@Req() req: Request) {
     const p = await authenticate(req);
-    human(p);
+    workspace(p);
     return {
       endpoint: mcpEndpoint(req.headers),
       protocol: "2026-07-28",
@@ -1202,6 +1327,10 @@ export class AppController {
       recording: false,
       operations: allOperations,
       readOperations,
+      managementTools: Object.entries(managementTools).map(([name, tool]) => ({
+        name,
+        description: tool.description,
+      })),
       acceptNewHostKeys: await acceptsNewHostKeys(p.organizationId),
       deploymentCidrs: config.SSH_ALLOWED_CIDRS.split(","),
       workspaceCidrs: await workspaceCidrs(p.organizationId),
@@ -1464,7 +1593,7 @@ export class AppController {
   }
   @Get("snippets") async snippets(@Req() req: Request) {
     const p = await authenticate(req);
-    human(p);
+    workspace(p);
     return db.savedCommand.findMany({
       where: { organizationId: p.organizationId },
       orderBy: { name: "asc" },
@@ -1503,7 +1632,7 @@ export class AppController {
     @Param("id") id: string,
   ) {
     const p = await authenticate(req);
-    human(p);
+    workspace(p);
     const result = await db.sSHSession.updateMany({
       where: {
         id,

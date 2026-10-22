@@ -62,7 +62,10 @@ export async function authorize(p: Principal, id: string, op: string) {
     where: { id, organizationId: p.organizationId, archived: false },
   });
   if (!server) throw new NotFoundException("Server unavailable");
-  if (!permitted(p, server.organizationId, op, await grants(p, id)))
+  if (
+    !(p.managementOperation && op === "server_get_info") &&
+    !permitted(p, server.organizationId, op, await grants(p, id))
+  )
     throw new ForbiddenException("Operation is not permitted for this server");
   return server;
 }
@@ -91,13 +94,22 @@ async function grants(p: Principal, serverId: string): Promise<string[]> {
 }
 async function enforceAgentLimits(agentId: string) {
   const agent = await db.agent.findUnique({ where: { id: agentId } });
-  const window = async (ms: number) =>
-    db.commandExecution.count({
+  const window = async (ms: number) => {
+    const ssh = await db.commandExecution.count({
       where: {
         principalId: agentId,
         createdAt: { gt: new Date(Date.now() - ms) },
       },
     });
+    const management = await db.auditEvent.count({
+      where: {
+        principalId: agentId,
+        action: { startsWith: "mcp:" },
+        createdAt: { gt: new Date(Date.now() - ms) },
+      },
+    });
+    return ssh + management;
+  };
   if (
     agent?.maxCallsPerMinute &&
     (await window(60000)) >= agent.maxCallsPerMinute
@@ -110,7 +122,7 @@ export async function listServers(p: Principal) {
   return db.server.findMany({
     where: {
       organizationId: p.organizationId,
-      ...(p.kind === "agent"
+      ...(p.kind === "agent" && !p.managementOperation
         ? { archived: false, agentPermissions: { some: { agentId: p.id } } }
         : ["owner", "administrator"].includes(p.role)
           ? {}

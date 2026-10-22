@@ -90,6 +90,8 @@ export function McpServer() {
         >
           <li>
             Register an agent under AI Agents and choose its servers and tools.
+            Enable Workspace management for keys, VPN profiles, folders and
+            other app administration.
           </li>
           <li>
             Copy the token shown once after creation into your client’s secret
@@ -116,7 +118,10 @@ export function McpServer() {
         </p>
         <div className="section-title">Tools</div>
         <div className="check-grid">
-          {(q.data?.operations || [])
+          {[
+            ...(q.data?.operations || []),
+            ...(q.data?.managementTools || []).map((t: Row) => t.name),
+          ]
             .filter((o: string) => o !== "terminal")
             .map((o: string) => (
               <span key={o} className="mono small" style={{ padding: "4px 0" }}>
@@ -135,6 +140,8 @@ export function Agents() {
   const { servers } = useServers();
   const [token, setToken] = useState("");
   const [form, setForm] = useState<{
+    id?: string;
+    workspaceManagement: boolean;
     name: string;
     level: string;
     days: number;
@@ -165,6 +172,7 @@ export function Agents() {
           onClick={() =>
             setForm({
               name: "",
+              workspaceManagement: false,
               level: "viewer",
               days: 30,
               serverIds: [],
@@ -227,6 +235,11 @@ export function Agents() {
                   <td>
                     {a.level} · {a.permissions.length} server
                     {a.permissions.length === 1 ? "" : "s"}
+                    {a.tokens.some(
+                      (t: Row) =>
+                        !t.revoked &&
+                        JSON.parse(t.scopes).includes("workspace_manage"),
+                    ) && <div className="badge">Workspace management</div>}
                   </td>
                   <td className="small">
                     {a.maxCallsPerMinute || a.maxCallsPerDay
@@ -253,6 +266,36 @@ export function Agents() {
                       onClick={() => setActivity(a)}
                     >
                       Activity
+                    </Button>
+                    <Button
+                      variant="text"
+                      size="sm"
+                      disabled={a.revoked}
+                      onClick={() => {
+                        const scopes: string[] = [
+                          ...new Set<string>(
+                            a.tokens
+                              .filter((t: Row) => !t.revoked)
+                              .flatMap((t: Row) => JSON.parse(t.scopes)),
+                          ),
+                        ];
+                        setForm({
+                          id: a.id,
+                          name: a.name,
+                          level: a.level,
+                          days: 30,
+                          serverIds: a.permissions.map((p: Row) => p.serverId),
+                          operations: scopes.filter(
+                            (op) => op !== "workspace_manage",
+                          ),
+                          workspaceManagement:
+                            scopes.includes("workspace_manage"),
+                          perMinute: "",
+                          perDay: "",
+                        });
+                      }}
+                    >
+                      Access
                     </Button>
                     <Button
                       variant="text"
@@ -309,7 +352,7 @@ export function Agents() {
       </div>
       {form && (
         <Drawer
-          title="Register Agent"
+          title={form.id ? "Agent Access · " + form.name : "Register Agent"}
           wide
           onClose={() => setForm(null)}
           footer={
@@ -318,39 +361,53 @@ export function Agents() {
                 Cancel
               </Button>
               <Button
-                disabled={!form.name.trim() || !form.serverIds.length}
+                disabled={
+                  !form.name.trim() ||
+                  (!form.serverIds.length && !form.workspaceManagement)
+                }
                 onClick={() =>
-                  void api<Row>("agents", {
-                    name: form.name.trim(),
-                    level: form.level,
-                    expiresInDays: form.days,
-                    serverIds: form.serverIds,
-                    operations: form.operations,
-                    maxCallsPerMinute: cap(form.perMinute),
-                    maxCallsPerDay: cap(form.perDay),
-                  })
+                  void api<Row>(
+                    form.id ? "agents/" + form.id + "/access" : "agents",
+                    {
+                      level: form.level,
+                      serverIds: form.serverIds,
+                      operations: form.operations,
+                      workspaceManagement: form.workspaceManagement,
+                      ...(!form.id
+                        ? {
+                            name: form.name.trim(),
+                            expiresInDays: form.days,
+                            maxCallsPerMinute: cap(form.perMinute),
+                            maxCallsPerDay: cap(form.perDay),
+                          }
+                        : {}),
+                    },
+                    form.id ? "PATCH" : "POST",
+                  )
                     .then((r) => {
-                      setToken(r.token);
+                      if (r.token) setToken(r.token);
                       setForm(null);
                       void refresh("agents");
                     })
                     .catch(notify.error)
                 }
               >
-                Create Token
+                {form.id ? "Save Access" : "Create Token"}
               </Button>
             </>
           }
         >
-          <Field label="Agent Name" required>
-            <input
-              autoFocus
-              className="input"
-              placeholder="Infrastructure assistant"
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-            />
-          </Field>
+          {!form.id && (
+            <Field label="Agent Name" required>
+              <input
+                autoFocus
+                className="input"
+                placeholder="Infrastructure assistant"
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+              />
+            </Field>
+          )}
           <div className="grid-2">
             <Field
               label="Permission level"
@@ -359,7 +416,21 @@ export function Agents() {
               <select
                 className="select"
                 value={form.level}
-                onChange={(e) => setForm({ ...form, level: e.target.value })}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    level: e.target.value,
+                    workspaceManagement:
+                      e.target.value === "administrator" &&
+                      form.workspaceManagement,
+                    operations:
+                      e.target.value === "viewer"
+                        ? form.operations.filter((op) =>
+                            settings.data?.readOperations.includes(op),
+                          )
+                        : form.operations,
+                  })
+                }
               >
                 <option value="viewer">Viewer</option>
                 <option value="operator">Operator</option>
@@ -367,53 +438,75 @@ export function Agents() {
                 <option value="custom">Custom</option>
               </select>
             </Field>
-            <Field label="Expires after (days)">
-              <input
-                className="input"
-                type="number"
-                min={1}
-                max={90}
-                value={form.days}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    days: Math.max(
-                      1,
-                      Math.min(90, Number(e.target.value) || 1),
-                    ),
-                  })
-                }
-              />
-            </Field>
+            {!form.id && (
+              <Field label="Expires after (days)">
+                <input
+                  className="input"
+                  type="number"
+                  min={1}
+                  max={90}
+                  value={form.days}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      days: Math.max(
+                        1,
+                        Math.min(90, Number(e.target.value) || 1),
+                      ),
+                    })
+                  }
+                />
+              </Field>
+            )}
           </div>
-          <div className="grid-2">
-            <Field label="Max calls per minute" hint="Empty means unlimited.">
-              <input
-                className="input"
-                inputMode="numeric"
-                value={form.perMinute}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    perMinute: e.target.value.replace(/\D/g, ""),
-                  })
-                }
-              />
-            </Field>
-            <Field label="Max calls per day" hint="Counts SSH operations.">
-              <input
-                className="input"
-                inputMode="numeric"
-                value={form.perDay}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    perDay: e.target.value.replace(/\D/g, ""),
-                  })
-                }
-              />
-            </Field>
-          </div>
+          {!form.id && (
+            <div className="grid-2">
+              <Field label="Max calls per minute" hint="Empty means unlimited.">
+                <input
+                  className="input"
+                  inputMode="numeric"
+                  value={form.perMinute}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      perMinute: e.target.value.replace(/\D/g, ""),
+                    })
+                  }
+                />
+              </Field>
+              <Field
+                label="Max calls per day"
+                hint="Counts SSH and workspace management calls."
+              >
+                <input
+                  className="input"
+                  inputMode="numeric"
+                  value={form.perDay}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      perDay: e.target.value.replace(/\D/g, ""),
+                    })
+                  }
+                />
+              </Field>
+            </div>
+          )}
+          <div className="drawer-section">Workspace management</div>
+          <Check
+            label="Manage this workspace through MCP"
+            checked={form.workspaceManagement}
+            disabled={form.level !== "administrator"}
+            onChange={(workspaceManagement) =>
+              setForm({ ...form, workspaceManagement })
+            }
+          />
+          <p className="hint" style={{ marginBottom: 16 }}>
+            Administrator agents can manage SSH identities, VPNs, folders,
+            servers, users, teams, settings and other agents. Existing tokens
+            receive access immediately. SSH execution still uses the selected
+            tools and server grants; approval decisions stay in the app.
+          </p>
           <div className="drawer-section">Servers</div>
           <div className="check-grid">
             {servers.map((s) => (

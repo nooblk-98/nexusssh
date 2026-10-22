@@ -5,6 +5,8 @@ export type Principal = {
   role: string;
   scopes: string[];
   tokenId?: string;
+  ownerId?: string;
+  managementOperation?: string;
 };
 export const readOperations = [
   "server_get_info",
