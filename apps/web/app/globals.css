@@ -211,6 +211,34 @@ p {
 .input.invalid {
   border-color: var(--danger);
 }
+.vpn-file-input {
+  width: 100%;
+  min-width: 0;
+  height: 35px;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+.vpn-file-input::file-selector-button {
+  height: 35px;
+  margin-right: 12px;
+  padding: 0 12px;
+  border: 1px solid var(--field-border);
+  border-radius: 6px;
+  background: var(--field);
+  color: var(--text-strong);
+  font: inherit;
+  cursor: pointer;
+}
+.vpn-file-input::file-selector-button:hover {
+  background: var(--hover);
+  border-color: var(--primary);
+}
+.vpn-file-input:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
 .search-input {
   position: relative;
   display: flex;

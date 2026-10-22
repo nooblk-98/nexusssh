@@ -17,7 +17,7 @@ test("import, select, edit and delete a WireGuard VPN profile", async ({
   await page.getByRole("button", { name: "Add VPN Profile" }).click();
   const name = "VPN browser verification " + Date.now();
   const key = randomBytes(32).toString("base64");
-  const conf = `[Interface]\nPrivateKey = ${key}\nAddress = 10.77.0.2/32\n[Peer]\nPublicKey = ${key}\nEndpoint = vpn.example.test:51820\nAllowedIPs = 10.77.0.0/24`;
+  const conf = `[Interface]\nPrivateKey = ${key}\nAddress = 10.77.0.2/32\nListenPort = 51820\n[Peer]\nPublicKey = ${key}\nEndpoint = vpn.example.test:51820\nAllowedIPs = 10.77.0.0/24`;
   await page.getByLabel(/^Profile name/).fill(name);
   await page
     .getByLabel(/^WireGuard configuration/)
@@ -33,6 +33,25 @@ test("import, select, edit and delete a WireGuard VPN profile", async ({
       mimeType: "text/plain",
       buffer: Buffer.from(conf),
     });
+  await expect(page.getByLabel(/^WireGuard configuration/)).toHaveValue(conf);
+  await page.screenshot({
+    path: "test-results/vpn-import-desktop.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  const upload = page.getByLabel("Import WireGuard configuration", {
+    exact: false,
+  });
+  const uploadBox = await upload.boundingBox();
+  expect(uploadBox?.height).toBe(35);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(390);
+  await page.screenshot({
+    path: "test-results/vpn-import-mobile.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.getByRole("button", { name: "Save VPN Profile" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   const row = page.getByRole("row").filter({ hasText: name });

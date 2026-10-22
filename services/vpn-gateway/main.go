@@ -37,6 +37,7 @@ type Config struct {
 	Addresses  []string `json:"addresses"`
 	DNS        []string `json:"dns"`
 	MTU        int      `json:"mtu"`
+	ListenPort int      `json:"listenPort"`
 	Peers      []Peer   `json:"peers"`
 }
 type tunnel struct {
@@ -62,6 +63,9 @@ func keyHex(value string) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 func newTunnel(c Config) (*tunnel, error) {
+	if c.ListenPort < 0 || c.ListenPort > 65535 {
+		return nil, errors.New("invalid listen port")
+	}
 	if len(c.Addresses) == 0 || len(c.Addresses) > 8 || len(c.Peers) == 0 || len(c.Peers) > 16 || c.MTU < 1280 || c.MTU > 1500 {
 		return nil, errors.New("invalid configuration")
 	}
@@ -88,6 +92,7 @@ func newTunnel(c Config) (*tunnel, error) {
 	}
 	var settings strings.Builder
 	fmt.Fprintf(&settings, "private_key=%s\n", private)
+	fmt.Fprintf(&settings, "listen_port=%d\n", c.ListenPort)
 	for _, p := range c.Peers {
 		public, e := keyHex(p.PublicKey)
 		if e != nil {

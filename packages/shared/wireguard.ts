@@ -22,6 +22,7 @@ export const wireguardSchema = z
     addresses: z.array(cidr).min(1).max(8),
     dns: z.array(ip).max(8).default([]),
     mtu: z.number().int().min(1280).max(1500).default(1420),
+    listenPort: z.number().int().min(0).max(65535).optional(),
     peers: z
       .array(
         z
@@ -70,7 +71,7 @@ export function parseWireGuard(text: string): WireGuardConfig {
     const [, name, value] = match;
     const allowed =
       section === iface
-        ? ["PrivateKey", "Address", "DNS", "MTU"]
+        ? ["PrivateKey", "Address", "DNS", "MTU", "ListenPort"]
         : [
             "PublicKey",
             "PresharedKey",
@@ -80,17 +81,24 @@ export function parseWireGuard(text: string): WireGuardConfig {
           ];
     if (!allowed.includes(name))
       throw new Error(
-        `Unsupported WireGuard field: ${name}. Import a client profile without scripts, routing overrides, or listen ports.`,
+        `Unsupported WireGuard field: ${name}. Import a client profile without scripts or routing overrides.`,
       );
     if (section[name]) throw new Error(`Duplicate WireGuard field: ${name}`);
     section[name] = value.trim();
   }
   const list = (v?: string) => (v ? v.split(",").map((x) => x.trim()) : []);
+  if (
+    iface?.ListenPort !== undefined &&
+    (!/^\d+$/.test(iface.ListenPort) || Number(iface.ListenPort) > 65535)
+  )
+    throw new Error("ListenPort must be a whole number from 0 to 65535.");
   return wireguardSchema.parse({
     privateKey: iface?.PrivateKey,
     addresses: list(iface?.Address),
     dns: list(iface?.DNS),
     mtu: iface?.MTU ? Number(iface.MTU) : undefined,
+    listenPort:
+      iface?.ListenPort !== undefined ? Number(iface.ListenPort) : undefined,
     peers: peers.map((p) => ({
       publicKey: p.PublicKey,
       presharedKey: p.PresharedKey,

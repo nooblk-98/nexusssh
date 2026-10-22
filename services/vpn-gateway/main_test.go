@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +25,47 @@ func keyPair(t *testing.T) (string, string) {
 		t.Fatal(e)
 	}
 	return base64.StdEncoding.EncodeToString(k.Bytes()), base64.StdEncoding.EncodeToString(k.PublicKey().Bytes())
+}
+func TestListenPort(t *testing.T) {
+	private, public := keyPair(t)
+	c := Config{PrivateKey: private, Addresses: []string{"10.78.0.2/32"}, MTU: 1420, Peers: []Peer{{PublicKey: public, Endpoint: "127.0.0.1:9", AllowedIPs: []string{"10.78.0.1/32"}}}}
+	for _, invalid := range []int{-1, 65536} {
+		c.ListenPort = invalid
+		if tunnel, err := newTunnel(c); err == nil {
+			tunnel.dev.Close()
+			t.Fatalf("accepted invalid listen port %d", invalid)
+		}
+	}
+	c.ListenPort = 0
+	auto, err := newTunnel(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := auto.dev.IpcGet()
+	auto.dev.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(settings, "\n") {
+		if strings.HasPrefix(line, "listen_port=") {
+			c.ListenPort, err = strconv.Atoi(strings.TrimPrefix(line, "listen_port="))
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if c.ListenPort == 0 {
+		t.Fatal("automatic port was not allocated")
+	}
+	fixed, err := newTunnel(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fixed.dev.Close()
+	settings, err = fixed.dev.IpcGet()
+	if err != nil || !strings.Contains(settings, fmt.Sprintf("listen_port=%d\n", c.ListenPort)) {
+		t.Fatal("configured listen port was not applied")
+	}
 }
 func TestWireGuardTunnel(t *testing.T) {
 	serverKey, serverPublic := keyPair(t)

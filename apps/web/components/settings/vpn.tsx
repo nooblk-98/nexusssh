@@ -200,7 +200,7 @@ export function VpnProfiles() {
             hint="Choose a .conf file, or paste its contents below."
           >
             <input
-              className="input"
+              className="vpn-file-input"
               type="file"
               accept=".conf,.txt"
               onChange={async (e) => {
