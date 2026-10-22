@@ -1,9 +1,10 @@
 "use client";
 import { api, notify, refresh, useApi, type Row } from "./api";
 import { narrow, useWorkspace } from "./store";
+import type { Folder } from "./folders";
 export function useServers() {
   const servers = useApi<Row[]>("servers");
-  const groups = useApi<Row[]>("groups");
+  const groups = useApi<Folder[]>("groups");
   return {
     servers: (servers.data || []).filter((s) => !s.archived),
     groups: [...(groups.data || [])].sort((a, b) =>

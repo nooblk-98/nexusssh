@@ -58,6 +58,7 @@ import { verifyTotp, newTotp, totpStep } from "./totp.js";
 import { scanHostKey } from "../../../packages/ssh-core/index.js";
 import { connectionPath } from "./domain.js";
 import { closeSftp } from "./sftp.js";
+import { saveFolder, deleteFolder } from "./folders.js";
 // Keep in sync with the icon picker in apps/web/components/icons.tsx.
 const serverIcons = [
   "linux",
@@ -763,6 +764,28 @@ export class AppController {
       },
     });
   }
+  @Patch("servers/:id/move") async moveServer(
+    @Req() req: Request,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    const p = await authenticate(req);
+    admin(p);
+    await authorize(p, id, "server_get_info");
+    const a = z.object({ groupId: z.uuid().nullable() }).strict().parse(body);
+    await db.$transaction(async (tx) => {
+      if (
+        a.groupId &&
+        !(await tx.serverGroup.findFirst({
+          where: { id: a.groupId, organizationId: p.organizationId },
+        }))
+      )
+        throw new BadRequestException("Destination folder unavailable");
+      await tx.server.update({ where: { id }, data: { groupId: a.groupId } });
+    });
+    await audit(p, "server_moved", "success", id);
+    return { id, groupId: a.groupId };
+  }
   @Delete("servers/:id") async deleteServer(
     @Req() req: Request,
     @Param("id") id: string,
@@ -783,44 +806,42 @@ export class AppController {
   @Post("groups") async group(@Req() req: Request, @Body() body: unknown) {
     const p = await authenticate(req);
     admin(p);
-    const a = z.object({ name: z.string().trim().min(1).max(80) }).parse(body);
-    if (
-      await db.serverGroup.findFirst({
-        where: { organizationId: p.organizationId, name: a.name },
+    const a = z
+      .object({
+        name: z.string().trim().min(1).max(80),
+        parentId: z.uuid().nullable().optional(),
       })
-    )
-      throw new ConflictException("A folder with this name already exists");
-    const group = await db.serverGroup.create({
-      data: { organizationId: p.organizationId, ...a },
-    });
+      .strict()
+      .parse(body);
+    const group = await saveFolder(p.organizationId, a);
     await audit(p, "folder_created", "success");
     return group;
   }
-  @Patch("groups/:id") async renameGroup(
+  @Patch("groups/:id") async updateGroup(
     @Req() req: Request,
     @Param("id") id: string,
     @Body() body: unknown,
   ) {
     const p = await authenticate(req);
     admin(p);
-    const a = z.object({ name: z.string().trim().min(1).max(80) }).parse(body);
-    if (
-      await db.serverGroup.findFirst({
-        where: {
-          organizationId: p.organizationId,
-          name: a.name,
-          id: { not: id },
-        },
+    const a = z
+      .object({
+        name: z.string().trim().min(1).max(80).optional(),
+        parentId: z.uuid().nullable().optional(),
       })
-    )
-      throw new ConflictException("A folder with this name already exists");
-    const result = await db.serverGroup.updateMany({
-      where: { id, organizationId: p.organizationId },
-      data: a,
-    });
-    if (!result.count) throw new NotFoundException();
-    await audit(p, "folder_renamed", "success");
-    return { id, ...a };
+      .strict()
+      .refine(
+        (v) => v.name !== undefined || v.parentId !== undefined,
+        "Specify a name or destination folder",
+      )
+      .parse(body);
+    const group = await saveFolder(p.organizationId, a, id);
+    await audit(
+      p,
+      a.parentId !== undefined ? "folder_moved" : "folder_renamed",
+      "success",
+    );
+    return group;
   }
   @Post("servers/scan-host-key") async scan(
     @Req() req: Request,
@@ -859,16 +880,7 @@ export class AppController {
   ) {
     const p = await authenticate(req);
     admin(p);
-    // Servers in the folder become ungrouped; nothing else is removed.
-    await db.$transaction([
-      db.server.updateMany({
-        where: { groupId: id, organizationId: p.organizationId },
-        data: { groupId: null },
-      }),
-      db.serverGroup.deleteMany({
-        where: { id, organizationId: p.organizationId },
-      }),
-    ]);
+    await deleteFolder(p.organizationId, id);
     await audit(p, "folder_deleted", "success");
     return { deleted: true };
   }

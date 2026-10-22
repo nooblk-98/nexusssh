@@ -720,6 +720,23 @@ p {
 .tree-folder.closed .chev {
   transform: rotate(-90deg);
 }
+.tree-folder > svg {
+  flex-shrink: 0;
+}
+.tree .drop-target {
+  background: var(--primary-soft);
+  outline: 1px solid var(--primary);
+  outline-offset: -1px;
+}
+.tree-drop-root {
+  padding: 10px;
+  margin: 4px 0;
+  border: 1px dashed var(--field-border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
 .tree-server {
   display: flex;
   align-items: center;

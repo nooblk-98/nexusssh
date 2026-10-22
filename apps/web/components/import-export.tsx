@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { create } from "zustand";
 import { api, notify, refresh, saveFile, useApi, type Row } from "../lib/api";
+import { folderPath, folderOptions } from "../lib/folders";
 import { useServers } from "../lib/servers";
 import { Button, Drawer, Field } from "./ui";
 
@@ -11,6 +12,7 @@ type Draft = {
   port: number;
   username: string;
   folder?: string;
+  folderPath?: string[];
   icon?: string;
   tags?: string[];
   description?: string;
@@ -95,13 +97,14 @@ function Export({ close }: { close: () => void }) {
     JSON.stringify(
       {
         format: "nexusssh-servers",
-        version: 1,
+        version: 2,
         servers: servers.map((s) => ({
           name: s.name,
           host: s.host,
           port: s.port,
           username: s.username,
           folder: folder(s.groupId),
+          folderPath: folderPath(groups, s.groupId).map((g) => g.name),
           icon: s.icon,
           tags: (s.tags || []).map((t: Row) => t.name),
           description: s.description,
@@ -178,17 +181,32 @@ function Import({ close }: { close: () => void }) {
     setBusy(true);
     let ok = 0;
     const failed: string[] = [];
-    const folders = new Map(groups.map((g) => [g.name, g.id as string]));
+    const folders = new Map(
+      groups.map((g) => [
+        JSON.stringify(folderPath(groups, g.id).map((f) => f.name)),
+        g.id as string,
+      ]),
+    );
     for (const d of drafts) {
       try {
         let folderId = groupId || null;
-        if (d.folder) {
-          if (!folders.has(d.folder))
-            folders.set(
-              d.folder,
-              (await api<Row>("groups", { name: d.folder })).id,
-            );
-          folderId = folders.get(d.folder)!;
+        const path = d.folderPath?.length
+          ? d.folderPath
+          : d.folder
+            ? [d.folder]
+            : [];
+        if (path.length) {
+          let parentId: string | null = null;
+          for (let i = 0; i < path.length; i++) {
+            const key = JSON.stringify(path.slice(0, i + 1));
+            if (!folders.has(key))
+              folders.set(
+                key,
+                (await api<Row>("groups", { name: path[i], parentId })).id,
+              );
+            parentId = folders.get(key)!;
+          }
+          folderId = parentId;
         }
         await api("servers", {
           name: d.name.slice(0, 100),
@@ -304,9 +322,9 @@ function Import({ close }: { close: () => void }) {
             onChange={(e) => setGroupId(e.target.value)}
           >
             <option value="">None</option>
-            {groups.map((g) => (
+            {folderOptions(groups).map((g) => (
               <option key={g.id} value={g.id}>
-                {g.name}
+                {g.label}
               </option>
             ))}
           </select>

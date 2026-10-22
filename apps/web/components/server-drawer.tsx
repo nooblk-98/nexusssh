@@ -1,4 +1,5 @@
 "use client";
+import { folderOptions } from "../lib/folders";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { create } from "zustand";
 import { ArrowLeft, ChevronDown, ScanLine, ShieldCheck } from "lucide-react";
@@ -594,9 +595,9 @@ function ServerDrawer({ o, close }: { o: Open; close: () => void }) {
             onChange={put("groupId")}
           >
             <option value="">None</option>
-            {groups.map((g) => (
+            {folderOptions(groups).map((g) => (
               <option key={g.id} value={g.id}>
-                {g.name}
+                {g.label}
               </option>
             ))}
           </select>

@@ -7,7 +7,7 @@ A self-hosted infrastructure console with real browser SSH, SFTP, and a remote M
 
 ## What works
 
-- Next.js workspace backed by real SQLite records: a server tree with folders, drag-to-folder and context menus; tabbed terminal, SFTP and editor sessions with split views; Quick Connect and recent connections; settings pages for account, preferences, identities, users, teams, active sessions, history, MCP, agents, approvals and audit; auto/light/dark themes.
+- Next.js workspace backed by real SQLite records: a server tree with [nested folders](docs/FOLDERS.md), drag-and-drop moves for servers and folders, and context menus; tabbed terminal, SFTP and editor sessions with split views; Quick Connect and recent connections; settings pages for account, preferences, identities, users, teams, active sessions, history, MCP, agents, approvals and audit; auto/light/dark themes.
 - Terminal toolbar with snippets, search, command suggestions from history and common options, broadcast typing to several sessions, zoom and full screen; per-server encoding and keyboard settings.
 - Host keys are read with **Scan** in the server form and pinned only after you compare and save them.
 - Owner setup, password login, opaque HttpOnly sessions, TOTP MFA, role and server permissions.

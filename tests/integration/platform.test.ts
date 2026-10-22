@@ -252,6 +252,158 @@ describe.runIf(enabled)(
       expect(data.stats.total).toBe(1);
       expect(data.stats.agents).toBe(1);
     });
+    it("persists nested folders and moves without cycles or lost contents", async () => {
+      const create = async (name: string, parentId: string | null = null) => {
+        const result = await request("groups", { name, parentId });
+        expect(result.r.status).toBe(201);
+        return result.data.id as string;
+      };
+      const patch = (id: string, parentId: string | null) =>
+        request("groups/" + id, { parentId }, undefined, "PATCH");
+      const remove = (id: string) =>
+        request("groups/" + id, undefined, undefined, "DELETE");
+      const a = await create("Folder A"),
+        b = await create("Folder B");
+      const child = await create("Shared", a),
+        sibling = await create("Shared", b);
+      const leaf = await create("Leaf", child);
+      expect((await request("groups", { name: "Folder A" })).r.status).toBe(
+        409,
+      );
+      expect(
+        (await request("groups", { name: "Shared", parentId: a })).r.status,
+      ).toBe(409);
+      expect((await patch(a, leaf)).r.status).toBe(400);
+      expect((await patch(child, child)).r.status).toBe(400);
+      expect((await patch(child, randomUUID())).r.status).toBe(400);
+      expect((await patch(child, b)).r.status).toBe(409);
+      expect((await patch(child, null)).r.status).toBe(200);
+      const before = (await request("servers")).data.find(
+        (s: any) => s.id === serverId,
+      );
+      expect(
+        (
+          await request(
+            "servers/" + serverId + "/move",
+            { groupId: leaf },
+            undefined,
+            "PATCH",
+          )
+        ).r.status,
+      ).toBe(200);
+      const moved = (await request("servers")).data.find(
+        (s: any) => s.id === serverId,
+      );
+      expect(moved.groupId).toBe(leaf);
+      expect(moved.identityId).toBe(before.identityId);
+      expect(moved.host).toBe(before.host);
+      expect((await remove(child)).r.status).toBe(200);
+      expect(
+        (await request("groups")).data.find((g: any) => g.id === leaf).parentId,
+      ).toBeNull();
+      expect(
+        (await request("servers")).data.find((s: any) => s.id === serverId)
+          .groupId,
+      ).toBe(leaf);
+      expect((await remove(leaf)).r.status).toBe(200);
+      expect(
+        (await request("servers")).data.find((s: any) => s.id === serverId)
+          .groupId,
+      ).toBeNull();
+      await remove(sibling);
+      await remove(a);
+      await remove(b);
+      // A same-named child can replace its deleted parent at the top level.
+      const parent = await create("Same"),
+        same = await create("Same", parent);
+      expect((await remove(parent)).r.status).toBe(200);
+      expect(
+        (await request("groups")).data.find((g: any) => g.id === same).parentId,
+      ).toBeNull();
+      await remove(same);
+    });
+    it("isolates folder destinations by workspace and denies non-admin moves", async () => {
+      const own = (await request("groups", { name: "Protected folder" })).data
+        .id;
+      const original = cookie;
+      const other = await request("auth/login", {
+        email: "other@example.test",
+        password: "other-fixture-password-123",
+      });
+      cookie = other.r.headers.get("set-cookie")!.split(";")[0];
+      const foreign = (await request("groups", { name: "Foreign folder" })).data
+        .id;
+      try {
+        expect(
+          (
+            await request(
+              "groups/" + own,
+              { parentId: foreign },
+              undefined,
+              "PATCH",
+            )
+          ).r.status,
+        ).toBe(404);
+        expect(
+          (
+            await request(
+              "servers/" + serverId + "/move",
+              { groupId: foreign },
+              undefined,
+              "PATCH",
+            )
+          ).r.status,
+        ).toBe(404);
+        cookie = original;
+        expect(
+          (
+            await request("groups", {
+              name: "Invalid child",
+              parentId: foreign,
+            })
+          ).r.status,
+        ).toBe(400);
+        expect(
+          (
+            await request(
+              "groups/" + own,
+              { parentId: foreign },
+              undefined,
+              "PATCH",
+            )
+          ).r.status,
+        ).toBe(400);
+        expect(
+          (
+            await request(
+              "servers/" + serverId + "/move",
+              { groupId: foreign },
+              undefined,
+              "PATCH",
+            )
+          ).r.status,
+        ).toBe(400);
+        expect(
+          (await request("groups/" + own, { parentId: null }, token, "PATCH")).r
+            .status,
+        ).toBe(403);
+        expect(
+          (
+            await request(
+              "servers/" + serverId + "/move",
+              { groupId: null },
+              token,
+              "PATCH",
+            )
+          ).r.status,
+        ).toBe(403);
+      } finally {
+        cookie = other.r.headers.get("set-cookie")!.split(";")[0];
+        await request("groups/" + foreign, undefined, undefined, "DELETE");
+        cookie = original;
+        await request("groups/" + own, undefined, undefined, "DELETE");
+      }
+    });
     it("rejects anonymous, CSRF, and internal API access", async () => {
       expect((await fetch(`http://127.0.0.1:${port}/api/servers`)).status).toBe(
         401,

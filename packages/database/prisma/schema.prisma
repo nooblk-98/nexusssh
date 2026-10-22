@@ -101,8 +101,12 @@ model ServerGroup {
   organizationId String
   organization Organization @relation(fields: [organizationId], references: [id])
   name String
+  parentId String?
+  parent ServerGroup? @relation("FolderTree", fields: [parentId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  children ServerGroup[] @relation("FolderTree")
   servers Server[]
-  @@unique([organizationId, name])
+  @@unique([organizationId, parentId, name])
+  @@index([parentId])
   @@index([organizationId])
 }
 
