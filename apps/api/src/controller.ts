@@ -22,7 +22,7 @@ import type { Prisma } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { randomBytes, randomUUID } from "node:crypto";
 import ipaddr from "ipaddr.js";
-import { utils as sshUtils } from "ssh2";
+import ssh2 from "ssh2";
 import { db } from "../../../packages/database/index.js";
 import { batchTokenAllowed } from "../../../packages/shared/operations.js";
 import {
@@ -183,7 +183,7 @@ const credentials = z
 function validateKeyCredential(value: z.infer<typeof credentials>) {
   if (value.kind !== "key") return;
   try {
-    const parsed = sshUtils.parseKey(value.privateKey!, value.passphrase);
+    const parsed = ssh2.utils.parseKey(value.privateKey!, value.passphrase);
     if (!(parsed instanceof Error) && parsed.isPrivateKey()) return;
   } catch {
     // Parser errors may contain sensitive key details; never return them.
