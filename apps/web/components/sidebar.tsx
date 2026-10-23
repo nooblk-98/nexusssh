@@ -24,6 +24,8 @@ import { useWorkspace } from "../lib/store";
 import { ServerIcon } from "./icons";
 import { openImportExport } from "./import-export";
 import { openServerDrawer } from "./server-drawer";
+import { DefaultsEditor, MetadataEditor } from "./metadata-editor";
+import { HealthIndicator, ServerHealth } from "./server-health";
 import {
   Button,
   Drawer,
@@ -85,6 +87,16 @@ export function mainMenu(admin: boolean): MenuItem[] {
 export function Sidebar({ me }: { me: Row }) {
   const admin = ["owner", "administrator"].includes(me.role);
   const { servers, groups } = useServers();
+  const tagsQuery = useApi<Row[]>("tags");
+  const tags = tagsQuery.data || [];
+  const [defaults, setDefaults] = useState<{ kind: "groups" | "tags"; row: Row } | null>(null);
+  const [view, setView] = useState<"tree" | "table" | "tags">("tree");
+  const [tagFilter, setTagFilter] = useState("");
+  const [checked, setChecked] = useState<string[]>([]);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [health, setHealth] = useState<{ title: string; servers: Row[]; groupId?: string } | null>(null);
+  const [healthNow, setHealthNow] = useState(() => Date.now());
+  useEffect(() => { const timer = setInterval(() => setHealthNow(Date.now()), 60_000); return () => clearInterval(timer); }, []);
   const { selected, select, setCollapsed } = useWorkspace();
   const [search, setSearch] = useState("");
   const [closed, setClosed] = useState<string[]>([]);
@@ -121,7 +133,7 @@ export function Sidebar({ me }: { me: Row }) {
     () =>
       servers.filter(
         (s) =>
-          !q ||
+          (!tagFilter || (s.tags || []).some((t: Row) => t.id === tagFilter)) && (!q ||
           matchesFolder(s.groupId) ||
           [
             s.name,
@@ -132,10 +144,11 @@ export function Sidebar({ me }: { me: Row }) {
           ]
             .join(" ")
             .toLowerCase()
-            .includes(q),
+            .includes(q)),
       ),
-    [servers, groups, q],
+    [servers, groups, q, tagFilter],
   );
+  const toggleChecked = (id: string) => setChecked((current) => current.includes(id) ? current.filter((x) => x !== id) : [...current, id]);
   const startMove = (kind: "server" | "folder", row: Row) => {
     setMove({ kind, row });
     setDestination((kind === "folder" ? row.parentId : row.groupId) || "");
@@ -166,6 +179,7 @@ export function Sidebar({ me }: { me: Row }) {
   };
   const serverMenu = (s: Row): MenuItem[] => [
     { label: "Connect", onClick: () => connectServer(s) },
+    { label: "Test connection and host key", onClick: () => setHealth({ title: `Check ${s.name}`, servers: [s] }) },
     { label: "Open SFTP", onClick: () => connectServer(s, "sftp") },
     {
       label: "Copy to Clipboard",
@@ -243,6 +257,7 @@ export function Sidebar({ me }: { me: Row }) {
       disabled: !list.length,
       onClick: () => list.forEach((s) => connectServer(s)),
     },
+    { label: "Test all", disabled: !list.length, onClick: () => setHealth({ title: `Test folder: ${g.name}`, groupId: g.id, servers: [...new Map(list.map((s) => [s.id, s])).values()] }) },
     ...(admin
       ? ([
           {
@@ -256,6 +271,7 @@ export function Sidebar({ me }: { me: Row }) {
               return newFolder(g.id);
             },
           },
+          { label: "Edit defaults", onClick: () => setDefaults({ kind: "groups", row: g }) },
           { label: "Move to…", onClick: () => startMove("folder", g) },
           "sep",
           {
@@ -360,8 +376,9 @@ export function Sidebar({ me }: { me: Row }) {
     },
   });
   const serverRow = (s: Row, depth = 0) => (
+    <div key={s.id} style={{ display: "flex", alignItems: "center" }}>
+    {admin && <input type="checkbox" aria-label={`Select ${s.name}`} checked={checked.includes(s.id)} onChange={() => toggleChecked(s.id)} />}
     <button
-      key={s.id}
       className={"tree-server" + (selected === s.id ? " selected" : "")}
       style={{ paddingLeft: 10 + depth * 20 }}
       data-server-id={s.id}
@@ -379,11 +396,13 @@ export function Sidebar({ me }: { me: Row }) {
       <span className="srv-icon">
         <ServerIcon name={s.icon} />
       </span>
+      <HealthIndicator server={s} now={healthNow} />
       <span className="grow">
         <div className="srv-name ellipsis">{s.name}</div>
         <div className="srv-sub ellipsis">{s.host}&nbsp; | &nbsp;SSH2</div>
       </span>
     </button>
+    </div>
   );
   const root = visible.filter((s) => !s.groupId);
   const shownFolders = new Set<string>();
@@ -486,6 +505,12 @@ export function Sidebar({ me }: { me: Row }) {
           </button>
         )}
       </div>
+      <div className="sidebar-tools" style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+        {(["tree", "table", "tags"] as const).map((mode) => <button key={mode} className="btn btn-secondary" aria-pressed={view === mode} onClick={() => setView(mode)}>{mode === "tree" ? "Tree" : mode === "table" ? "Table" : "By tag"}</button>)}
+        <select className="select" aria-label="Filter by tag" value={tagFilter} onChange={(e) => setTagFilter(e.target.value)}><option value="">All tags</option>{tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}</select>
+      </div>
+      {admin && view === "tags" && <div className="sidebar-tools"><select className="select" aria-label="Edit tag defaults" onChange={(e) => { const tag = tags.find((x) => x.id === e.target.value); if (tag) setDefaults({ kind: "tags", row: tag }); e.currentTarget.value = ""; }} defaultValue=""><option value="">Edit tag defaults…</option>{tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}</select></div>}
+      {admin && !!checked.length && <div className="sidebar-tools">{checked.length} selected <Button onClick={() => setBulkOpen(true)}>Bulk edit</Button><Button variant="secondary" onClick={() => setChecked([])}>Clear</Button></div>}
       <nav
         className="tree tree-root"
         aria-label="Servers"
@@ -499,8 +524,9 @@ export function Sidebar({ me }: { me: Row }) {
           ]);
         }}
       >
-        {groups.filter((g) => !g.parentId).map((g) => renderFolder(g))}
-        {root.map((s) => serverRow(s))}
+        {view === "tree" && <>{groups.filter((g) => !g.parentId).map((g) => renderFolder(g))}{root.map((s) => serverRow(s))}</>}
+        {view === "table" && <div style={{ overflowX: "auto" }}><table className="table"><thead><tr><th>Select</th><th>Status</th><th>Name</th><th>Host</th><th>Environment</th><th>vCPU</th><th>RAM</th><th>Disk</th><th>OS</th><th>Role</th><th>Check</th></tr></thead><tbody>{visible.map((s) => <tr key={s.id} onClick={() => select(s.id)}><td><input type="checkbox" aria-label={`Select ${s.name}`} checked={checked.includes(s.id)} onChange={() => toggleChecked(s.id)} onClick={(e) => e.stopPropagation()} /></td><td><HealthIndicator server={s} now={healthNow} /></td><td><button className="btn btn-secondary" onClick={() => openServerDrawer({ server: s })}>{s.name}</button></td><td>{s.host}</td><td>{s.effectiveSettings?.values?.environment ?? s.environment}</td><td>{s.vcpu ?? "—"}</td><td>{s.ramBytes ?? "—"}</td><td>{s.diskBytes ?? "—"}</td><td>{s.os || "—"}</td><td>{s.role || "—"}</td><td><button className="btn btn-secondary" onClick={() => setHealth({ title: `Check ${s.name}`, servers: [s] })}>Test</button></td></tr>)}</tbody></table></div>}
+        {view === "tags" && <>{tags.filter((tag) => !tagFilter || tag.id === tagFilter).map((tag) => { const list = visible.filter((s) => (s.tags || []).some((t: Row) => t.id === tag.id)); return list.length || tagFilter ? <section key={tag.id}><div className="tree-folder">{tag.name} ({list.length})</div>{list.map((s) => serverRow(s))}</section> : null; })}{!tagFilter && visible.filter((s) => !(s.tags || []).length).length > 0 && <section><div className="tree-folder">Untagged</div>{visible.filter((s) => !(s.tags || []).length).map((s) => serverRow(s))}</section>}</>}
         {admin && drag && (
           <div
             className={
@@ -530,6 +556,16 @@ export function Sidebar({ me }: { me: Row }) {
           <div className="tree-empty">No servers match “{search}”.</div>
         )}
       </nav>
+      {defaults && <DefaultsEditor kind={defaults.kind} row={defaults.row} onClose={() => setDefaults(null)} />}
+      {health && <ServerHealth title={health.title} servers={health.servers} groupId={health.groupId} canManage={admin} onClose={() => setHealth(null)} />}
+      {bulkOpen && <MetadataEditor title={`Bulk edit ${new Set(checked).size} servers`} bulk hardware onClose={() => setBulkOpen(false)} onSave={async ({ settings, inherit, metadata }) => {
+        const serverIds = [...new Set(checked)].filter((id) => servers.some((s) => s.id === id));
+        if (!serverIds.length) throw new Error("No selected servers are available.");
+        if (serverIds.length > 100) throw new Error("Select at most 100 servers.");
+        if (!Object.keys(settings).length && !inherit.length && !Object.keys(metadata).length) throw new Error("Choose at least one change.");
+        const result = await api<{ updated: number }>("servers/metadata/bulk", { serverIds, settings, inherit, metadata });
+        await refresh("servers"); setChecked([]); notify.success(`Updated ${result.updated} servers together.`);
+      }} />}
       {move && (
         <Drawer
           title={"Move " + move.row.name}

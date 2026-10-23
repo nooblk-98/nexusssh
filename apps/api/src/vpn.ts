@@ -14,6 +14,7 @@ import type { Request } from "express";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { db } from "../../../packages/database/index.js";
+import { settingsReferenceCount } from "./metadata.js";
 import { config } from "../../../packages/shared/config.js";
 import { seal } from "../../../packages/shared/crypto.js";
 import {
@@ -128,13 +129,14 @@ export class VpnController {
       }))
     )
       throw new NotFoundException("VPN profile unavailable");
-    if (await db.server.count({ where: { vpnProfileId: id } }))
-      throw new BadRequestException(
-        "Remove this VPN profile from its servers before deleting it, including archived servers",
-      );
     try {
-      await db.vpnProfile.delete({ where: { id } });
-    } catch {
+      await db.$transaction(async (tx) => {
+        if (await settingsReferenceCount(tx, p.organizationId, "vpnProfileId", id))
+          throw new BadRequestException("Remove this VPN profile from servers, folder defaults and tag defaults before deleting it");
+        await tx.vpnProfile.delete({ where: { id } });
+      });
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
       throw new BadRequestException("Profile is in use or unavailable");
     }
     await audit(p, "vpn_profile_deleted", "success");

@@ -105,6 +105,7 @@ model ServerGroup {
   parent ServerGroup? @relation("FolderTree", fields: [parentId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   children ServerGroup[] @relation("FolderTree")
   servers Server[]
+  defaults String @default("{}")
   @@unique([organizationId, parentId, name])
   @@index([parentId])
   @@index([organizationId])
@@ -118,6 +119,7 @@ model ServerTag {
   organization Organization @relation(fields: [organizationId], references: [id])
   name String
   servers Server[]
+  defaults String @default("{}")
   @@unique([organizationId, name])
   @@index([organizationId])
 }
@@ -159,6 +161,12 @@ model Server {
   host String
   port Int @default(22)
   username String
+  overrides String @default("{}")
+  vcpu Int?
+  ramBytes Decimal?
+  diskBytes Decimal?
+  os String?
+  role String?
   identityId String
   identity SSHIdentity @relation(fields: [identityId], references: [id])
   fingerprint String?
@@ -174,6 +182,8 @@ model Server {
   fileRoot String @default("/home")
   status String @default("unknown")
   lastCheckedAt DateTime?
+  healthFailureCategory String?
+  latestHealthCheckId String?
   bastionId String?
   vpnProfileId String?
   vpnProfile VpnProfile? @relation(fields: [vpnProfileId], references: [id], onDelete: Restrict)
@@ -189,6 +199,35 @@ model Server {
   transfers FileTransfer[]
   tasks BackgroundTask[]
   @@index([organizationId])
+}
+
+model HealthBatch {
+  id String @id @default(uuid())
+  organizationId String
+  principalId String
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  status String @default("queued")
+  checks HealthCheck[]
+  @@index([organizationId, status, expiresAt])
+}
+
+model HealthCheck {
+  id String @id @default(uuid())
+  batchId String
+  batch HealthBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  organizationId String
+  serverId String
+  createdAt DateTime @default(now())
+  checkedAt DateTime?
+  status String @default("queued")
+  failureCategory String?
+  observedFingerprint String?
+  fingerprintComparison String?
+  checkedHost String?
+  checkedPort Int?
+  @@index([batchId])
+  @@index([organizationId, serverId, createdAt])
 }
 
 model TeamPermission {

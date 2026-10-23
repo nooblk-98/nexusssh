@@ -4,13 +4,25 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { db } from "../../../packages/database/index.js";
+import { preflightAffected } from "./metadata.js";
+import { closeSftp } from "./sftp.js";
+
+function subtreeServerIds(folders: { id: string; parentId: string | null }[], servers: { id: string; groupId: string | null }[], root: string) {
+  const members = new Set([root]);
+  let size = -1;
+  while (size !== members.size) {
+    size = members.size;
+    for (const folder of folders) if (folder.parentId && members.has(folder.parentId)) members.add(folder.id);
+  }
+  return servers.filter((server) => server.groupId && members.has(server.groupId)).map((server) => server.id);
+}
 
 export async function saveFolder(
   organizationId: string,
   input: { name?: string; parentId?: string | null },
   id?: string,
 ) {
-  return db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     const folders = await tx.serverGroup.findMany({
       where: { organizationId },
     });
@@ -42,14 +54,21 @@ export async function saveFolder(
       throw new ConflictException(
         "A folder with this name already exists in the destination",
       );
-    return id
-      ? tx.serverGroup.update({ where: { id }, data: { name, parentId } })
-      : tx.serverGroup.create({ data: { organizationId, name, parentId } });
+    const affected = id && current?.parentId !== parentId
+      ? subtreeServerIds(folders, await tx.server.findMany({ where: { organizationId }, select: { id: true, groupId: true } }), id)
+      : [];
+    const folder = id
+      ? await tx.serverGroup.update({ where: { id }, data: { name, parentId } })
+      : await tx.serverGroup.create({ data: { organizationId, name, parentId } });
+    const invalidated = affected.length ? await preflightAffected(tx, organizationId, affected) : [];
+    return { folder, invalidated };
   });
+  for (const serverId of result.invalidated) closeSftp(serverId);
+  return result.folder;
 }
 
 export async function deleteFolder(organizationId: string, id: string) {
-  return db.$transaction(async (tx) => {
+  const affected = await db.$transaction(async (tx) => {
     const folders = await tx.serverGroup.findMany({
       where: { organizationId },
     });
@@ -63,6 +82,7 @@ export async function deleteFolder(organizationId: string, id: string) {
       throw new ConflictException(
         "Rename or move subfolders that share a name with a top-level folder before deleting this folder",
       );
+    const impacted = subtreeServerIds(folders, await tx.server.findMany({ where: { organizationId }, select: { id: true, groupId: true } }), id);
     await tx.server.updateMany({
       where: { groupId: id, organizationId },
       data: { groupId: null },
@@ -70,5 +90,7 @@ export async function deleteFolder(organizationId: string, id: string) {
     // The self-relation promotes direct children after removing this row.
     // This also allows a child to take its deleted parent's top-level name.
     await tx.serverGroup.delete({ where: { id } });
+    return impacted.length ? preflightAffected(tx, organizationId, impacted) : [];
   });
+  for (const serverId of affected) closeSftp(serverId);
 }

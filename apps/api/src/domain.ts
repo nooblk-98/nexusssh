@@ -6,6 +6,7 @@ import {
 import { Queue, QueueEvents } from "bullmq";
 import { randomUUID } from "node:crypto";
 import { reserveAgentCall } from "./agent-quota.js";
+import { resolveSettings, numericMetadata } from "./metadata.js";
 import { db } from "../../../packages/database/index.js";
 import { config, redisConnection } from "../../../packages/shared/config.js";
 import {
@@ -62,6 +63,16 @@ export async function authorize(p: Principal, id: string, op: string) {
     where: { id, organizationId: p.organizationId, archived: false },
   });
   if (!server) throw new NotFoundException("Server unavailable");
+  if (p.kind === "agent" && !(p.managementOperation && op === "server_get_info")) {
+    const grant = await db.agentPermission.findUnique({ where: { agentId_serverId: { agentId: p.id, serverId: id } } });
+    if (!grant || !JSON.parse(grant.operations).includes(op))
+      throw new ForbiddenException({ code: "server_not_granted", message: "This server operation is not granted to the agent" });
+    if (!p.scopes.includes(op))
+      throw new ForbiddenException({ code: "operation_not_in_token_scope", message: "This operation is not in the agent token scope" });
+    if (!permitted(p, server.organizationId, op, JSON.parse(grant.operations)))
+      throw new ForbiddenException({ code: "agent_policy_denied", message: "The agent level does not permit this operation" });
+    return server;
+  }
   if (
     !(p.managementOperation && op === "server_get_info") &&
     !permitted(p, server.organizationId, op, await grants(p, id))
@@ -92,9 +103,8 @@ async function grants(p: Principal, serverId: string): Promise<string[]> {
     ),
   ];
 }
-export async function listServers(p: Principal) {
-  return db.server.findMany({
-    where: {
+export function serverVisibility(p: Principal) {
+  return {
       organizationId: p.organizationId,
       ...(p.kind === "agent" && !p.managementOperation
         ? { archived: false, agentPermissions: { some: { agentId: p.id } } }
@@ -110,7 +120,11 @@ export async function listServers(p: Principal) {
                 },
               ],
             }),
-    },
+    };
+}
+export async function listServers(p: Principal) {
+  const servers = await db.server.findMany({
+    where: serverVisibility(p),
     include: {
       group: true,
       tags: true,
@@ -120,6 +134,33 @@ export async function listServers(p: Principal) {
     orderBy: [{ favorite: "desc" }, { name: "asc" }],
     take: 500,
   });
+  return Promise.all(servers.map(async (server) => ({ ...numericMetadata(server), effectiveSettings: await resolveSettings(server.id, p.organizationId) })));
+}
+export async function listServersPage(p: Principal, q: {
+  folder?: string | null; tag?: string; search?: string; fields?: string; cursor?: string;
+}) {
+  const allowed = ["effectiveSettings", "vcpu", "ramBytes", "diskBytes", "os", "role", "id", "name", "host", "port", "username", "groupId", "environment", "description", "icon", "favorite", "archived", "createdAt", "updatedAt", "status", "lastCheckedAt", "healthFailureCategory", "healthStale", "group", "tags", "vpnProfile", "bastion", "identity"];
+  const fields = q.fields?.split(",").map((s) => s.trim()).filter(Boolean);
+  if (fields?.some((f) => !allowed.includes(f)))
+    throw new BadRequestException("Invalid fields selection");
+  const page = await db.server.findMany({
+    where: {
+      AND: [serverVisibility(p)],
+      ...(q.folder !== undefined ? { groupId: q.folder } : {}),
+      ...(q.tag ? { tags: { some: { name: q.tag } } } : {}),
+      ...(q.search ? { OR: ["name", "host", "description"].map((field) => ({ [field]: { contains: q.search } })) } : {}),
+      ...(q.cursor ? { id: { gt: q.cursor } } : {}),
+    },
+    include: { group: true, tags: true, vpnProfile: { select: { id: true, name: true } }, bastion: { select: { id: true, name: true } }, identity: { select: { id: true, name: true } } },
+    orderBy: { id: "asc" }, take: 101,
+  });
+  return {
+    servers: await Promise.all(page.slice(0, 100).map(async (s) => {
+      const row = { ...numericMetadata(s), effectiveSettings: await resolveSettings(s.id, p.organizationId) };
+      return fields ? Object.fromEntries(fields.map((f) => [f, row[f as keyof typeof row]])) : row;
+    })),
+    nextCursor: page.length > 100 ? page[99].id : null,
+  };
 }
 // Optional webhook (Slack, Discord, Teams or any JSON endpoint) told about
 // new approval requests so they are not left waiting unseen.
@@ -226,6 +267,7 @@ export async function connection(
   serverId: string,
   org: string,
   inheritedVpn?: Connection["vpn"],
+  allowAutoPin = true,
 ): Promise<Connection> {
   const s = await db.server.findFirstOrThrow({
     where: { id: serverId, organizationId: org },
@@ -235,33 +277,25 @@ export async function connection(
       bastion: { include: { identity: true, vpnProfile: true } },
     },
   });
-  const map = (s: any): Connection => ({
-    ...(s.vpnProfile
-      ? {
-          vpn: {
-            id: s.vpnProfile.id,
-            config: unseal(
-              s.vpnProfile.encryptedConfig,
-              config.ENCRYPTION_KEY,
-              org + ":vpn:" + s.vpnProfile.id,
-            ),
-          },
-        }
-      : {}),
-    host: s.host,
-    port: s.port,
-    username: s.username,
-    fingerprint: s.fingerprint,
-    fileRoot: s.fileRoot,
-    credential: unseal(
-      s.identity.encryptedSecret,
-      config.ENCRYPTION_KEY,
-      org + ":" + s.identityId,
-    ),
-  });
+  const effective = await resolveSettings(s.id, org);
+  const bastionEffective = s.bastion ? await resolveSettings(s.bastion.id, org) : null;
+  const effectiveVpnIds = [effective.values.vpnProfileId, bastionEffective?.values.vpnProfileId].filter(Boolean);
+  if (new Set(effectiveVpnIds).size > 1) throw new BadRequestException("Conflicting VPN profiles on target and bastion");
+  const map = async (row: { host: string; port: number; fingerprint: string | null; fileRoot: string }, settings: typeof effective.values): Promise<Connection> => {
+    const identity = await db.sSHIdentity.findFirst({ where: { id: settings.identityId, organizationId: org } });
+    if (!identity) throw new BadRequestException("Identity unavailable");
+    const profile = settings.vpnProfileId ? await db.vpnProfile.findFirst({ where: { id: settings.vpnProfileId, organizationId: org } }) : null;
+    if (settings.vpnProfileId && !profile) throw new BadRequestException("VPN profile unavailable");
+    return {
+      ...(profile ? { vpn: { id: profile.id, config: unseal(profile.encryptedConfig, config.ENCRYPTION_KEY, org + ":vpn:" + profile.id) } } : {}),
+      host: row.host, port: row.port, username: settings.username,
+      fingerprint: row.fingerprint, fileRoot: row.fileRoot,
+      credential: unseal(identity.encryptedSecret, config.ENCRYPTION_KEY, org + ":" + identity.id),
+    };
+  };
   const result = {
-    ...map(s),
-    ...(s.bastion ? { bastion: map(s.bastion) } : {}),
+    ...await map(s, effective.values),
+    ...(s.bastion && bastionEffective ? { bastion: await map(s.bastion, bastionEffective.values) } : {}),
   };
   if (inheritedVpn) {
     if (result.vpn && result.vpn.id !== inheritedVpn.id)
@@ -272,7 +306,7 @@ export async function connection(
   }
   if (s.bastion?.archived || s.bastion?.bastionId)
     throw new BadRequestException("Bastion is unavailable");
-  if (await acceptsNewHostKeys(org)) {
+  if (allowAutoPin && await acceptsNewHostKeys(org)) {
     if (s.bastion && result.bastion)
       result.bastion.fingerprint = await pinNewHostKey(s.bastion, {
         vpn: result.vpn || result.bastion.vpn,
@@ -321,7 +355,7 @@ export async function operation(
   signal?: AbortSignal,
 ): Promise<any> {
   const a = parseOperation(op, input);
-  if (op === "servers_list") return { servers: await listServers(p) };
+  if (op === "servers_list") return listServersPage(p, a);
   if (op === "approval_get_status") {
     const row = await db.approvalRequest.findFirst({
       where: {
@@ -370,7 +404,7 @@ export async function operation(
     };
   }
   const server = await authorize(p, a.serverId, op);
-  if (op === "server_get_info") return { server };
+  if (op === "server_get_info") return { server: { ...numericMetadata(server), effectiveSettings: await resolveSettings(server.id, p.organizationId) } };
   // Read-only session calls still consume one agent call; reserve and record
   // together so concurrent callers cannot exceed the configured cap.
   if (p.kind === "agent" && (op === "ssh_session_status" || op === "ssh_disconnect")) {

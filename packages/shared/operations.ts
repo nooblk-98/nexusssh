@@ -19,7 +19,13 @@ const common = {
 export const schemas: Record<string, z.ZodObject<any>> = {};
 for (const op of [...readOperations, ...writeOperations])
   schemas[op] = z.object(common).strict();
-schemas.servers_list = z.object({}).strict();
+schemas.servers_list = z.object({
+  folder: z.uuid().nullable().optional(),
+  tag: z.string().min(1).max(32).optional(),
+  search: z.string().max(100).optional(),
+  fields: z.string().max(300).optional(),
+  cursor: z.uuid().optional(),
+}).strict();
 schemas.ssh_execute = z
   .object({
     ...common,

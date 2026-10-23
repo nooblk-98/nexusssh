@@ -40,6 +40,19 @@ const serverFields = {
   favorite: z.boolean().optional(),
   tags: z.array(z.string().min(1).max(32)).max(20).optional(),
 };
+const settings = z.object({
+  identityId: id.optional(),
+  username: z.string().trim().min(1).max(32).optional(),
+  environment: z.enum(["development", "staging", "production"]).optional(),
+  vpnProfileId: id.nullable().optional(),
+}).strict();
+const metadata = z.object({
+  vcpu: z.number().int().min(0).max(65535).nullable().optional(),
+  ramBytes: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable().optional(),
+  diskBytes: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable().optional(),
+  os: z.string().trim().max(100).nullable().optional(),
+  role: z.string().trim().max(100).nullable().optional(),
+}).strict();
 const vpn = {
   name,
   description: z.string().max(2000).optional(),
@@ -78,9 +91,45 @@ export const managementTools: Record<string, Tool> = {
     "dashboard",
   ),
   workspace_servers_list: tool(
-    "List all workspace servers, including archived records, folder, VPN and bastion selections. Does not return credentials.",
+    "List a page of workspace servers, including archived records, folder, VPN and bastion selections. Returns servers and nextCursor; pass nextCursor as cursor for the following page. Does not return credentials.",
     "GET",
     "servers",
+    z.object({
+      folder: id.nullable().optional(),
+      tag: z.string().min(1).max(32).optional(),
+      search: z.string().max(100).default(""),
+      fields: z.string().max(300).optional(),
+      cursor: id.optional(),
+    }).strict(),
+    ["folder", "tag", "search", "fields", "cursor"],
+  ),
+  servers_import: tool(
+    "Import up to 100 servers. Existing host, port and folder combinations are returned as duplicates.",
+    "POST", "servers/import",
+    z.object({ servers: z.array(z.unknown()).min(1).max(100) }).strict(),
+  ),
+  servers_metadata_bulk: tool(
+    "Atomically update settings overrides and structured metadata on up to 100 unique servers.",
+    "POST", "servers/metadata/bulk",
+    z.object({ serverIds: z.array(id).min(1).max(100), settings: settings.optional(), inherit: z.array(z.enum(["identityId", "username", "environment", "vpnProfileId"])).max(4).optional(), metadata: metadata.optional() }).strict(),
+  ),
+  server_effective_settings: tool(
+    "Read resolved SSH settings and their server, folder, tag or fallback sources.",
+    "GET", "servers/:id/effective-settings", resource,
+  ),
+  server_overrides_update: tool(
+    "Partially update server SSH overrides or structured metadata; omitted values remain inherited.",
+    "PATCH", "servers/:id/overrides",
+    z.object({ id, changes: z.object({ settings: settings.optional(), inherit: z.array(z.enum(["identityId", "username", "environment", "vpnProfileId"])).max(4).optional(), metadata: metadata.optional() }).strict() }).strict(),
+  ),
+  folders_defaults_update: tool(
+    "Set folder SSH defaults with settings; remove saved defaults by listing their keys in inherit. vpnProfileId null also clears a folder default.",
+    "PATCH", "groups/:id/defaults", z.object({ id, changes: z.object({ settings: settings.optional(), inherit: z.array(z.enum(["identityId", "username", "environment", "vpnProfileId"])).max(4).optional() }).strict() }).strict(),
+  ),
+  tags_list: tool("List tag names and SSH defaults.", "GET", "tags"),
+  tag_defaults_update: tool(
+    "Set tag SSH defaults with settings; remove saved defaults by listing their keys in inherit. vpnProfileId null also clears a tag default.",
+    "PATCH", "tags/:id/defaults", z.object({ id, changes: z.object({ settings: settings.optional(), inherit: z.array(z.enum(["identityId", "username", "environment", "vpnProfileId"])).max(4).optional() }).strict() }).strict(),
   ),
   server_create: tool(
     "Create an SSH server using a saved identity, optional folder, WireGuard VPN and SSH bastion. Root usernames are supported. Grants this agent its selected SSH tools on the new server.",
@@ -126,6 +175,18 @@ export const managementTools: Record<string, Tool> = {
         bastionId: serverFields.bastionId,
       })
       .strict(),
+  ),
+  server_health_check: tool(
+    "Queue a low-priority reachability and host-key scan for one granted server; this does not authenticate to the target or trust a new key.",
+    "POST", "servers/:id/check", resource,
+  ),
+  folder_health_checks: tool(
+    "Queue reachability and host-key scans for up to 100 granted servers in a folder and its descendants.",
+    "POST", "groups/:id/checks", resource,
+  ),
+  health_batch_get: tool(
+    "Read the current results of a health batch, including untrusted observed fingerprints for manual verification.",
+    "GET", "checks/:batchId", z.object({ batchId: id }).strict(),
   ),
   identities_list: tool(
     "List SSH identity metadata and usage; private keys, passwords and passphrases are never returned.",
@@ -306,6 +367,16 @@ export const managementTools: Record<string, Tool> = {
     "agents/:id/access",
     agentAccessSchema.extend({ id }),
   ),
+  agent_grant: tool(
+    "Set one active agent's operations on one active server without replacing its other server grants. Token scope and agent level still restrict use.",
+    "POST", "agents/:id/grants",
+    z.object({ id, serverId: id, operations: operations.min(1) }).strict(),
+  ),
+  agent_revoke_grant: tool(
+    "Remove one active agent's grant on one active server; repeating the request is safe.",
+    "DELETE", "agents/:id/grants/:serverId",
+    z.object({ id, serverId: id }).strict(),
+  ),
   agent_update_limits: tool(
     "Set agent call budgets; null clears a limit.",
     "PATCH",
@@ -382,7 +453,7 @@ export function managementRequest(name: string, input: unknown) {
   let path = entry.path.replace(
     ":id",
     encodeURIComponent(String(args.id || "")),
-  );
+  ).replace(":serverId", encodeURIComponent(String(args.serverId || ""))).replace(":batchId", encodeURIComponent(String(args.batchId || "")));
   const { id: _id, changes, ...rest } = args;
   if (entry.query) {
     const query = new URLSearchParams();
@@ -405,7 +476,7 @@ export function managementRoute(method: string, path: string) {
     ([, entry]) =>
       entry.method === method &&
       new RegExp(
-        "^/api/" + entry.path.replace(":id", "[0-9a-fA-F-]{36}") + "/?$",
+        "^/api/" + entry.path.replace(":id", "[0-9a-fA-F-]{36}").replace(":serverId", "[0-9a-fA-F-]{36}").replace(":batchId", "[0-9a-fA-F-]{36}") + "/?$",
       ).test(path),
   )?.[0];
 }
