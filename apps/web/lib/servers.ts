@@ -1,15 +1,26 @@
 "use client";
+import { useMemo } from "react";
 import { api, notify, refresh, useApi, type Row } from "./api";
 import { narrow, useWorkspace } from "./store";
 import type { Folder } from "./folders";
+const EMPTY_SERVERS: Row[] = [];
+const EMPTY_GROUPS: Folder[] = [];
 export function useServers() {
   const servers = useApi<Row[]>("servers");
   const groups = useApi<Folder[]>("groups");
+  const serverData = servers.data || EMPTY_SERVERS;
+  const groupData = groups.data || EMPTY_GROUPS;
+  const visibleServers = useMemo(
+    () => serverData.filter((s) => !s.archived),
+    [serverData],
+  );
+  const sortedGroups = useMemo(
+    () => [...groupData].sort((a, b) => a.name.localeCompare(b.name)),
+    [groupData],
+  );
   return {
-    servers: (servers.data || []).filter((s) => !s.archived),
-    groups: [...(groups.data || [])].sort((a, b) =>
-      a.name.localeCompare(b.name),
-    ),
+    servers: visibleServers,
+    groups: sortedGroups,
     loading: servers.isPending,
   };
 }

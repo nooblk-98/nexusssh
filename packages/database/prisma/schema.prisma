@@ -299,6 +299,7 @@ model CommandExecution {
   exitCode Int?
   durationMs Int?
   @@index([organizationId])
+  @@index([principalId, createdAt])
 }
 
 model SavedCommand {
@@ -343,6 +344,7 @@ model AuditEvent {
   correlationId String
   durationMs Int?
   @@index([organizationId, createdAt])
+  @@index([principalId, createdAt])
 }
 
 model FileTransfer {

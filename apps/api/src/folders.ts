@@ -14,7 +14,8 @@ export async function saveFolder(
     const folders = await tx.serverGroup.findMany({
       where: { organizationId },
     });
-    const current = id ? folders.find((f) => f.id === id) : undefined;
+    const byId = new Map(folders.map((folder) => [folder.id, folder]));
+    const current = id ? byId.get(id) : undefined;
     if (id && !current) throw new NotFoundException("Folder unavailable");
     const name = input.name ?? current!.name;
     const parentId =
@@ -29,7 +30,7 @@ export async function saveFolder(
           "A folder cannot be moved inside itself or its subfolders",
         );
       visited.add(ancestor);
-      const parent = folders.find((f) => f.id === ancestor);
+      const parent = byId.get(ancestor);
       if (!parent) throw new BadRequestException("Parent folder unavailable");
       ancestor = parent.parentId;
     }
@@ -54,14 +55,11 @@ export async function deleteFolder(organizationId: string, id: string) {
     });
     if (!folders.some((f) => f.id === id))
       throw new NotFoundException("Folder unavailable");
+    const topLevelNames = new Set(
+      folders.filter((f) => f.id !== id && !f.parentId).map((f) => f.name),
+    );
     const children = folders.filter((f) => f.parentId === id);
-    if (
-      children.some((child) =>
-        folders.some(
-          (f) => f.id !== id && !f.parentId && f.name === child.name,
-        ),
-      )
-    )
+    if (children.some((child) => topLevelNames.has(child.name)))
       throw new ConflictException(
         "Rename or move subfolders that share a name with a top-level folder before deleting this folder",
       );
