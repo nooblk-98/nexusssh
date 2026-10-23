@@ -174,6 +174,7 @@ export function terminals(server: Server) {
   }
   const touch = (shell: Shell) => {
     clearTimeout(shell.idle);
+    if (shell.ws?.readyState === WebSocket.OPEN) return;
     shell.idle = setTimeout(() => end(shell), config.SSH_IDLE_TIMEOUT);
   };
   function attach(
