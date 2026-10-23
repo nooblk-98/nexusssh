@@ -75,10 +75,20 @@ async function runBatch(batchId: string, taskIds: string[], serverIds: string[])
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
   if (!released) return { results: taskIds.map((taskId, index) => ({ serverId: serverIds[index], taskId, status: "failed", error: "Batch was not released" })) };
-  const claims: any[] = [];
+  const claims: any[] = new Array(taskIds.length);
   try {
-    // Claim and reauthorize every target before any SSH command starts.
-    for (const taskId of taskIds) claims.push(await api(`tasks/${taskId}/claim`, {}));
+    // Claim and reauthorize every target before any SSH command starts. Claims run a
+    // few at a time; any failure aborts the batch before a command is sent.
+    let nextClaim = 0, claimFailed = false;
+    // Every lane settles before the batch is aborted, so no claim lands after the abort.
+    await Promise.all(Array.from({ length: Math.min(4, taskIds.length) }, async () => {
+      while (!claimFailed && nextClaim < taskIds.length) {
+        const index = nextClaim++;
+        try { claims[index] = await api(`tasks/${taskIds[index]}/claim`, {}); }
+        catch { claimFailed = true; }
+      }
+    }));
+    if (claimFailed) throw new Error("Batch preflight failed");
   } catch {
     await api(`batches/${batchId}/abort`, {}).catch(() => {});
     return { results: taskIds.map((taskId, index) => ({ serverId: serverIds[index], taskId, status: "failed", error: "Batch preflight failed; no command was started" })) };
@@ -185,13 +195,13 @@ const worker = new Worker(
   // A stalled job may have already run a remote command. Never replay it.
   {
     connection: redisConnection,
-    concurrency: 1,
+    concurrency: config.SSH_WORKER_CONCURRENCY,
     lockDuration: 120000,
     maxStalledCount: 0,
   },
 );
 // Batch work has its own capacity so queued batches cannot occupy interactive slots.
-// Each batch runs at most three SSH commands; one slot stays available for interactive work.
+// Each batch runs at most three SSH commands; interactive work keeps its own slots.
 const batchWorker = new Worker("nexus-ssh-batch", async (job) =>
   runBatch(job.data.batchId, job.data.taskIds, job.data.serverIds), {
     connection: redisConnection, concurrency: 1, lockDuration: 120000, maxStalledCount: 0,

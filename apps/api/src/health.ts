@@ -2,7 +2,7 @@ import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { Queue, Worker } from "bullmq";
 import { randomUUID } from "node:crypto";
 import { db } from "../../../packages/database/index.js";
-import { redisConnection } from "../../../packages/shared/config.js";
+import { config, redisConnection } from "../../../packages/shared/config.js";
 import { scanHostKey } from "../../../packages/ssh-core/index.js";
 import { authorize, connection, sshLimits } from "./domain.js";
 import type { Principal } from "../../../packages/policy-engine/index.js";
@@ -79,7 +79,7 @@ export function startHealthWorker() {
     } catch (error) {
       await finishCheck(check.id, "unreachable", category(error), null, null);
     }
-  }, { connection: redisConnection, concurrency: 2, lockDuration: 30000, maxStalledCount: 0 });
+  }, { connection: redisConnection, concurrency: config.SSH_HEALTH_CONCURRENCY, lockDuration: 30000, maxStalledCount: 0 });
   worker.on("error", (error) => console.error("Health worker unavailable:", error.name));
   return worker;
 }

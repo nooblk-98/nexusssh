@@ -66,6 +66,10 @@ const schema = z.object({
   SSH_CONNECT_TIMEOUT: z.coerce.number().int().min(1000).default(10000),
   SSH_IDLE_TIMEOUT: z.coerce.number().int().min(1000).default(300000),
   SSH_MAX_SESSIONS: z.coerce.number().int().positive().default(20),
+  // Interactive SSH operations the worker runs at once; batches have their own queue.
+  SSH_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
+  // Host key reachability checks run at once by the health worker.
+  SSH_HEALTH_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
   SSH_OUTPUT_LIMIT: z.coerce
     .number()
     .int()
