@@ -36,7 +36,7 @@ import { terminalFonts, terminalThemes } from "../lib/themes";
 import { terminalDefaults } from "./server-drawer";
 import { HostKeyPrompt, hostKeyProblem } from "./host-key";
 import { openSnippets } from "./snippets";
-import { Button, IconButton, openMenuAt, type MenuItem } from "./ui";
+import { Button, IconButton, openMenu, openMenuAt, type MenuItem } from "./ui";
 
 export default function TerminalView({
   tab,
@@ -236,7 +236,13 @@ export default function TerminalView({
       if (e.type !== "keydown") return true;
       const { popup, settings } = live.current;
       if (popup) {
-        if (e.key === "Tab" || (e.key === "ArrowRight" && !e.shiftKey)) {
+        // Tab belongs to the remote shell (for native path/command completion).
+        // IntelliSense remains available by clicking a suggestion or using Right.
+        if (e.key === "Tab") {
+          setPopup(null);
+          return true;
+        }
+        if (e.key === "ArrowRight" && !e.shiftKey) {
           const pick = popup.items[popup.index].text;
           const rest = pick.slice((line.current || "").length);
           line.current = pick;
@@ -435,6 +441,35 @@ export default function TerminalView({
       >
         <div
           ref={host}
+          onContextMenu={(e) => {
+            // On insecure origins the Async Clipboard API is unavailable.
+            // Keep the browser's native Paste menu in that case; this handler
+            // only replaces it when our terminal menu can provide Paste.
+            if (!navigator.clipboard?.readText) return;
+            e.preventDefault();
+            openMenu(e.clientX, e.clientY, [
+              {
+                label: "Paste",
+                onClick: () =>
+                  void navigator.clipboard
+                    ?.readText()
+                    .then((text) => sendInput(tab.id, text.slice(0, 16384)))
+                    .catch(() => {}),
+              },
+              {
+                label: "Copy",
+                disabled: !term.current?.hasSelection(),
+                onClick: () => {
+                  const selected = term.current?.getSelection();
+                  if (selected) void copyText(selected).catch(() => {});
+                },
+              },
+              {
+                label: "Select all",
+                onClick: () => term.current?.selectAll(),
+              },
+            ]);
+          }}
           style={{ position: "absolute", inset: "6px 0 0 8px" }}
         />
         {searching && (
