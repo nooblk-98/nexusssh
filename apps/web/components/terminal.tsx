@@ -13,7 +13,6 @@ import {
   Maximize,
   RadioTower,
   Search,
-  Sparkles,
   X,
   ZoomIn,
   ZoomOut,
@@ -75,7 +74,6 @@ export default function TerminalView({
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
   const [fontSize, setFontSize] = useState(prefs.terminalFontSize);
-  const [intelli, setIntelli] = useState(true);
   const [popup, setPopup] = useState<{
     items: Suggestion[];
     index: number;
@@ -84,8 +82,8 @@ export default function TerminalView({
   } | null>(null);
   const settings = { ...terminalDefaults, ...settingsOf(server) };
   // Latest values for xterm callbacks, which are created once per connection.
-  const live = useRef({ intelli, popup, prefs, settings });
-  live.current = { intelli, popup, prefs, settings };
+  const live = useRef({ popup, prefs, settings });
+  live.current = { popup, prefs, settings };
   const line = useRef<string | null>("");
   const broadcasting = broadcast.includes(tab.id);
   const hostKey = state === "error" ? hostKeyProblem(message) : null;
@@ -176,14 +174,14 @@ export default function TerminalView({
       status("error", "Connection failed");
     };
     const showSuggestions = () => {
-      const { intelli, prefs } = live.current;
+      const { prefs } = live.current;
       const current = line.current;
-      if (!intelli || current == null) return setPopup(null);
+      if (current == null) return setPopup(null);
       const items = suggest(
         current,
         loadHistory(server.id),
-        prefs.suggestHistory,
-        prefs.suggestArguments,
+        true,
+        true,
         prefs.compactSuggestions ? 6 : 12,
       );
       if (!items.length) return setPopup(null);
@@ -364,16 +362,6 @@ export default function TerminalView({
             onClick={() => setSearching(!searching)}
           >
             <Search size={19} />
-          </IconButton>
-          <IconButton
-            label={intelli ? "IntelliSense (on)" : "IntelliSense (off)"}
-            active={intelli}
-            onClick={() => {
-              setIntelli(!intelli);
-              setPopup(null);
-            }}
-          >
-            <Sparkles size={19} />
           </IconButton>
           <IconButton
             label={

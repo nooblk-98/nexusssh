@@ -461,16 +461,6 @@ export function Preferences() {
         Autocomplete while you type a command in the terminal.
       </p>
       <Check
-        label="Previously executed commands"
-        checked={p.suggestHistory}
-        onChange={(v) => void savePrefs({ suggestHistory: v })}
-      />
-      <Check
-        label="Command arguments and options"
-        checked={p.suggestArguments}
-        onChange={(v) => void savePrefs({ suggestArguments: v })}
-      />
-      <Check
         label="Use compact suggestions"
         checked={p.compactSuggestions}
         onChange={(v) => void savePrefs({ compactSuggestions: v })}

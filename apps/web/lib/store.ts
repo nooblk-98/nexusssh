@@ -9,8 +9,6 @@ export type Prefs = {
   terminalFont: string;
   terminalFontSize: number;
   copyOnSelect: boolean;
-  suggestHistory: boolean;
-  suggestArguments: boolean;
   compactSuggestions: boolean;
   editorTheme: string;
   editorWrap: boolean;
@@ -23,8 +21,6 @@ export const defaultPrefs: Prefs = {
   terminalFont: "DejaVu Sans Mono",
   terminalFontSize: 14,
   copyOnSelect: true,
-  suggestHistory: true,
-  suggestArguments: true,
   compactSuggestions: true,
   editorTheme: "Dracula",
   editorWrap: false,
