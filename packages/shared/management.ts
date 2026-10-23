@@ -152,10 +152,18 @@ export const managementTools: Record<string, Tool> = {
     resource,
   ),
   server_duplicate: tool(
-    "Duplicate a server and its saved connection selections.",
+    "Duplicate a server and its saved connection selections. Two servers cannot share a host and port in one folder, so give the copy a different host or groupId. A copy with a new host or port must have its host key trusted again.",
     "POST",
     "servers/:id/duplicate",
-    resource,
+    z
+      .object({
+        id,
+        name: z.string().min(1).max(100).optional(),
+        host: z.string().min(1).max(253).optional(),
+        port: z.number().int().min(1).max(65535).optional(),
+        groupId: id.nullable().optional(),
+      })
+      .strict(),
   ),
   server_move: tool(
     "Move a server into a folder; groupId null moves it to the top level.",

@@ -259,10 +259,19 @@ export function Sidebar({ me }: { me: Row }) {
           { label: "Move to…", onClick: () => startMove("server", s) },
           {
             label: "Duplicate",
-            onClick: () =>
-              void api("servers/" + s.id + "/duplicate", {})
-                .then(() => refresh("servers"))
-                .catch(notify.error),
+            // Host and port are unique per folder, so the copy needs its own address.
+            onClick: async () => {
+              const host = await promptDialog(
+                "Duplicate Server",
+                "Host for the copy",
+                s.host,
+                "Duplicate",
+              );
+              if (host)
+                await api("servers/" + s.id + "/duplicate", { host: host.trim() })
+                  .then(() => refresh("servers"))
+                  .catch(notify.error);
+            },
           },
           {
             label: "Delete",

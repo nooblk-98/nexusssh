@@ -232,6 +232,20 @@ const serverSchema = z
     tags: z.array(z.string().min(1).max(32)).max(20).default([]),
   })
   .strict();
+const canonicalHost = (host: string) => host.trim().toLowerCase().replace(/\.+$/, "");
+// Mirrors the Server_identity_* database triggers, which compare active servers only.
+// Prisma reports their abort as a generic constraint error (P2003), so writers check
+// first to return a clear conflict.
+async function assertServerIdentityFree(org: string, host: string, port: number, groupId: string | null, exceptId?: string) {
+  const candidates = await db.server.findMany({
+    where: { organizationId: org, port, groupId, archived: false, ...(exceptId ? { id: { not: exceptId } } : {}) },
+    select: { host: true },
+  });
+  if (candidates.some((s) => canonicalHost(s.host) === canonicalHost(host)))
+    throw new ConflictException("A server with this host and port already exists in this folder");
+}
+const isServerIdentityConflict = (error: unknown) =>
+  String(error).includes("server_identity_conflict") || (error as { code?: string })?.code === "P2003";
 const login = z.object({
   email: z.email(),
   password: z.string().min(12).max(200),
@@ -741,6 +755,7 @@ export class AppController {
     const p = await authenticate(req);
     admin(p);
     const data = await this.serverData(p, body);
+    await assertServerIdentityFree(p.organizationId, data.host, data.port, data.groupId);
     const s = await db.server.create({
       data: { ...data, organizationId: p.organizationId, overrides: JSON.stringify({ identityId: data.identityId, username: data.username, environment: data.environment, vpnProfileId: data.vpnProfileId }) },
     });
@@ -769,7 +784,7 @@ export class AppController {
         const parsed = serverSchema.parse(raw);
         const host = parsed.host.trim().toLowerCase().replace(/\.+$/, "");
         const candidates = await db.server.findMany({ where: {
-          organizationId: p.organizationId, port: parsed.port, groupId: parsed.groupId,
+          organizationId: p.organizationId, port: parsed.port, groupId: parsed.groupId, archived: false,
         } });
         const existing = candidates.find((s) => s.host.trim().toLowerCase().replace(/\.+$/, "") === host);
         if (existing) {
@@ -794,13 +809,13 @@ export class AppController {
       } catch (error) {
         // A concurrent writer can win after the lookup. The database trigger is
         // authoritative; resolve that collision to the same per-row response.
-        if (String(error).includes("server_identity_conflict")) {
+        if (isServerIdentityConflict(error)) {
           const parsed = serverSchema.safeParse(raw);
           if (parsed.success) {
             const key = parsed.data;
             const host = key.host.trim().toLowerCase().replace(/\.+$/, "");
             const candidates = await db.server.findMany({ where: {
-              organizationId: p.organizationId, port: key.port, groupId: key.groupId,
+              organizationId: p.organizationId, port: key.port, groupId: key.groupId, archived: false,
             } });
             const existing = candidates.find((s) => s.host.trim().toLowerCase().replace(/\.+$/, "") === host);
             if (existing) {
@@ -849,6 +864,9 @@ export class AppController {
     const { inherit, ...patch } = z.record(z.string(), z.unknown()).parse(body) as Record<string, unknown> & { inherit?: unknown };
     const inheritKeys = inherit === undefined ? [] : z.array(z.enum(settingKeys)).max(4).parse(inherit);
     const data = await this.serverData(p, { ...saved, ...patch }, id);
+    // Like the trigger, only a changed address, folder or restore is checked, so legacy rows stay editable.
+    if (!data.archived && (old.archived || canonicalHost(data.host) !== canonicalHost(old.host) || data.port !== old.port || data.groupId !== old.groupId))
+      await assertServerIdentityFree(p.organizationId, data.host, data.port, data.groupId, id);
     const changed = Object.fromEntries(Object.entries(patch).filter(([key]) => settingKeys.includes(key as (typeof settingKeys)[number])));
     const overrides = mergeSettings(old.overrides, settingsSchema.parse(changed), inheritKeys);
     await resolveSettings(id, p.organizationId, { overrides: parseSettings(overrides), groupId: data.groupId, tagIds: data.tags.connect.map((tag) => tag.id) });
@@ -863,18 +881,48 @@ export class AppController {
   @Post("servers/:id/duplicate") async duplicate(
     @Req() req: Request,
     @Param("id") id: string,
+    @Body() body: unknown,
   ) {
     const p = await authenticate(req);
     admin(p);
     const old = await authorize(p, id, "server_get_info");
+    // Two servers cannot share a host and port in one folder, so a copy that keeps
+    // them needs a different folder.
+    const a = z
+      .object({
+        name: serverSchema.shape.name.optional(),
+        host: serverSchema.shape.host.optional(),
+        port: z.number().int().min(1).max(65535).optional(),
+        groupId: z.uuid().nullable().optional(),
+      })
+      .strict()
+      .parse(body ?? {});
+    if (
+      a.groupId &&
+      !(await db.serverGroup.findFirst({
+        where: { id: a.groupId, organizationId: p.organizationId },
+      }))
+    )
+      throw new BadRequestException("Destination folder unavailable");
+    const host = a.host ?? old.host,
+      port = a.port ?? old.port,
+      groupId = a.groupId === undefined ? old.groupId : a.groupId;
+    if (!old.archived) await assertServerIdentityFree(p.organizationId, host, port, groupId);
     const { id: _id, createdAt: _c, updatedAt: _u, ...data } = old;
     const s = await db.server.create({
       data: {
         ...data,
         overrides: old.overrides,
-        name: old.name + " copy",
+        name: a.name ?? old.name + " copy",
+        host,
+        port,
+        groupId,
+        // A pinned host key belongs to the original address only.
+        fingerprint: host === old.host && port === old.port ? old.fingerprint : null,
         status: "unknown",
         lastCheckedAt: null,
+        healthFailureCategory: null,
+        latestHealthCheckId: null,
         favorite: false,
       },
     });
@@ -900,8 +948,10 @@ export class AppController {
   ) {
     const p = await authenticate(req);
     admin(p);
-    await authorize(p, id, "server_get_info");
+    const current = await authorize(p, id, "server_get_info");
     const a = z.object({ groupId: z.uuid().nullable() }).strict().parse(body);
+    if (a.groupId !== current.groupId && !current.archived)
+      await assertServerIdentityFree(p.organizationId, current.host, current.port, a.groupId, id);
     const invalidated = await db.$transaction(async (tx) => {
       if (
         a.groupId &&

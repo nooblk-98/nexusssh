@@ -82,6 +82,24 @@ export async function deleteFolder(organizationId: string, id: string) {
       throw new ConflictException(
         "Rename or move subfolders that share a name with a top-level folder before deleting this folder",
       );
+    // Direct servers move to the top level, where host and port must stay unique
+    // among active servers (see the Server_identity_* triggers).
+    const address = (s: { host: string; port: number }) =>
+      s.host.trim().toLowerCase().replace(/\.+$/, "") + ":" + s.port;
+    const moving = await tx.server.findMany({ where: { organizationId, groupId: id, archived: false }, select: { name: true, host: true, port: true } });
+    if (moving.length) {
+      const taken = new Set((await tx.server.findMany({ where: { organizationId, groupId: null, archived: false }, select: { host: true, port: true } })).map(address));
+      const clashes = moving.filter((s) => {
+        const key = address(s);
+        if (taken.has(key)) return true;
+        taken.add(key);
+        return false;
+      });
+      if (clashes.length)
+        throw new ConflictException(
+          `Move or delete these servers first; their host and port are already used at the top level: ${clashes.map((s) => s.name).join(", ")}`,
+        );
+    }
     const impacted = subtreeServerIds(folders, await tx.server.findMany({ where: { organizationId }, select: { id: true, groupId: true } }), id);
     await tx.server.updateMany({
       where: { groupId: id, organizationId },

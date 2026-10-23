@@ -42,7 +42,7 @@ export function KeyFolderImport() {
       return;
     }
     setLoadingPreview(true);
-    let allServers: Row[] = [];
+    const allServers: Row[] = [];
     try {
       let cursor: string | null = null;
       const seen = new Set<string>();
