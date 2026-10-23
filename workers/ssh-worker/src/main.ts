@@ -99,8 +99,20 @@ const worker = new Worker(
       clearInterval(timer);
     }
   },
-  { connection: redisConnection, concurrency: 4, lockDuration: 120000 },
+  // A stalled job may have already run a remote command. Never replay it.
+  {
+    connection: redisConnection,
+    concurrency: 4,
+    lockDuration: 120000,
+    maxStalledCount: 0,
+  },
 );
+worker.on("failed", (job, error) => {
+  if (job && error.message.includes("stalled more than allowable limit"))
+    void api(`tasks/${job.data.taskId}/interrupt`, {}).catch((cause) =>
+      console.error("Could not record interrupted task:", cause),
+    );
+});
 worker.on("error", (error) => console.error("Worker unavailable:", error.name));
 process.on("SIGTERM", () => void worker.close().then(() => process.exit(0)));
 process.on("SIGINT", () => void worker.close().then(() => process.exit(0)));

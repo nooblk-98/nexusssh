@@ -522,6 +522,11 @@ describe.runIf(enabled)(
         taskId: task.data.taskId,
       });
       expect(status.data.status).toBe("cancelled");
+      const repeated = await request("operations/task_cancel", {
+        taskId: task.data.taskId,
+      });
+      expect(repeated.data.status).toBe("cancelled");
+      expect(repeated.data.message).toBe("Task is already terminal");
     });
     it("binds approval to exact arguments and consumes once under racing retries", async () => {
       const args = await approve(

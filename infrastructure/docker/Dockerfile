@@ -22,7 +22,7 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/packages/database ./packages/database
 COPY --from=build /app/apps/web ./apps/web
 COPY --from=build /app/package*.json ./
-COPY infrastructure/scripts/backup.py infrastructure/scripts/start.mjs infrastructure/scripts/
+COPY infrastructure/scripts/backup.py infrastructure/scripts/recovery_bundle.py infrastructure/scripts/recovery_probe.mjs infrastructure/scripts/start.mjs infrastructure/scripts/
 RUN mkdir /app/data /app/secrets && chown node:node /app/data /app/secrets
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 DATABASE_URL=file:/app/data/nexusssh.db SECRETS_FILE=/app/secrets/secrets.json
 USER node

@@ -25,6 +25,7 @@ import { db, initializeDatabase } from "../../../packages/database/index.js";
 import { terminals } from "./terminal.js";
 import { SftpController } from "./sftp.js";
 import { queue, events } from "./domain.js";
+import { reconcileRunningTasks } from "./task-recovery.js";
 @Module({ controllers: [AppController, SftpController, VpnController] })
 class AppModule {}
 @Catch()
@@ -55,6 +56,8 @@ class Errors implements ExceptionFilter {
   }
 }
 await initializeDatabase();
+const interruptedTasks = await reconcileRunningTasks();
+if (interruptedTasks) console.warn(`Interrupted ${interruptedTasks} running SSH tasks after restart`);
 if (generatedSecrets.includes("SETUP_TOKEN") && (await db.user.count()) === 0)
   console.log(`First-run setup token: ${process.env.SETUP_TOKEN}`);
 const app = await NestFactory.create(AppModule, { bodyParser: false });

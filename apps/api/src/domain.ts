@@ -1,11 +1,11 @@
 import {
-  HttpException,
   ForbiddenException,
   NotFoundException,
   BadRequestException,
 } from "@nestjs/common";
 import { Queue, QueueEvents } from "bullmq";
 import { randomUUID } from "node:crypto";
+import { reserveAgentCall } from "./agent-quota.js";
 import { db } from "../../../packages/database/index.js";
 import { config, redisConnection } from "../../../packages/shared/config.js";
 import {
@@ -91,32 +91,6 @@ async function grants(p: Principal, serverId: string): Promise<string[]> {
       [own, ...teams].flatMap((g) => (g ? JSON.parse(g.operations) : [])),
     ),
   ];
-}
-async function enforceAgentLimits(agentId: string) {
-  const agent = await db.agent.findUnique({ where: { id: agentId } });
-  const window = async (ms: number) => {
-    const ssh = await db.commandExecution.count({
-      where: {
-        principalId: agentId,
-        createdAt: { gt: new Date(Date.now() - ms) },
-      },
-    });
-    const management = await db.auditEvent.count({
-      where: {
-        principalId: agentId,
-        action: { startsWith: "mcp:" },
-        createdAt: { gt: new Date(Date.now() - ms) },
-      },
-    });
-    return ssh + management;
-  };
-  if (
-    agent?.maxCallsPerMinute &&
-    (await window(60000)) >= agent.maxCallsPerMinute
-  )
-    throw new HttpException("Agent rate limit reached (per minute)", 429);
-  if (agent?.maxCallsPerDay && (await window(86400000)) >= agent.maxCallsPerDay)
-    throw new HttpException("Agent daily call limit reached", 429);
 }
 export async function listServers(p: Principal) {
   return db.server.findMany({
@@ -371,10 +345,14 @@ export async function operation(
     if (!t) throw new NotFoundException();
     const job = await queue.getJob(t.id);
     if (op === "task_cancel") {
-      await db.backgroundTask.update({
-        where: { id: t.id },
+      const changed = await db.backgroundTask.updateMany({
+        where: { id: t.id, status: { in: ["queued", "running"] } },
         data: { status: "cancelled" },
       });
+      if (changed.count === 0) {
+        const current = await db.backgroundTask.findUniqueOrThrow({ where: { id: t.id } });
+        return { taskId: t.id, status: current.status, message: "Task is already terminal" };
+      }
       if (job && (await job.getState()) === "waiting") await job.remove();
       await audit(p, op, "requested", t.serverId);
       return {
@@ -393,6 +371,20 @@ export async function operation(
   }
   const server = await authorize(p, a.serverId, op);
   if (op === "server_get_info") return { server };
+  // Read-only session calls still consume one agent call; reserve and record
+  // together so concurrent callers cannot exceed the configured cap.
+  if (p.kind === "agent" && (op === "ssh_session_status" || op === "ssh_disconnect")) {
+    await reserveAgentCall(p.id, (tx) => tx.auditEvent.create({
+      data: {
+        organizationId: p.organizationId,
+        principalId: p.id,
+        action: `mcp:${op}`,
+        status: "requested",
+        serverId: server.id,
+        correlationId: randomUUID(),
+      },
+    }));
+  }
   if (op === "ssh_session_status")
     return {
       sessions: await db.sSHSession.findMany({
@@ -411,7 +403,6 @@ export async function operation(
       message:
         "MCP connections are operation-scoped and closed after each result",
     };
-  if (p.kind === "agent") await enforceAgentLimits(p.id);
   const normalized = executionArgs(a),
     digest = hash(canonical(normalized));
   if (needsApproval(op)) {
@@ -459,33 +450,42 @@ export async function operation(
         "Approval is missing, expired, mismatched, or already consumed",
       );
   }
-  const task = await db.backgroundTask.create({
-    data: {
-      organizationId: p.organizationId,
-      principalId: p.id,
-      serverId: server.id,
-      operation: op,
-      encryptedArguments: seal(
-        normalized,
-        config.ENCRYPTION_KEY,
-        p.organizationId,
-      ),
-      status: "queued",
-      tokenId: p.tokenId,
-      expiresAt: new Date(Date.now() + 120000),
-    },
-  });
-  await db.commandExecution.create({
-    data: {
-      id: task.id,
-      organizationId: p.organizationId,
-      principalId: p.id,
-      serverId: server.id,
-      operation: op,
-      argumentDigest: digest,
-      status: "queued",
-    },
-  });
+  const createTask = async (
+    tx: Pick<typeof db, "backgroundTask" | "commandExecution">,
+  ) => {
+    const task = await tx.backgroundTask.create({
+      data: {
+        organizationId: p.organizationId,
+        principalId: p.id,
+        serverId: server.id,
+        operation: op,
+        encryptedArguments: seal(
+          normalized,
+          config.ENCRYPTION_KEY,
+          p.organizationId,
+        ),
+        status: "queued",
+        tokenId: p.tokenId,
+        expiresAt: new Date(Date.now() + 120000),
+      },
+    });
+    await tx.commandExecution.create({
+      data: {
+        id: task.id,
+        organizationId: p.organizationId,
+        principalId: p.id,
+        serverId: server.id,
+        operation: op,
+        argumentDigest: digest,
+        status: "queued",
+      },
+    });
+    return task;
+  };
+  const task =
+    p.kind === "agent"
+      ? await reserveAgentCall(p.id, createTask)
+      : await db.$transaction(createTask);
   await audit(p, op, "queued", server.id, task.id);
   const job = await queue.add(
     "operation",

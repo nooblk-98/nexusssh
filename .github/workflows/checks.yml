@@ -8,6 +8,21 @@ jobs:
       - uses: actions/setup-node@v4
         with: {node-version: 24, cache: npm}
       - run: npm ci
+      - run: docker compose config --quiet
+      - run: python3 tests/recovery_bundle_test.py
+      - name: Build commit image and save rollback reference
+        run: |
+          docker build -f infrastructure/docker/Dockerfile -t "nexusssh:${GITHUB_SHA}" .
+          IMAGE_ID=$(docker image inspect "nexusssh:${GITHUB_SHA}" --format '{{.Id}}')
+          printf 'image=nexusssh:%s\nimage_id=%s\nsource_commit=%s\n' "$GITHUB_SHA" "$IMAGE_ID" "$GITHUB_SHA" > image-manifest.txt
+          docker save "nexusssh:${GITHUB_SHA}" | gzip -1 > nexusssh-image.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-rollback-${{ github.sha }}
+          path: |
+            image-manifest.txt
+            nexusssh-image.tar.gz
+          retention-days: 7
       - uses: actions/setup-go@v5
         with: {go-version-file: services/vpn-gateway/go.mod, cache-dependency-path: services/vpn-gateway/go.sum}
       - run: go test -race ./...

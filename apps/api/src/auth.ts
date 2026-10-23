@@ -1,8 +1,5 @@
-import {
-  UnauthorizedException,
-  ForbiddenException,
-  HttpException,
-} from "@nestjs/common";
+import { UnauthorizedException, ForbiddenException } from "@nestjs/common";
+import { reserveAgentCall } from "./agent-quota.js";
 import { randomUUID } from "node:crypto";
 import {
   managementRoute,
@@ -50,38 +47,17 @@ export async function authenticate(req: Request): Promise<Principal> {
         throw new ForbiddenException(
           "Enable Workspace management for an administrator agent to use this tool",
         );
-      const calls = async (ms: number) => {
-        const since = new Date(Date.now() - ms);
-        const [ssh, management] = await Promise.all([
-          db.commandExecution.count({
-            where: { principalId: token.agentId, createdAt: { gt: since } },
-          }),
-          db.auditEvent.count({
-            where: {
-              principalId: token.agentId,
-              action: { startsWith: "mcp:" },
-              createdAt: { gt: since },
-            },
-          }),
-        ]);
-        return ssh + management;
-      };
-      if (
-        (token.agent.maxCallsPerMinute &&
-          (await calls(60000)) >= token.agent.maxCallsPerMinute) ||
-        (token.agent.maxCallsPerDay &&
-          (await calls(86400000)) >= token.agent.maxCallsPerDay)
-      )
-        throw new HttpException("Agent call limit reached", 429);
-      const entry = await db.auditEvent.create({
-        data: {
-          organizationId: token.agent.organizationId,
-          principalId: token.agentId,
-          action: "mcp:" + managementOperation,
-          status: "requested",
-          correlationId: randomUUID(),
-        },
-      });
+      const entry = await reserveAgentCall(token.agentId, (tx) =>
+        tx.auditEvent.create({
+          data: {
+            organizationId: token.agent.organizationId,
+            principalId: token.agentId,
+            action: "mcp:" + managementOperation,
+            status: "requested",
+            correlationId: randomUUID(),
+          },
+        }),
+      );
       req.res?.once("finish", () => {
         void db.auditEvent
           .update({

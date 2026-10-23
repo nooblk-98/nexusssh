@@ -58,6 +58,7 @@ import { verifyTotp, newTotp, totpStep } from "./totp.js";
 import { scanHostKey } from "../../../packages/ssh-core/index.js";
 import { connectionPath } from "./domain.js";
 import { closeSftp } from "./sftp.js";
+import { finishTask } from "./task-finish.js";
 import { saveFolder, deleteFolder } from "./folders.js";
 import {
   WORKSPACE_MANAGE,
@@ -1681,6 +1682,7 @@ export class AppController {
     return {
       cancelled:
         t.status === "cancelled" ||
+        t.status === "interrupted" ||
         !!agent?.revoked ||
         !!agent?.owner.disabled ||
         !!user?.disabled ||
@@ -1704,15 +1706,7 @@ export class AppController {
     const t = await db.backgroundTask.findUniqueOrThrow({ where: { id } });
     if (!t.leaseHash || !equal(t.leaseHash, hash(a.lease)))
       throw new ForbiddenException();
-    const status = t.status === "cancelled" ? "cancelled" : a.status;
-    await db.backgroundTask.update({
-      where: { id },
-      data: { status, leaseHash: null },
-    });
-    await db.commandExecution.update({
-      where: { id },
-      data: { status, exitCode: a.exitCode, durationMs: a.durationMs },
-    });
+    const status = await finishTask(id, t.leaseHash, a);
     if (t.operation === "server_test_connection")
       await db.server.update({
         where: { id: t.serverId },
@@ -1735,5 +1729,24 @@ export class AppController {
       id,
     );
     return { ok: true };
+  }
+  @Post("internal/tasks/:id/interrupt") async interruptTask(
+    @Req() req: Request,
+    @Param("id") id: string,
+  ) {
+    internal(req);
+    const changed = await db.$transaction(async (tx) => {
+      const result = await tx.backgroundTask.updateMany({
+        where: { id: z.uuid().parse(id), status: "running" },
+        data: { status: "interrupted", leaseHash: null },
+      });
+      if (result.count)
+        await tx.commandExecution.update({
+          where: { id },
+          data: { status: "interrupted" },
+        });
+      return result;
+    });
+    return { interrupted: changed.count === 1 };
   }
 }

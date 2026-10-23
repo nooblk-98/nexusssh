@@ -14,6 +14,37 @@ Containers run as the Node user where practical. Redis has no published port. Ne
 
 ## Backup
 
+For a paired local recovery bundle, mount an operator-controlled directory at
+`/recovery` in the application container, then run:
+
+```sh
+IMAGE_ID=$(docker inspect --format '{{.Image}}' "$(docker compose ps -q nexusssh)")
+docker compose exec nexusssh python3 infrastructure/scripts/recovery_bundle.py create --image-id "$IMAGE_ID" --bundle /recovery/nexus-$(date -u +%Y%m%dT%H%M%SZ)
+python3 infrastructure/scripts/recovery_bundle.py rehearse --bundle /path/on/host/to/recovery/<bundle-name>
+```
+
+The bundle manifest binds a consistent SQLite snapshot, the persisted
+`secrets.json`, and the exact Docker image ID of the running container. Keep a
+`docker save` archive of that image with the bundle; the image must be loaded on
+the host used for rehearsal or restore. The bundle uses owner-only permissions.
+The rehearsal verifies checksums and SQLite integrity, then mounts temporary
+restored copies read-only in a disposable, network-isolated container from that
+exact image. Its probe opens the database and decrypts one stored SSH credential
+when one exists; an empty `SSHIdentity` table can verify key format but cannot
+prove historical credential decryption. No credential plaintext is printed.
+The rehearsal does not start the full Redis-backed application or replace running
+data. Run it on a Docker host with Python 3 and access to the mounted bundle.
+Configure the `/recovery`
+mount and its access controls before using this command. Keep this bundle
+encrypted and off-host using a destination and key custody process selected by
+the operator. Keep the image archive under the same retention policy. A local
+directory alone does not protect against host loss. If
+`ENCRYPTION_KEY` is supplied externally rather than in `secrets.json`, this
+bundle is insufficient; retain that external key through its existing custody
+system. For a full restore, stop the stack and restore both files together into
+fresh data and secrets volumes, then start the matching image. Rehearse that
+volume swap on a disposable stack before using it in production.
+
 The API image includes Python's SQLite online backup API. This includes committed WAL content consistently; it does not copy the live main file.
 
 ```sh
@@ -35,6 +66,19 @@ docker compose up -d
 The helper verifies the backup, replaces the file atomically, and never silently removes WAL files. Restore the matching encryption key configuration. The application reruns an integrity check on startup.
 
 ## Upgrade
+
+CI builds an image tagged with the exact source commit and retains its compressed
+Docker archive and `image-manifest.txt` as a seven-day workflow artifact. The
+manifest includes Docker's immutable image ID. To deploy that exact build,
+download the artifact, check the loaded image ID against the manifest, run
+`docker load -i nexusssh-image.tar.gz`, and set `NEXUSSSH_IMAGE` to the recorded
+commit tag. Retain the previous deployment's archive and paired recovery bundle
+outside CI's seven-day retention period for rollback. The image ID identifies
+local image content; it is not a registry digest. If using an operator-owned
+registry, deploy by its immutable digest instead. This repo does not select a
+registry, image storage destination, or production deployment credential. The
+CI archive consumes Actions artifact storage; review its usage before relying
+on it for a long retention period.
 
 Back up and verify restore before upgrading. Review migrations and dependency changes. Build the new image, stop `nexusssh` to avoid in-flight side effects, then recreate it. Never scale `nexusssh` above one replica; it owns the SQLite file. If a migration is incompatible with an older version, rollback requires restoring the backup and its matching application image; do not run an old binary against an unreviewed new schema.
 

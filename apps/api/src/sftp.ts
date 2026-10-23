@@ -18,6 +18,7 @@ import { createGzip } from "node:zlib";
 import { pipeline } from "node:stream/promises";
 import { z } from "zod";
 import { authenticate, human } from "./auth.js";
+import { replaceSftpFile } from "./sftp-replace.js";
 import { audit, authorize, connection, sshLimits } from "./domain.js";
 import { config } from "../../../packages/shared/config.js";
 import {
@@ -154,13 +155,9 @@ async function* walk(
   }
 }
 async function replace(s: SFTPWrapper, from: string, to: string) {
-  try {
-    await invoke(s, "ext_openssh_rename", from, to);
-  } catch {
-    // Servers without the posix-rename extension need the target removed first.
-    await invoke(s, "unlink", to).catch(() => {});
-    await invoke(s, "rename", from, to);
-  }
+  return replaceSftpFile(from, to, (method, source, destination) =>
+    invoke(s, method, source, destination),
+  );
 }
 async function readAll(s: SFTPWrapper, file: string, limit: number) {
   const chunks: Buffer[] = [];

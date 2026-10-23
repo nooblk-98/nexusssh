@@ -4,7 +4,7 @@ name: nexusssh
 # unrecoverable.
 services:
   nexusssh:
-    image: nexusssh:latest
+    image: ${NEXUSSSH_IMAGE:-nexusssh:local}
     build: {context: ., dockerfile: infrastructure/docker/Dockerfile}
     pull_policy: build
     ports: ['${HTTP_PORT:-8080}:8080']
