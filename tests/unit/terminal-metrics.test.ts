@@ -5,12 +5,12 @@ const output = (cpu: string, available = 600, used = 25) =>
   `cpu  ${cpu}\nMemTotal:       1000 kB\nMemAvailable:   ${available} kB\n/dev/sda1 100 ${used} 75 25% /\n`;
 
 describe("terminal metrics parser", () => {
-  it("uses the first eight CPU fields and computes deltas after the first sample", () => {
-    const first = parseMetrics(output("100 20 30 400 50 10 5 5 20 10"));
-    expect(first?.frame).toEqual({ type: "metrics", cpu: null, memory: 40, storage: 25 });
-    expect(first?.sample).toEqual({ idle: 450n, total: 620n });
-    const second = parseMetrics(output("125 30 50 440 60 10 5 5 90 80"), first?.sample);
-    expect(second?.sample).toEqual({ idle: 500n, total: 725n });
+  it("computes the initial CPU from two samples, then uses the prior poll", () => {
+    const first = parseMetrics(output("100 20 30 400 50 10 5 5 20 10\ncpu  125 30 50 440 60 10 5 5 90 80"));
+    expect(first?.frame).toEqual({ type: "metrics", cpu: 52, memory: 40, storage: 25 });
+    expect(first?.sample).toEqual({ idle: 500n, total: 725n });
+    const second = parseMetrics(output("150 40 70 480 70 10 5 5 150 120"), first?.sample);
+    expect(second?.sample).toEqual({ idle: 550n, total: 830n });
     expect(second?.frame.cpu).toBe(52);
   });
 

@@ -21,6 +21,7 @@ const METRICS_MS = 30000;
 const METRICS_TIMEOUT_MS = 5000;
 const METRICS_OUTPUT_BYTES = 8192;
 const METRICS_COMMAND = "head -n 1 /proc/stat; cat /proc/meminfo; df -P /";
+const INITIAL_METRICS_COMMAND = "head -n 1 /proc/stat; sleep 1; head -n 1 /proc/stat; cat /proc/meminfo; df -P /";
 type CpuSample = { idle: bigint; total: bigint };
 type Shell = {
   token: string;
@@ -45,12 +46,14 @@ type Shell = {
   ended: boolean;
 };
 export function parseMetrics(raw: string, previous?: CpuSample) {
-  const cpuLine = raw.match(/^cpu\s+((?:\d+\s+){3,}\d+)\s*$/m)?.[1];
-  const fields = cpuLine?.trim().split(/\s+/).map((v) => BigInt(v));
-  if (!fields || fields.length < 4) return;
-  // Linux includes guest and guest_nice in user and nice already.
-  const total = fields.slice(0, 8).reduce((sum, value) => sum + value, 0n);
-  const idle = fields[3] + (fields[4] || 0n);
+  const cpuLines = [...raw.matchAll(/^cpu\s+((?:\d+\s+){3,}\d+)\s*$/gm)];
+  const samples = cpuLines.map((line) => {
+    const fields = line[1].trim().split(/\s+/).map((v) => BigInt(v));
+    // Linux includes guest and guest_nice in user and nice already.
+    return { total: fields.slice(0, 8).reduce((sum, value) => sum + value, 0n), idle: fields[3] + (fields[4] || 0n) };
+  });
+  const sample = samples.at(-1);
+  if (!sample) return;
   const memory = raw.match(/^MemTotal:\s+(-?\d+) kB$/m);
   const available = raw.match(/^MemAvailable:\s+(-?\d+) kB$/m);
   const disk = raw.match(/^\S+\s+(-?\d+)\s+(-?\d+)\s+\d+\s+\d+%\s+\/$/m);
@@ -61,11 +64,12 @@ export function parseMetrics(raw: string, previous?: CpuSample) {
   const diskUsed = Number(disk[2]);
   if (!Number.isSafeInteger(memTotal) || memTotal <= 0 || !Number.isSafeInteger(memAvailable) || memAvailable < 0 || memAvailable > memTotal ||
       !Number.isSafeInteger(diskTotal) || diskTotal <= 0 || !Number.isSafeInteger(diskUsed) || diskUsed < 0 || diskUsed > diskTotal) return;
-  const deltaTotal = previous ? total - previous.total : 0n;
-  const deltaIdle = previous ? idle - previous.idle : 0n;
+  const baseline = previous || samples.at(-2);
+  const deltaTotal = baseline ? sample.total - baseline.total : 0n;
+  const deltaIdle = baseline ? sample.idle - baseline.idle : 0n;
   const cpu = deltaTotal > 0n && deltaIdle >= 0n && deltaIdle <= deltaTotal
     ? Math.max(0, Math.min(100, Math.round(100 * (1 - Number(deltaIdle) / Number(deltaTotal))))) : null;
-  return { sample: { idle, total }, frame: { type: "metrics", cpu, memory: Math.max(0, Math.min(100, Math.round(100 * (memTotal - memAvailable) / memTotal))), storage: Math.max(0, Math.min(100, Math.round(100 * diskUsed / diskTotal))) } };
+  return { sample, frame: { type: "metrics", cpu, memory: Math.max(0, Math.min(100, Math.round(100 * (memTotal - memAvailable) / memTotal))), storage: Math.max(0, Math.min(100, Math.round(100 * diskUsed / diskTotal))) } };
 }
 const frame = z.discriminatedUnion("type", [
   z.object({ type: z.literal("input"), data: z.string().max(16384) }),
@@ -136,7 +140,7 @@ export function terminals(server: Server) {
     };
     shell.metricsTimeout = setTimeout(() => finish(false), METRICS_TIMEOUT_MS);
     shell.metricsPending = request;
-    shell.client.exec(METRICS_COMMAND, (error, channel) => {
+    shell.client.exec(shell.cpuSample ? METRICS_COMMAND : INITIAL_METRICS_COMMAND, (error, channel) => {
       if (shell.metricsEpoch !== epoch || shell.metricsPending !== request) { channel?.close(); return; }
       if (finished || shell.ended || shell.ws !== ws) { channel?.close(); return; }
       if (error || !channel) return finish(false);
