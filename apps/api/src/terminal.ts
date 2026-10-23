@@ -17,6 +17,11 @@ import type { Principal } from "../../../packages/policy-engine/index.js";
 const GRACE_MS = 120000;
 const REPLAY_BYTES = 256 * 1024;
 const HEARTBEAT_MS = 25000;
+const METRICS_MS = 30000;
+const METRICS_TIMEOUT_MS = 5000;
+const METRICS_OUTPUT_BYTES = 8192;
+const METRICS_COMMAND = "head -n 1 /proc/stat; cat /proc/meminfo; df -P /";
+type CpuSample = { idle: bigint; total: bigint };
 type Shell = {
   token: string;
   principal: Principal;
@@ -31,8 +36,37 @@ type Shell = {
   grace?: NodeJS.Timeout;
   idle?: NodeJS.Timeout;
   revalidate?: NodeJS.Timeout;
+  metricsTimer?: NodeJS.Timeout;
+  metricsChannel?: ClientChannel;
+  metricsTimeout?: NodeJS.Timeout;
+  metricsPending?: symbol;
+  metricsEpoch?: number;
+  cpuSample?: CpuSample;
   ended: boolean;
 };
+export function parseMetrics(raw: string, previous?: CpuSample) {
+  const cpuLine = raw.match(/^cpu\s+((?:\d+\s+){3,}\d+)\s*$/m)?.[1];
+  const fields = cpuLine?.trim().split(/\s+/).map((v) => BigInt(v));
+  if (!fields || fields.length < 4) return;
+  // Linux includes guest and guest_nice in user and nice already.
+  const total = fields.slice(0, 8).reduce((sum, value) => sum + value, 0n);
+  const idle = fields[3] + (fields[4] || 0n);
+  const memory = raw.match(/^MemTotal:\s+(-?\d+) kB$/m);
+  const available = raw.match(/^MemAvailable:\s+(-?\d+) kB$/m);
+  const disk = raw.match(/^\S+\s+(-?\d+)\s+(-?\d+)\s+\d+\s+\d+%\s+\/$/m);
+  if (!memory || !available || !disk) return;
+  const memTotal = Number(memory[1]);
+  const memAvailable = Number(available[1]);
+  const diskTotal = Number(disk[1]);
+  const diskUsed = Number(disk[2]);
+  if (!Number.isSafeInteger(memTotal) || memTotal <= 0 || !Number.isSafeInteger(memAvailable) || memAvailable < 0 || memAvailable > memTotal ||
+      !Number.isSafeInteger(diskTotal) || diskTotal <= 0 || !Number.isSafeInteger(diskUsed) || diskUsed < 0 || diskUsed > diskTotal) return;
+  const deltaTotal = previous ? total - previous.total : 0n;
+  const deltaIdle = previous ? idle - previous.idle : 0n;
+  const cpu = deltaTotal > 0n && deltaIdle >= 0n && deltaIdle <= deltaTotal
+    ? Math.max(0, Math.min(100, Math.round(100 * (1 - Number(deltaIdle) / Number(deltaTotal))))) : null;
+  return { sample: { idle, total }, frame: { type: "metrics", cpu, memory: Math.max(0, Math.min(100, Math.round(100 * (memTotal - memAvailable) / memTotal))), storage: Math.max(0, Math.min(100, Math.round(100 * diskUsed / diskTotal))) } };
+}
 const frame = z.discriminatedUnion("type", [
   z.object({ type: z.literal("input"), data: z.string().max(16384) }),
   z.object({
@@ -64,6 +98,58 @@ export function terminals(server: Server) {
   const send = (ws: WebSocket | undefined, value: unknown) => {
     if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value));
   };
+  function stopMetrics(shell: Shell) {
+    shell.metricsEpoch = (shell.metricsEpoch || 0) + 1;
+    clearInterval(shell.metricsTimer);
+    clearTimeout(shell.metricsTimeout);
+    shell.metricsTimer = undefined;
+    shell.metricsTimeout = undefined;
+    shell.metricsPending = undefined;
+    shell.metricsChannel?.close();
+    shell.metricsChannel = undefined;
+    shell.cpuSample = undefined;
+  }
+  function pollMetrics(shell: Shell) {
+    if (shell.ended || !shell.ws || shell.ws.readyState !== WebSocket.OPEN || shell.metricsPending || shell.metricsChannel || shell.metricsTimeout) return;
+    let output = "";
+    let finished = false;
+    const request = Symbol("metrics request");
+    const epoch = shell.metricsEpoch;
+    const ws = shell.ws;
+    const finish = (valid: boolean) => {
+      if (finished || shell.metricsEpoch !== epoch || shell.metricsPending !== request) return;
+      finished = true;
+      shell.metricsPending = undefined;
+      clearTimeout(shell.metricsTimeout);
+      shell.metricsTimeout = undefined;
+      shell.metricsChannel?.close();
+      shell.metricsChannel = undefined;
+      if (shell.ended || shell.ws !== ws) return;
+      const parsed = valid ? parseMetrics(output, shell.cpuSample) : undefined;
+      if (parsed) {
+        shell.cpuSample = parsed.sample;
+        send(ws, parsed.frame);
+      } else {
+        shell.cpuSample = undefined;
+        send(ws, { type: "metrics", cpu: null, memory: null, storage: null });
+      }
+    };
+    shell.metricsTimeout = setTimeout(() => finish(false), METRICS_TIMEOUT_MS);
+    shell.metricsPending = request;
+    shell.client.exec(METRICS_COMMAND, (error, channel) => {
+      if (shell.metricsEpoch !== epoch || shell.metricsPending !== request) { channel?.close(); return; }
+      if (finished || shell.ended || shell.ws !== ws) { channel?.close(); return; }
+      if (error || !channel) return finish(false);
+      shell.metricsChannel = channel;
+      channel.on("data", (data: Buffer) => {
+        if (output.length + data.length > METRICS_OUTPUT_BYTES) return finish(false);
+        output += data.toString("utf8");
+      });
+      channel.stderr.on("data", () => finish(false));
+      channel.on("close", (code: number) => finish(code === 0));
+      channel.on("error", () => finish(false));
+    });
+  }
   function end(shell: Shell, reason = "Session ended") {
     if (shell.ended) return;
     shell.ended = true;
@@ -71,6 +157,7 @@ export function terminals(server: Server) {
     clearTimeout(shell.grace);
     clearTimeout(shell.idle);
     clearInterval(shell.revalidate);
+    stopMetrics(shell);
     shell.stream.close();
     shell.client.end();
     if (shell.ws?.readyState === WebSocket.OPEN) shell.ws.close(1000, reason);
@@ -114,6 +201,9 @@ export function terminals(server: Server) {
         data: Buffer.concat(shell.replay).toString("base64"),
       });
     touch(shell);
+    stopMetrics(shell);
+    pollMetrics(shell);
+    shell.metricsTimer = setInterval(() => pollMetrics(shell), METRICS_MS);
     ws.on("message", (raw) => {
       if (shell.ws !== ws) return;
       try {
@@ -134,6 +224,7 @@ export function terminals(server: Server) {
     const detach = () => {
       if (shell.ws !== ws || shell.ended) return;
       shell.ws = undefined;
+      stopMetrics(shell);
       shell.grace = setTimeout(() => end(shell, "Not resumed"), GRACE_MS);
     };
     ws.on("close", detach);

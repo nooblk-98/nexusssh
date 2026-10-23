@@ -38,6 +38,36 @@ import { HostKeyPrompt, hostKeyProblem } from "./host-key";
 import { openSnippets } from "./snippets";
 import { Button, IconButton, openMenu, openMenuAt, type MenuItem } from "./ui";
 
+type Metrics = { cpu: number | null; memory: number | null; storage: number | null };
+const emptyMetrics: Metrics = { cpu: null, memory: null, storage: null };
+
+function metricValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100
+    ? value
+    : null;
+}
+
+function MetricBar({ label, value }: { label: string; value: number | null }) {
+  const title = `${label}: ${value === null ? "Unavailable" : `${value}%`}`;
+  return (
+    <div className="terminal-metric" title={title}>
+      <span className="terminal-metric-label">{label}</span>
+      <div
+        className="terminal-metric-track"
+        role="progressbar"
+        aria-label={`${label} usage`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={value === null ? undefined : value}
+        aria-valuetext={value === null ? "Unavailable" : `${value}%`}
+      >
+        <span className="terminal-metric-fill" style={{ width: `${value ?? 0}%` }} />
+      </div>
+      <span className="terminal-metric-value">{value === null ? "Unavailable" : `${value}%`}</span>
+    </div>
+  );
+}
+
 export default function TerminalView({
   tab,
   server,
@@ -70,6 +100,7 @@ export default function TerminalView({
     "connecting" | "connected" | "closed" | "error"
   >("connecting");
   const [message, setMessage] = useState("");
+  const [metrics, setMetrics] = useState<Metrics>(emptyMetrics);
   const [toolbar, setToolbar] = useState(true);
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
@@ -130,9 +161,11 @@ export default function TerminalView({
     const decoder =
       settings.encoding !== "utf-8" ? new TextDecoder(settings.encoding) : null;
     let failed = false;
+    let ready = false;
     const status = (v: typeof state, msg = "") => {
       setState(v);
       setMessage(msg);
+      if (v !== "connected") setMetrics(emptyMetrics);
       setStatus(tab.id, v);
     };
     status("connecting");
@@ -156,10 +189,19 @@ export default function TerminalView({
         const bytes = Uint8Array.from(atob(m.data), (c) => c.charCodeAt(0));
         t.write(decoder ? decoder.decode(bytes, { stream: true }) : bytes);
       } else if (m.type === "ready") {
+        ready = true;
         updateTab(tab.id, { resume: m.resume });
         status("connected");
         resize();
         t.focus();
+      } else if (m.type === "metrics") {
+        if (ready && ws.readyState === WebSocket.OPEN && !failed) {
+          setMetrics({
+            cpu: metricValue(m.cpu),
+            memory: metricValue(m.memory),
+            storage: metricValue(m.storage),
+          });
+        }
       } else if (m.type === "error") {
         failed = true;
         status("error", m.message);
@@ -167,10 +209,13 @@ export default function TerminalView({
       }
     };
     ws.onclose = () => {
+      ready = false;
+      setMetrics(emptyMetrics);
       if (!failed) status("closed");
     };
     ws.onerror = () => {
       failed = true;
+      ready = false;
       status("error", "Connection failed");
     };
     const showSuggestions = () => {
@@ -302,6 +347,9 @@ export default function TerminalView({
         !useWorkspace.getState().tabs.some((x) => x.id === tab.id);
       if (closing && ws.readyState === 1)
         ws.send(JSON.stringify({ type: "disconnect" }));
+      ws.onmessage = null;
+      ws.onclose = null;
+      ws.onerror = null;
       ws.close();
       // xterm schedules a viewport sync on open; disposing in the same tick
       // makes that callback throw, so let it run first.
@@ -632,6 +680,13 @@ export default function TerminalView({
         <span className="key">Host:</span>
         <span className="mono">{server.host}</span>
         {broadcasting && <span className="badge amber">Broadcasting</span>}
+        {state === "connected" && (
+          <div className="terminal-metrics" aria-label="VM resource usage">
+            <MetricBar label="CPU" value={metrics.cpu} />
+            <MetricBar label="RAM" value={metrics.memory} />
+            <MetricBar label="Disk" value={metrics.storage} />
+          </div>
+        )}
         <span
           className={
             "state" +

@@ -1103,6 +1103,44 @@ p {
   background: var(--panel);
   font-size: 10px;
   color: var(--text-strong);
+  min-width: 0;
+}
+.statusbar > b,
+.statusbar > .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.terminal-metrics {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 0;
+  margin-left: auto;
+}
+.terminal-metric {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.terminal-metric-track {
+  width: 44px;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 5px;
+  background: var(--border);
+}
+.terminal-metric-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--success);
+}
+.terminal-metric-value {
+  min-width: 3ch;
+  color: var(--muted);
 }
 .statusbar .key {
   color: var(--primary);
@@ -1113,6 +1151,41 @@ p {
   align-items: center;
   gap: 5px;
   color: var(--muted);
+  white-space: nowrap;
+  flex: none;
+}
+.terminal-metrics + .state {
+  margin-left: 0;
+}
+@media (max-width: 700px) {
+  .statusbar .key,
+  .statusbar > .mono {
+    display: none;
+  }
+  .terminal-metrics {
+    gap: 5px;
+  }
+  .terminal-metric-track {
+    width: 28px;
+  }
+}
+@media (max-width: 480px) {
+  .statusbar {
+    height: auto;
+    min-height: 28px;
+    flex-wrap: wrap;
+    padding-top: 5px;
+    padding-bottom: 5px;
+  }
+  .terminal-metrics {
+    order: 3;
+    width: 100%;
+    justify-content: space-between;
+    margin-left: 0;
+  }
+  .terminal-metric-track {
+    width: 32px;
+  }
 }
 .statusbar .state::before {
   content: "";
