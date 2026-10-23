@@ -135,6 +135,7 @@ export function McpServer() {
 }
 
 export function Agents() {
+  const maxServerGrants = 100;
   const q = useApi<Row[]>("agents");
   const settings = useApi<Row>("settings");
   const { servers } = useServers();
@@ -161,6 +162,10 @@ export function Agents() {
   const ops: string[] = (settings.data?.operations || []).filter(
     (o: string) => o !== "terminal",
   );
+  const availableOps =
+    form?.level === "viewer"
+      ? ops.filter((o) => settings.data?.readOperations?.includes(o))
+      : ops;
   return (
     <div className="page">
       <PageHead
@@ -363,6 +368,7 @@ export function Agents() {
               <Button
                 disabled={
                   !form.name.trim() ||
+                  form.serverIds.length > maxServerGrants ||
                   (!form.serverIds.length && !form.workspaceManagement)
                 }
                 onClick={() =>
@@ -508,17 +514,51 @@ export function Agents() {
             tools and server grants; approval decisions stay in the app.
           </p>
           <div className="drawer-section">Servers</div>
+          <p className="hint">
+            Selected tools apply to every selected server. Up to {maxServerGrants} servers
+            per agent ({form.serverIds.length} selected).
+            {servers.length > maxServerGrants &&
+              " Select all is unavailable because this workspace has more than 100 servers."}
+          </p>
+          <div className="row" style={{ gap: 8, marginBottom: 10 }}>
+            <Button
+              variant="text"
+              size="sm"
+              disabled={
+                !servers.length ||
+                servers.length > maxServerGrants ||
+                servers.every((s) => form.serverIds.includes(s.id))
+              }
+              onClick={() => setForm({ ...form, serverIds: servers.map((s) => s.id) })}
+            >
+              Select all servers
+            </Button>
+            <Button
+              variant="text"
+              size="sm"
+              disabled={!form.serverIds.length}
+              onClick={() => setForm({ ...form, serverIds: [] })}
+            >
+              Clear servers
+            </Button>
+          </div>
           <div className="check-grid">
             {servers.map((s) => (
               <Check
                 key={s.id}
                 label={s.name}
                 checked={form.serverIds.includes(s.id)}
+                disabled={
+                  !form.serverIds.includes(s.id) &&
+                  form.serverIds.length >= maxServerGrants
+                }
                 onChange={(v) =>
                   setForm({
                     ...form,
                     serverIds: v
-                      ? [...form.serverIds, s.id]
+                      ? form.serverIds.length < maxServerGrants
+                        ? [...form.serverIds, s.id]
+                        : form.serverIds
                       : form.serverIds.filter((x) => x !== s.id),
                   })
                 }
@@ -526,10 +566,33 @@ export function Agents() {
             ))}
           </div>
           <div className="drawer-section" style={{ marginTop: 14 }}>
-            Tools
+            SSH tools
+          </div>
+          <p className="hint">
+            {form.level === "viewer"
+              ? "Viewer agents can use read-only tools only."
+              : "Select the SSH actions this agent can use on its selected servers."}
+          </p>
+          <div className="row" style={{ gap: 8, marginBottom: 10 }}>
+            <Button
+              variant="text"
+              size="sm"
+              disabled={!availableOps.length || availableOps.every((o) => form.operations.includes(o))}
+              onClick={() => setForm({ ...form, operations: availableOps })}
+            >
+              Select all {form.level === "viewer" ? "read-only " : ""}SSH tools
+            </Button>
+            <Button
+              variant="text"
+              size="sm"
+              disabled={!form.operations.length}
+              onClick={() => setForm({ ...form, operations: [] })}
+            >
+              Clear SSH tools
+            </Button>
           </div>
           <div className="check-grid">
-            {ops.map((o) => (
+            {availableOps.map((o) => (
               <Check
                 key={o}
                 label={<span className="mono small">{o}</span>}
