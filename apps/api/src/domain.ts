@@ -5,7 +5,8 @@ import {
 } from "@nestjs/common";
 import { Queue, QueueEvents } from "bullmq";
 import { randomUUID } from "node:crypto";
-import { reserveAgentCall } from "./agent-quota.js";
+import type { Prisma } from "@prisma/client";
+import { reserveAgentCall, reserveAgentCalls } from "./agent-quota.js";
 import { resolveSettings, numericMetadata } from "./metadata.js";
 import { db } from "../../../packages/database/index.js";
 import { config, redisConnection } from "../../../packages/shared/config.js";
@@ -18,6 +19,9 @@ import {
 import {
   parseOperation,
   executionArgs,
+  batchApprovalPayload,
+  completedBatchResult,
+  batchTokenAllowed,
 } from "../../../packages/shared/operations.js";
 import {
   permitted,
@@ -40,6 +44,11 @@ export const queue = new Queue("nexus-ssh", {
 export const events = new QueueEvents("nexus-ssh", {
   connection: redisConnection,
 });
+export const batchQueue = new Queue("nexus-ssh-batch", {
+  connection: redisConnection,
+  defaultJobOptions: { attempts: 1, removeOnComplete: { age: 3600, count: 1000 }, removeOnFail: { age: 3600, count: 1000 } },
+});
+export const batchEvents = new QueueEvents("nexus-ssh-batch", { connection: redisConnection });
 export async function audit(
   p: Principal,
   action: string,
@@ -354,6 +363,123 @@ export async function operation(
   input: unknown,
   signal?: AbortSignal,
 ): Promise<any> {
+  if (op === "ssh_execute_many") return executeMany(p, input, signal);
+  return singleOperation(p, op, input, signal);
+}
+
+async function executeMany(p: Principal, input: unknown, signal?: AbortSignal) {
+  const a = parseOperation("ssh_execute_many", input);
+  const ids: string[] = [...a.serverIds].sort();
+  if (Math.ceil(ids.length / 3) * (a.timeoutMs + config.SSH_CONNECT_TIMEOUT) > 180000)
+    throw new BadRequestException("Batch timeout is too long for this number of servers; reduce timeoutMs or serverIds");
+  const { args: normalized, digest } = batchApprovalPayload(ids, a.command, a.timeoutMs);
+  let subject = p;
+  if (a.approvalId) {
+    const approval = await db.approvalRequest.findFirst({ where: { id: a.approvalId, organizationId: p.organizationId, operation: "ssh_execute_many", status: "approved", consumedAt: null, expiresAt: { gt: new Date() }, argumentDigest: digest } });
+    if (!approval) throw new ForbiddenException("Approval is missing, expired, mismatched, or already consumed");
+    if (approval.principalId === p.id && p.kind === "agent" && !batchTokenAllowed(approval.tokenId, p.tokenId ? { id: p.tokenId, scopes: p.scopes } : null))
+      throw new ForbiddenException("The requesting agent token is no longer the approved token");
+    if (approval.principalId !== p.id) {
+      if (p.kind !== "user" || !["owner", "administrator"].includes(p.role))
+        throw new ForbiddenException("Only an administrator may execute another principal's approved batch");
+      const agent = await db.agent.findFirst({ where: { id: approval.principalId, organizationId: p.organizationId, revoked: false, owner: { disabled: false } }, include: { tokens: { where: { id: approval.tokenId ?? "", revoked: false, expiresAt: { gt: new Date() } } } } });
+      if (agent) {
+        const token = agent.tokens[0];
+        const scopes: string[] = token ? JSON.parse(token.scopes) : [];
+        if (!batchTokenAllowed(approval.tokenId, token ? { id: token.id, scopes } : null)) throw new ForbiddenException("The originally approved agent token is no longer active for batch execution");
+        subject = { id: agent.id, organizationId: p.organizationId, kind: "agent", role: agent.level, scopes: JSON.parse(token.scopes), tokenId: token.id, ownerId: agent.ownerId };
+      } else {
+        if (approval.tokenId) throw new ForbiddenException("The originally approved agent is unavailable");
+        const user = await db.user.findFirst({ where: { id: approval.principalId, organizationId: p.organizationId, disabled: false } });
+        if (!user) throw new ForbiddenException("Requesting principal is unavailable");
+        subject = { id: user.id, organizationId: p.organizationId, kind: "user", role: user.role, scopes: [] };
+      }
+    }
+  }
+  if (subject.kind === "agent" && !subject.scopes.includes("ssh_execute_many"))
+    throw new ForbiddenException({ code: "operation_not_in_token_scope", message: "Batch execution is not in the agent token scope" });
+  // Check every target before creating or consuming the exact-set approval.
+  const servers = await Promise.all(ids.map((id) => authorize(subject, id, "ssh_execute")));
+  if (!a.approvalId) {
+    const approval = await db.approvalRequest.create({ data: {
+      organizationId: subject.organizationId, principalId: subject.id, tokenId: subject.tokenId ?? null, serverId: ids[0],
+      operation: "ssh_execute_many", argumentDigest: digest,
+      encryptedArguments: seal(normalized, config.ENCRYPTION_KEY, subject.organizationId),
+      expiresAt: new Date(Date.now() + 600000),
+    } });
+    await audit(subject, "ssh_execute_many", "approval_pending", ids[0], approval.id);
+    void announceApproval(subject, "ssh_execute_many", servers.map((s) => s.name).join(", "), approval.id);
+    return { status: "approval_required", approvalId: approval.id, expiresAt: approval.expiresAt };
+  }
+  const createBatch = async (tx: Prisma.TransactionClient) => {
+    const used = await tx.approvalRequest.updateMany({
+      where: { id: a.approvalId, organizationId: subject.organizationId, principalId: subject.id, tokenId: subject.tokenId ?? null,
+        serverId: ids[0], operation: "ssh_execute_many", argumentDigest: digest,
+        status: "approved", consumedAt: null, expiresAt: { gt: new Date() } },
+      data: { status: "consumed", consumedAt: new Date() },
+    });
+    if (used.count !== 1) throw new ForbiddenException("Approval is missing, expired, mismatched, or already consumed");
+    const batch = await tx.batchDispatch.create({ data: { organizationId: subject.organizationId, principalId: subject.id } });
+    const taskIds: string[] = [];
+    for (const serverId of ids) {
+      const args = { serverId, command: a.command, timeoutMs: a.timeoutMs };
+      const task = await tx.backgroundTask.create({ data: {
+        organizationId: subject.organizationId, principalId: subject.id, serverId,
+        operation: "ssh_execute", encryptedArguments: seal(args, config.ENCRYPTION_KEY, subject.organizationId),
+        status: "queued", tokenId: subject.tokenId, batchId: batch.id,
+        expiresAt: new Date(Date.now() + 240000),
+      } });
+      await tx.commandExecution.create({ data: { id: task.id, organizationId: subject.organizationId, principalId: subject.id, serverId, operation: "ssh_execute", argumentDigest: hash(canonical(args)), status: "queued" } });
+      taskIds.push(task.id);
+    }
+    await tx.auditEvent.create({ data: { organizationId: subject.organizationId, principalId: subject.id, action: "ssh_execute_many", status: "queued", serverId: ids[0], correlationId: batch.id } });
+    return { batchId: batch.id, taskIds };
+  };
+  const batch = subject.kind === "agent"
+    ? await reserveAgentCalls(subject.id, ids.length, createBatch)
+    : await db.$transaction(createBatch);
+  const abortBatch = async () => db.$transaction(async (tx) => {
+    const stopped = await tx.batchDispatch.updateMany({ where: { id: batch.batchId, status: "pending" }, data: { status: "aborted" } });
+    if (!stopped.count) return false;
+    await tx.backgroundTask.updateMany({ where: { batchId: batch.batchId, status: "queued" }, data: { status: "failed" } });
+    await tx.commandExecution.updateMany({ where: { id: { in: batch.taskIds }, status: "queued" }, data: { status: "failed" } });
+    await tx.auditEvent.updateMany({ where: { correlationId: batch.batchId, action: "ssh_execute_many", status: "queued" }, data: { status: "failed" } });
+    await tx.approvalRequest.updateMany({ where: { id: a.approvalId, status: "consumed", principalId: subject.id }, data: { status: "approved", consumedAt: null } });
+    return true;
+  });
+  let job;
+  try {
+    job = await batchQueue.add("batch", { batchId: batch.batchId, taskIds: batch.taskIds, serverIds: ids }, { jobId: batch.batchId });
+    const released = await db.batchDispatch.updateMany({ where: { id: batch.batchId, status: "pending" }, data: { status: "released" } });
+    if (!released.count) throw new Error("Batch could not be released");
+  } catch {
+    const stopped = await abortBatch().catch(() => false);
+    throw new BadRequestException({ message: stopped ? "Batch could not be queued; no command was started" : "Batch state is uncertain; inspect task status before retrying", batchId: batch.batchId, taskIds: batch.taskIds });
+  }
+  const cancelDispatched = () => {
+    void db.$transaction(async (tx) => {
+      const changed = await tx.batchDispatch.updateMany({ where: { id: batch.batchId, status: { in: ["released", "executing"] } }, data: { status: "aborted" } });
+      if (!changed.count) return;
+      await tx.backgroundTask.updateMany({ where: { batchId: batch.batchId, status: { in: ["queued", "running"] } }, data: { status: "cancelled" } });
+      await tx.commandExecution.updateMany({ where: { id: { in: batch.taskIds }, status: { in: ["queued", "running"] } }, data: { status: "cancelled" } });
+      await tx.auditEvent.updateMany({ where: { correlationId: batch.batchId, action: "ssh_execute_many", status: "queued" }, data: { status: "cancelled" } });
+    }).catch((error) => console.error("Could not cancel dispatched batch", batch.batchId, error));
+  };
+  signal?.addEventListener("abort", cancelDispatched, { once: true });
+  if (signal?.aborted) cancelDispatched();
+  try {
+    const result = await job.waitUntilFinished(batchEvents, 195000);
+    return { results: result.results.map((entry: { serverId: string; status: string; result?: unknown; error?: string; taskId?: string }) => entry.status === "success" ? { ...entry, result: completedBatchResult(entry.result) } : entry) };
+  } catch {
+    throw new BadRequestException({ message: "Batch did not finish; inspect task status before retrying", batchId: batch.batchId, taskIds: batch.taskIds });
+  } finally {
+    signal?.removeEventListener("abort", cancelDispatched);
+  }
+}
+
+async function singleOperation(
+  p: Principal, op: string, input: unknown, signal?: AbortSignal,
+): Promise<any> {
   const a = parseOperation(op, input);
   if (op === "servers_list") return listServersPage(p, a);
   if (op === "approval_get_status") {
@@ -556,6 +682,11 @@ export async function claimTask(id: string) {
   const t = await db.backgroundTask.findUnique({ where: { id } });
   if (!t || t.status !== "queued" || t.expiresAt < new Date())
     throw new ForbiddenException("Task unavailable");
+  if (t.batchId) {
+    const batch = await db.batchDispatch.findUnique({ where: { id: t.batchId } });
+    if (!batch || batch.status !== "released" || batch.organizationId !== t.organizationId || batch.principalId !== t.principalId)
+      throw new ForbiddenException("Batch unavailable");
+  }
   const agent = await db.agent.findUnique({
     where: { id: t.principalId },
     include: {
@@ -589,6 +720,8 @@ export async function claimTask(id: string) {
       ? Array.from(new Set(agent.tokens.flatMap((v) => JSON.parse(v.scopes))))
       : [],
   };
+  if (t.batchId && agent && !batchTokenAllowed(t.tokenId, agent.tokens[0] ? { id: agent.tokens[0].id, scopes: p.scopes } : null))
+    throw new ForbiddenException({ code: "operation_not_in_token_scope", message: "The original agent token no longer permits batch execution" });
   await authorize(p, t.serverId, t.operation);
   const lease = randomUUID();
   const updated = await db.backgroundTask.updateMany({
@@ -598,7 +731,7 @@ export async function claimTask(id: string) {
   if (updated.count !== 1) throw new ForbiddenException("Task already claimed");
   return {
     lease,
-    connection: await connection(t.serverId, t.organizationId),
+    connection: await connection(t.serverId, t.organizationId, undefined, !t.batchId),
     limits: await sshLimits(t.organizationId),
     operation: t.operation,
     args: unseal(t.encryptedArguments, config.ENCRYPTION_KEY, t.organizationId),

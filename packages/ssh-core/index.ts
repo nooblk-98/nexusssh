@@ -319,12 +319,18 @@ const quote = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
 export function diagnostic(op: string, a: any): string | undefined {
   const fixed: Record<string, string> = {
     system_info: "uname -a; cat /etc/os-release",
+    system_uptime: "uptime",
+    disk_usage: "df -h",
   };
   if (fixed[op]) return fixed[op];
   if (op === "ssh_execute") return a.command;
   if (op === "system_logs")
     return `journalctl --no-pager -n ${a.lines}${a.service ? " -u " + quote(a.service) : ""}`;
-  if (op.startsWith("service_"))
+  if (op === "kubernetes_get")
+    return `kubectl get ${a.resource}${a.namespace ? " --namespace " + quote(a.namespace) : ""}${a.name ? " " + quote(a.name) : ""} --no-headers --request-timeout=10s`;
+  if (op === "service_status")
+    return `systemctl status --no-pager --plain -- ${quote(a.service)}`;
+  if (["service_start", "service_stop", "service_restart"].includes(op))
     return `systemctl ${op.slice(8)} -- ${quote(a.service)}`;
 }
 export async function operate(
@@ -351,8 +357,8 @@ export async function operate(
       const result = await exec(
         client,
         command,
-        a.timeoutMs || 30000,
-        l.outputLimit,
+        ["system_uptime", "disk_usage", "service_status", "kubernetes_get"].includes(op) ? 15000 : a.timeoutMs || 30000,
+        ["system_uptime", "disk_usage", "service_status", "kubernetes_get"].includes(op) ? Math.min(l.outputLimit, 16384) : l.outputLimit,
         signal,
       );
       return result;

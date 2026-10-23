@@ -2,8 +2,11 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import {
   Bell,
+  CheckSquare,
   ChevronDown,
   ChevronLeft,
+  MoreHorizontal,
+  Square,
   Folder,
   Menu,
   Plus,
@@ -26,6 +29,8 @@ import { openImportExport } from "./import-export";
 import { openServerDrawer } from "./server-drawer";
 import { DefaultsEditor, MetadataEditor } from "./metadata-editor";
 import { HealthIndicator, ServerHealth } from "./server-health";
+import { CommandPalette } from "./command-palette";
+import { ExecuteMany } from "./execute-many";
 import {
   Button,
   Drawer,
@@ -93,10 +98,24 @@ export function Sidebar({ me }: { me: Row }) {
   const [view, setView] = useState<"tree" | "table" | "tags">("tree");
   const [tagFilter, setTagFilter] = useState("");
   const [checked, setChecked] = useState<string[]>([]);
+  const [selectMode, setSelectMode] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [executeOpen, setExecuteOpen] = useState(false);
+  const [bulkMoveOpen, setBulkMoveOpen] = useState(false);
+  const [bulkDestination, setBulkDestination] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkErrors, setBulkErrors] = useState<string[]>([]);
   const [health, setHealth] = useState<{ title: string; servers: Row[]; groupId?: string } | null>(null);
   const [healthNow, setHealthNow] = useState(() => Date.now());
   useEffect(() => { const timer = setInterval(() => setHealthNow(Date.now()), 60_000); return () => clearInterval(timer); }, []);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setPaletteOpen(true); }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
   const { selected, select, setCollapsed } = useWorkspace();
   const [search, setSearch] = useState("");
   const [closed, setClosed] = useState<string[]>([]);
@@ -149,6 +168,10 @@ export function Sidebar({ me }: { me: Row }) {
     [servers, groups, q, tagFilter],
   );
   const toggleChecked = (id: string) => setChecked((current) => current.includes(id) ? current.filter((x) => x !== id) : [...current, id]);
+  const archiveServer = async (s: Row) => {
+    if (!await confirmDialog("Archive Server", <>Archive <b>{s.name}</b>? It will be removed from the active list while audit history keeps its references.</>, "Archive", true)) return;
+    await api("servers/" + s.id, {}, "DELETE").then(() => refresh("servers")).catch(notify.error);
+  };
   const startMove = (kind: "server" | "folder", row: Row) => {
     setMove({ kind, row });
     setDestination((kind === "folder" ? row.parentId : row.groupId) || "");
@@ -376,8 +399,8 @@ export function Sidebar({ me }: { me: Row }) {
     },
   });
   const serverRow = (s: Row, depth = 0) => (
-    <div key={s.id} style={{ display: "flex", alignItems: "center" }}>
-    {admin && <input type="checkbox" aria-label={`Select ${s.name}`} checked={checked.includes(s.id)} onChange={() => toggleChecked(s.id)} />}
+    <div key={s.id} className="server-row-wrap">
+    {admin && selectMode && <input className="server-select" type="checkbox" aria-label={`Select ${s.name}`} checked={checked.includes(s.id)} onChange={() => toggleChecked(s.id)} />}
     <button
       className={"tree-server" + (selected === s.id ? " selected" : "")}
       style={{ paddingLeft: 10 + depth * 20 }}
@@ -402,6 +425,8 @@ export function Sidebar({ me }: { me: Row }) {
         <div className="srv-sub ellipsis">{s.host}&nbsp; | &nbsp;SSH2</div>
       </span>
     </button>
+    {admin && <IconButton className="server-row-menu" label={`Actions for ${s.name}`} onClick={(e) => { e.stopPropagation(); openMenuAt(e.currentTarget, serverMenu(s)); }}><MoreHorizontal size={17} /></IconButton>}
+    {admin && <button className="server-row-delete" title={`Archive ${s.name}`} aria-label={`Archive ${s.name}`} onClick={(e) => { e.stopPropagation(); void archiveServer(s); }}><span>Archive</span></button>}
     </div>
   );
   const root = visible.filter((s) => !s.groupId);
@@ -480,6 +505,7 @@ export function Sidebar({ me }: { me: Row }) {
         <div className="grow">
           <SearchInput id="server-search" value={search} onChange={setSearch} />
         </div>
+        <button className="btn btn-secondary" title="Command palette (Ctrl/Cmd+K)" aria-label="Open command palette" onClick={() => setPaletteOpen(true)}>⌘K</button>
         {admin && (
           <button
             className="add-btn"
@@ -508,9 +534,17 @@ export function Sidebar({ me }: { me: Row }) {
       <div className="sidebar-tools" style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
         {(["tree", "table", "tags"] as const).map((mode) => <button key={mode} className="btn btn-secondary" aria-pressed={view === mode} onClick={() => setView(mode)}>{mode === "tree" ? "Tree" : mode === "table" ? "Table" : "By tag"}</button>)}
         <select className="select" aria-label="Filter by tag" value={tagFilter} onChange={(e) => setTagFilter(e.target.value)}><option value="">All tags</option>{tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}</select>
+        <button className="btn btn-secondary" onClick={() => setExecuteOpen(true)}>Run command…</button>
       </div>
       {admin && view === "tags" && <div className="sidebar-tools"><select className="select" aria-label="Edit tag defaults" onChange={(e) => { const tag = tags.find((x) => x.id === e.target.value); if (tag) setDefaults({ kind: "tags", row: tag }); e.currentTarget.value = ""; }} defaultValue=""><option value="">Edit tag defaults…</option>{tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}</select></div>}
-      {admin && !!checked.length && <div className="sidebar-tools">{checked.length} selected <Button onClick={() => setBulkOpen(true)}>Bulk edit</Button><Button variant="secondary" onClick={() => setChecked([])}>Clear</Button></div>}
+      {admin && <div className="selection-tools">{!selectMode ? <Button variant="secondary" size="sm" onClick={() => setSelectMode(true)}><CheckSquare size={15} /> Select servers</Button> : <><div className="selection-summary"><Square size={15} /> <strong>{new Set(checked).size}</strong> selected</div><Button variant="secondary" size="sm" onClick={() => { const ids = new Set(visible.map((s) => s.id)); setChecked((current) => [...new Set([...current.filter((id) => !ids.has(id)), ...visible.map((s) => s.id)])]); }}>Select visible</Button>{!!checked.length && <><Button size="sm" onClick={() => setBulkOpen(true)}>Bulk edit</Button><Button variant="secondary" size="sm" onClick={() => { setBulkErrors([]); setBulkMoveOpen(true); }}>Move</Button><Button variant="secondary" size="sm" onClick={() => setExecuteOpen(true)}>Run command</Button><Button variant="danger" size="sm" onClick={async () => {
+        const ids = [...new Set(checked)].filter((id) => servers.some((server) => server.id === id));
+        if (!await confirmDialog("Archive selected servers", `Archive ${ids.length} selected servers?`, "Archive", true)) return;
+        const failed: string[] = [];
+        for (const id of ids) { try { await api(`servers/${id}`, {}, "DELETE"); } catch { failed.push(id); } }
+        await refresh("servers"); setChecked(failed);
+        notify.info(`${ids.length - failed.length} archived, ${failed.length} failed${failed.length ? "; failed servers remain selected" : ""}.`);
+      }}>Archive</Button></>}<Button variant="text" size="sm" onClick={() => { setChecked([]); setSelectMode(false); }}>Done</Button></>}</div>}
       <nav
         className="tree tree-root"
         aria-label="Servers"
@@ -525,7 +559,7 @@ export function Sidebar({ me }: { me: Row }) {
         }}
       >
         {view === "tree" && <>{groups.filter((g) => !g.parentId).map((g) => renderFolder(g))}{root.map((s) => serverRow(s))}</>}
-        {view === "table" && <div style={{ overflowX: "auto" }}><table className="table"><thead><tr><th>Select</th><th>Status</th><th>Name</th><th>Host</th><th>Environment</th><th>vCPU</th><th>RAM</th><th>Disk</th><th>OS</th><th>Role</th><th>Check</th></tr></thead><tbody>{visible.map((s) => <tr key={s.id} onClick={() => select(s.id)}><td><input type="checkbox" aria-label={`Select ${s.name}`} checked={checked.includes(s.id)} onChange={() => toggleChecked(s.id)} onClick={(e) => e.stopPropagation()} /></td><td><HealthIndicator server={s} now={healthNow} /></td><td><button className="btn btn-secondary" onClick={() => openServerDrawer({ server: s })}>{s.name}</button></td><td>{s.host}</td><td>{s.effectiveSettings?.values?.environment ?? s.environment}</td><td>{s.vcpu ?? "—"}</td><td>{s.ramBytes ?? "—"}</td><td>{s.diskBytes ?? "—"}</td><td>{s.os || "—"}</td><td>{s.role || "—"}</td><td><button className="btn btn-secondary" onClick={() => setHealth({ title: `Check ${s.name}`, servers: [s] })}>Test</button></td></tr>)}</tbody></table></div>}
+        {view === "table" && <div style={{ overflowX: "auto" }}><table className="table"><thead><tr><th>{admin && selectMode ? "Select" : ""}</th><th>Status</th><th>Name</th><th>Host</th><th>Environment</th><th>vCPU</th><th>RAM</th><th>Disk</th><th>OS</th><th>Role</th><th>Check</th></tr></thead><tbody>{visible.map((s) => <tr key={s.id} onClick={() => select(s.id)}><td>{admin && selectMode && <input type="checkbox" aria-label={`Select ${s.name}`} checked={checked.includes(s.id)} onChange={() => toggleChecked(s.id)} onClick={(e) => e.stopPropagation()} />}</td><td><HealthIndicator server={s} now={healthNow} /></td><td><button className="btn btn-secondary" onClick={() => openServerDrawer({ server: s })}>{s.name}</button></td><td>{s.host}</td><td>{s.effectiveSettings?.values?.environment ?? s.environment}</td><td>{s.vcpu ?? "—"}</td><td>{s.ramBytes ?? "—"}</td><td>{s.diskBytes ?? "—"}</td><td>{s.os || "—"}</td><td>{s.role || "—"}</td><td><button className="btn btn-secondary" onClick={() => setHealth({ title: `Check ${s.name}`, servers: [s] })}>Test</button></td></tr>)}</tbody></table></div>}
         {view === "tags" && <>{tags.filter((tag) => !tagFilter || tag.id === tagFilter).map((tag) => { const list = visible.filter((s) => (s.tags || []).some((t: Row) => t.id === tag.id)); return list.length || tagFilter ? <section key={tag.id}><div className="tree-folder">{tag.name} ({list.length})</div>{list.map((s) => serverRow(s))}</section> : null; })}{!tagFilter && visible.filter((s) => !(s.tags || []).length).length > 0 && <section><div className="tree-folder">Untagged</div>{visible.filter((s) => !(s.tags || []).length).map((s) => serverRow(s))}</section>}</>}
         {admin && drag && (
           <div
@@ -557,7 +591,28 @@ export function Sidebar({ me }: { me: Row }) {
         )}
       </nav>
       {defaults && <DefaultsEditor kind={defaults.kind} row={defaults.row} onClose={() => setDefaults(null)} />}
+      {paletteOpen && <CommandPalette servers={servers} canManage={admin} onCheck={(server) => setHealth({ title: `Check ${server.name}`, servers: [server] })} onClose={() => setPaletteOpen(false)} />}
+      {executeOpen && <ExecuteMany servers={servers} groups={groups} tags={tags} selectedIds={checked} onClose={() => setExecuteOpen(false)} />}
       {health && <ServerHealth title={health.title} servers={health.servers} groupId={health.groupId} canManage={admin} onClose={() => setHealth(null)} />}
+      {bulkMoveOpen && <Drawer title={`Move ${new Set(checked).size} servers`} onClose={() => !bulkBusy && setBulkMoveOpen(false)} footer={<><Button variant="secondary" disabled={bulkBusy} onClick={() => setBulkMoveOpen(false)}>Close</Button><Button disabled={bulkBusy} onClick={async () => {
+        setBulkBusy(true); setBulkErrors([]);
+        const errors: string[] = [];
+        const failedIds: string[] = [];
+        const ids = [...new Set(checked)].filter((id) => servers.some((server) => server.id === id));
+        try {
+          for (const id of ids) {
+            try { await api(`servers/${id}/move`, { groupId: bulkDestination || null }, "PATCH"); }
+            catch (e) { failedIds.push(id); errors.push(`${servers.find((server) => server.id === id)?.name || id}: ${(e as Error).message}`); }
+          }
+          await refresh("servers"); setBulkErrors(errors); setChecked(failedIds);
+          notify.info(`${ids.length - errors.length} moved, ${errors.length} failed.`);
+          if (!errors.length) setBulkMoveOpen(false);
+        } catch (e) { setBulkErrors([(e as Error).message]); }
+        finally { setBulkBusy(false); }
+      }}>{bulkBusy ? "Moving…" : "Move selected"}</Button></>}>
+        <Field label="Destination folder"><select className="select" value={bulkDestination} onChange={(event) => setBulkDestination(event.target.value)}><option value="">Top level</option>{folderOptions(groups).map((folder) => <option key={folder.id} value={folder.id}>{folder.label}</option>)}</select></Field>
+        {bulkErrors.map((message) => <div key={message} className="alert danger">{message}</div>)}
+      </Drawer>}
       {bulkOpen && <MetadataEditor title={`Bulk edit ${new Set(checked).size} servers`} bulk hardware onClose={() => setBulkOpen(false)} onSave={async ({ settings, inherit, metadata }) => {
         const serverIds = [...new Set(checked)].filter((id) => servers.some((s) => s.id === id));
         if (!serverIds.length) throw new Error("No selected servers are available.");

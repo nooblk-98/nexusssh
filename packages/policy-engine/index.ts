@@ -18,11 +18,15 @@ export const readOperations = [
   "ssh_read_file",
   "ssh_download_file",
   "system_info",
+  "system_uptime",
+  "disk_usage",
   "system_logs",
   "service_status",
+  "kubernetes_get",
 ];
 export const writeOperations = [
   "ssh_execute",
+  "ssh_execute_many",
   "ssh_write_file",
   "ssh_upload_file",
   "ssh_create_directory",

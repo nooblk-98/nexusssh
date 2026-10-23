@@ -10,7 +10,7 @@ import {
   inside,
   resolveAllowed,
 } from "../../packages/ssh-core/index.js";
-import { parseOperation } from "../../packages/shared/operations.js";
+import { parseOperation, batchApprovalDigest, batchApprovalPayload, completedBatchResult, batchTokenAllowed } from "../../packages/shared/operations.js";
 import { totp, verifyTotp, newTotp } from "../../apps/api/src/totp.js";
 const p: Principal = {
   id: "a",
@@ -51,6 +51,7 @@ describe("policy boundaries", () => {
   it("requires approval for all arbitrary commands and writes", () => {
     for (const op of [
       "ssh_execute",
+      "ssh_execute_many",
       "ssh_write_file",
       "ssh_delete_file",
       "service_stop",
@@ -64,6 +65,35 @@ describe("policy boundaries", () => {
     expect(hash(canonical({ command: "ls" }))).not.toBe(
       hash(canonical({ command: "ls; id" })),
     );
+  });
+  it("binds batch approval to the exact target set, command and timeout", () => {
+    const a = crypto.randomUUID(), b = crypto.randomUUID(), c = crypto.randomUUID();
+    const digest = batchApprovalDigest([a, b], "uptime", 30000);
+    expect(batchApprovalDigest([b, a], "uptime", 30000)).toBe(digest);
+    expect(batchApprovalDigest([a, c], "uptime", 30000)).not.toBe(digest);
+    expect(batchApprovalDigest([a, b], "id", 30000)).not.toBe(digest);
+    expect(batchApprovalDigest([a, b], "uptime", 60000)).not.toBe(digest);
+    expect(() => parseOperation("ssh_execute_many", { serverIds: [a, a], command: "id" })).toThrow();
+    expect(() => parseOperation("ssh_execute_many", { serverIds: Array(11).fill(a), command: "id" })).toThrow();
+  });
+  it("stores a canonical replay payload and accepts only terminal worker output", () => {
+    const a = crypto.randomUUID(), b = crypto.randomUUID();
+    const payload = batchApprovalPayload([b, a], "uptime", 30000);
+    expect(payload.args.serverIds).toEqual([a, b].sort());
+    expect(payload.digest).toBe(batchApprovalDigest([a, b], "uptime", 30000));
+    expect(parseOperation("ssh_execute_many", { ...payload.args, approvalId: crypto.randomUUID() }).serverIds).toEqual(payload.args.serverIds);
+    expect(() => completedBatchResult({ status: "queued", taskId: crypto.randomUUID() })).toThrow();
+    expect(() => completedBatchResult({ status: "failed" })).toThrow();
+    expect(completedBatchResult({ status: "completed", stdout: "x".repeat(20000) })).toMatchObject({ status: "completed", stdout: "x".repeat(16384) });
+  });
+  it("requires the originally approved token and both batch and command scopes", () => {
+    const original = crypto.randomUUID();
+    const scopes = ["ssh_execute_many", "ssh_execute"];
+    expect(batchTokenAllowed(original, { id: original, scopes })).toBe(true);
+    expect(batchTokenAllowed(original, { id: crypto.randomUUID(), scopes })).toBe(false);
+    expect(batchTokenAllowed(original, { id: original, scopes: ["ssh_execute"] })).toBe(false);
+    expect(batchTokenAllowed(original, { id: original, scopes: ["ssh_execute_many"] })).toBe(false);
+    expect(batchTokenAllowed(null, { id: original, scopes })).toBe(false);
   });
   it("rejects arbitrary destinations and malformed arguments", () => {
     expect(() =>

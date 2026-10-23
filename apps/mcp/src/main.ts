@@ -38,7 +38,7 @@ export function buildMcp(token: string) {
             },
             body: JSON.stringify(args),
             signal: AbortSignal.any([
-              AbortSignal.timeout(95000),
+              AbortSignal.timeout(name === "ssh_execute_many" ? 210000 : 95000),
               ctx.mcpReq.signal,
             ]),
           },

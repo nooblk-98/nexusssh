@@ -91,6 +91,38 @@ function ServerDrawer({ o, close }: { o: Open; close: () => void }) {
     vpnProfileId: s?.vpnProfileId || "",
     tags: (s?.tags || []).map((t: Row) => t.name).join(", "),
   }));
+  const [matchingServers, setMatchingServers] = useState<Row[]>([]);
+  const [duplicateCheckError, setDuplicateCheckError] = useState(false);
+  useEffect(() => {
+    const host = v.host.trim().toLowerCase().replace(/\.+$/, "");
+    if (!host) { setMatchingServers([]); return; }
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const rows: Row[] = [];
+        let cursor: string | null = null;
+        const seen = new Set<string>();
+        for (let page = 0; page < 1000; page++) {
+          const result: { servers: Row[]; nextCursor: string | null } = await api(`servers?search=${encodeURIComponent(host)}&fields=id,name,host,port,groupId${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
+          if (!Array.isArray(result.servers) || result.servers.length > 100) throw new Error("Invalid server page");
+          rows.push(...result.servers);
+          if (!result.nextCursor) break;
+          if (seen.has(result.nextCursor) || page === 999) throw new Error("Server page limit exceeded");
+          seen.add(result.nextCursor);
+          cursor = result.nextCursor;
+        }
+        if (!cancelled) { setMatchingServers(rows); setDuplicateCheckError(false); }
+      } catch {
+        if (!cancelled) { setMatchingServers([]); setDuplicateCheckError(true); }
+      }
+    }, 300);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [v.host]);
+  const canonicalHost = (host: string) => host.trim().toLowerCase().replace(/\.+$/, "");
+  const duplicate = matchingServers.find((server) =>
+    server.id !== s?.id && canonicalHost(server.host) === canonicalHost(v.host) &&
+    Number(server.port) === Number(v.port) && (server.groupId || null) === (v.groupId || null),
+  );
   const [term, setTerm] = useState({
     ...terminalDefaults,
     ...(s ? settingsOf(s) : {}),
@@ -612,6 +644,10 @@ function ServerDrawer({ o, close }: { o: Open; close: () => void }) {
             ))}
           </select>
         </Field>
+        {duplicate && <p role="status" className="small" style={{ color: "var(--warning)" }}>
+          A server with this address, port, and folder already exists: {duplicate.name}. You can still save; the server database will check for conflicts.
+        </p>}
+        {duplicateCheckError && <p role="status" className="small">Could not check for an existing server. The database will check when you save.</p>}
         <Field label="Notes">
           <textarea
             className="textarea"

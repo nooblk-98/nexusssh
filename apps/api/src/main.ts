@@ -24,7 +24,7 @@ import {
 import { db, initializeDatabase } from "../../../packages/database/index.js";
 import { terminals } from "./terminal.js";
 import { SftpController } from "./sftp.js";
-import { queue, events } from "./domain.js";
+import { queue, events, batchQueue, batchEvents } from "./domain.js";
 import { reconcileRunningTasks } from "./task-recovery.js";
 import { startHealthWorker, enqueuePeriodicHealth, healthQueue } from "./health.js";
 @Module({ controllers: [AppController, SftpController, VpnController] })
@@ -147,6 +147,8 @@ async function shutdown() {
   for (const client of wss.clients) client.close();
   await queue.close();
   await events.close();
+  await batchQueue.close();
+  await batchEvents.close();
   await healthWorker.close();
   await healthQueue.close();
   await app.close();

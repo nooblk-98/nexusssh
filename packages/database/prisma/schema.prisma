@@ -360,6 +360,7 @@ model ApprovalRequest {
   server Server @relation(fields: [serverId], references: [id])
   organizationId String
   principalId String
+  tokenId String?
   operation String
   argumentDigest String
   encryptedArguments String
@@ -413,8 +414,19 @@ model BackgroundTask {
   status String
   leaseHash String?
   tokenId String?
+  batchId String?
   expiresAt DateTime
   @@index([organizationId])
+  @@index([batchId])
+}
+
+model BatchDispatch {
+  id String @id @default(uuid())
+  organizationId String
+  principalId String
+  createdAt DateTime @default(now())
+  status String @default("pending")
+  @@index([organizationId, status])
 }
 
 model SystemSetting {

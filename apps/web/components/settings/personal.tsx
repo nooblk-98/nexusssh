@@ -22,6 +22,7 @@ import {
   IconButton,
 } from "../ui";
 import { PageHead } from "./page-head";
+import { KeyFolderImport } from "./key-folder-import";
 
 export const VERSION = "0.1.0";
 export function Account({ me }: { me: Row }) {
@@ -537,6 +538,7 @@ export function Identities() {
           <KeyRound size={17} /> Add Identity
         </Button>
       </PageHead>
+      <KeyFolderImport />
       <div className="card table-card">
         {list.length ? (
           <table className="table">

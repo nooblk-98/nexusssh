@@ -22,7 +22,9 @@ import type { Prisma } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { randomBytes, randomUUID } from "node:crypto";
 import ipaddr from "ipaddr.js";
+import { utils as sshUtils } from "ssh2";
 import { db } from "../../../packages/database/index.js";
+import { batchTokenAllowed } from "../../../packages/shared/operations.js";
 import {
   config,
   mcpAudience,
@@ -178,6 +180,16 @@ const credentials = z
       v.kind === "password" ? Boolean(v.password) : Boolean(v.privateKey),
     "Credential is required",
   );
+function validateKeyCredential(value: z.infer<typeof credentials>) {
+  if (value.kind !== "key") return;
+  try {
+    const parsed = sshUtils.parseKey(value.privateKey!, value.passphrase);
+    if (!(parsed instanceof Error) && parsed.isPrivateKey()) return;
+  } catch {
+    // Parser errors may contain sensitive key details; never return them.
+  }
+  throw new BadRequestException("Invalid SSH private key or passphrase");
+}
 const serverSchema = z
   .object({
     name: z.string().min(1).max(100),
@@ -594,6 +606,7 @@ export class AppController {
     admin(p);
     const a = credentials.parse(body),
       id = randomUUID();
+    validateKeyCredential(a);
     await db.sSHIdentity.create({
       data: {
         id,
@@ -620,6 +633,7 @@ export class AppController {
     const p = await authenticate(req);
     admin(p);
     const a = credentials.parse(body);
+    validateKeyCredential(a);
     const result = await db.sSHIdentity.updateMany({
       where: { id, organizationId: p.organizationId },
       data: {
@@ -1417,9 +1431,16 @@ export class AppController {
       orderBy: { createdAt: "desc" },
       take: 100,
     });
-    return items.map(({ encryptedArguments, ...row }) => ({
+    const decoded = items.map(({ encryptedArguments, tokenId: _tokenId, ...row }) => ({
       ...row,
-      args: unseal(encryptedArguments, config.ENCRYPTION_KEY, p.organizationId),
+      args: unseal(encryptedArguments, config.ENCRYPTION_KEY, p.organizationId) as Record<string, unknown>,
+    }));
+    const batchIds = [...new Set(decoded.flatMap((item) => item.operation === "ssh_execute_many" && Array.isArray(item.args.serverIds) ? item.args.serverIds.filter((id): id is string => typeof id === "string") : []))];
+    const targets = batchIds.length ? await db.server.findMany({ where: { id: { in: batchIds }, organizationId: p.organizationId }, select: { id: true, name: true } }) : [];
+    const names = new Map(targets.map((server) => [server.id, server.name]));
+    return decoded.map((item) => ({
+      ...item,
+      ...(item.operation === "ssh_execute_many" && Array.isArray(item.args.serverIds) ? { targetNames: item.args.serverIds.map((id) => names.get(String(id)) ?? "Unavailable server"), targetCount: item.args.serverIds.length } : {}),
     }));
   }
   @Post("approvals/:id") async decide(
@@ -1912,6 +1933,71 @@ export class AppController {
     internal(req);
     return claimTask(z.uuid().parse(id));
   }
+  @Get("internal/batches/:id/status") async batchStatus(@Req() req: Request, @Param("id") id: string) {
+    internal(req);
+    const batch = await db.batchDispatch.findUnique({ where: { id: z.uuid().parse(id) }, select: { status: true } });
+    if (!batch) throw new NotFoundException("Batch unavailable");
+    return batch;
+  }
+  @Post("internal/batches/:id/abort") async abortBatch(@Req() req: Request, @Param("id") id: string) {
+    internal(req);
+    const batchId = z.uuid().parse(id);
+    return db.$transaction(async (tx) => {
+      const changed = await tx.batchDispatch.updateMany({ where: { id: batchId, status: { in: ["released", "executing"] } }, data: { status: "aborted" } });
+      if (!changed.count) return { aborted: false };
+      const tasks = await tx.backgroundTask.findMany({ where: { batchId }, select: { id: true } });
+      await tx.backgroundTask.updateMany({ where: { batchId, status: { in: ["queued", "running"] } }, data: { status: "failed", leaseHash: null } });
+      await tx.commandExecution.updateMany({ where: { id: { in: tasks.map((task) => task.id) }, status: { in: ["queued", "running"] } }, data: { status: "failed" } });
+      await tx.auditEvent.updateMany({ where: { correlationId: batchId, action: "ssh_execute_many", status: "queued" }, data: { status: "failed" } });
+      return { aborted: true };
+    });
+  }
+  @Post("internal/batches/:id/start") async startBatch(@Req() req: Request, @Param("id") id: string) {
+    internal(req);
+    const batchId = z.uuid().parse(id);
+    return db.$transaction(async (tx) => {
+      const batch = await tx.batchDispatch.findFirst({ where: { id: batchId, status: "released" } });
+      if (!batch) throw new ForbiddenException("Batch unavailable");
+      const tasks = await tx.backgroundTask.findMany({ where: { batchId }, select: { principalId: true, organizationId: true, tokenId: true, serverId: true, status: true } });
+      if (!tasks.length || tasks.some((task) => task.principalId !== batch.principalId || task.organizationId !== batch.organizationId || task.status !== "running"))
+        throw new ForbiddenException("Batch preflight is incomplete");
+      const agent = await tx.agent.findFirst({ where: { id: batch.principalId, organizationId: batch.organizationId, revoked: false, owner: { disabled: false } }, include: { tokens: { where: { id: tasks[0].tokenId ?? "", revoked: false, expiresAt: { gt: new Date() } } } } });
+      if (agent) {
+        const token = agent.tokens[0];
+        const scopes: string[] = token ? JSON.parse(token.scopes) : [];
+        if (tasks.some((task) => task.tokenId !== tasks[0].tokenId) || !batchTokenAllowed(tasks[0].tokenId, token ? { id: token.id, scopes } : null))
+          throw new ForbiddenException("Original agent token no longer permits this batch");
+      } else {
+        if (tasks.some((task) => task.tokenId !== null)) throw new ForbiddenException("Original agent is unavailable");
+        const user = await tx.user.findFirst({ where: { id: batch.principalId, organizationId: batch.organizationId, disabled: false } });
+        if (!user) throw new ForbiddenException("Requesting user is unavailable");
+        for (const task of tasks) {
+          const server = await tx.server.findFirst({ where: { id: task.serverId, organizationId: batch.organizationId, archived: false } });
+          if (!server) throw new ForbiddenException("Batch server is unavailable");
+          if (["owner", "administrator"].includes(user.role)) continue;
+          const [own, teams] = await Promise.all([
+            tx.serverPermission.findUnique({ where: { serverId_userId: { serverId: task.serverId, userId: user.id } } }),
+            tx.teamPermission.findMany({ where: { serverId: task.serverId, team: { members: { some: { userId: user.id } } } } }),
+          ]);
+          if (user.role === "viewer" || ![own, ...teams].some((grant) => grant && JSON.parse(grant.operations).includes("ssh_execute")))
+            throw new ForbiddenException("Batch server execution grant was removed");
+        }
+      }
+      if (agent) for (const task of tasks) {
+        const server = await tx.server.findFirst({ where: { id: task.serverId, organizationId: batch.organizationId, archived: false } });
+        const grant = await tx.agentPermission.findUnique({ where: { agentId_serverId: { agentId: agent.id, serverId: task.serverId } } });
+        if (!server || !grant || !JSON.parse(grant.operations).includes("ssh_execute"))
+          throw new ForbiddenException("Batch server execution grant was removed");
+      }
+      await tx.batchDispatch.update({ where: { id: batchId }, data: { status: "executing" } });
+      return { started: true };
+    });
+  }
+  @Post("internal/batches/:id/complete") async completeBatch(@Req() req: Request, @Param("id") id: string) {
+    internal(req);
+    await db.batchDispatch.updateMany({ where: { id: z.uuid().parse(id), status: "executing" }, data: { status: "completed" } });
+    return { completed: true };
+  }
   @Get("internal/tasks/:id/status") async taskStatus(
     @Req() req: Request,
     @Param("id") id: string,
@@ -1925,12 +2011,16 @@ export class AppController {
     const user = agent
       ? null
       : await db.user.findUnique({ where: { id: t.principalId } });
+    const batchToken = t.batchId && agent && t.tokenId ? await db.agentToken.findFirst({ where: { id: t.tokenId, agentId: agent.id, revoked: false, expiresAt: { gt: new Date() } } }) : null;
+    const batchScopes: string[] = batchToken ? JSON.parse(batchToken.scopes) : [];
     return {
       cancelled:
         t.status === "cancelled" ||
         t.status === "interrupted" ||
+        !!(t.batchId && (await db.batchDispatch.findUnique({ where: { id: t.batchId }, select: { status: true } }))?.status === "aborted") ||
         !!agent?.revoked ||
         !!agent?.owner.disabled ||
+        !!(t.batchId && agent && !batchTokenAllowed(t.tokenId, batchToken ? { id: batchToken.id, scopes: batchScopes } : null)) ||
         !!user?.disabled ||
         t.expiresAt < new Date(),
     };
