@@ -16,6 +16,7 @@ import type { Principal } from "../../../packages/policy-engine/index.js";
 // kept (bounded) and replayed to a resuming browser so its screen comes back.
 const GRACE_MS = 120000;
 const REPLAY_BYTES = 256 * 1024;
+const HEARTBEAT_MS = 25000;
 type Shell = {
   token: string;
   principal: Principal;
@@ -44,6 +45,22 @@ const frame = z.discriminatedUnion("type", [
 export function terminals(server: Server) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 65536 });
   const shells = new Map<string, Shell>();
+  const responsive = new WeakSet<WebSocket>();
+  const heartbeat = setInterval(() => {
+    for (const ws of wss.clients) {
+      if (ws.readyState !== WebSocket.OPEN) continue;
+      if (!responsive.has(ws)) {
+        ws.terminate();
+        continue;
+      }
+      responsive.delete(ws);
+      ws.ping();
+    }
+  }, HEARTBEAT_MS);
+  const watchSocket = (ws: WebSocket) => {
+    responsive.add(ws);
+    ws.on("pong", () => responsive.add(ws));
+  };
   const send = (ws: WebSocket | undefined, value: unknown) => {
     if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value));
   };
@@ -157,6 +174,7 @@ export function terminals(server: Server) {
       const existing = token ? shells.get(token) : undefined;
       wss.handleUpgrade(req, socket, head, (accepted) => {
         ws = accepted;
+        watchSocket(accepted);
       });
       if (!ws) throw new Error("Upgrade failed");
       if (
@@ -254,6 +272,7 @@ export function terminals(server: Server) {
     }
   });
   const closeAll = () => {
+    clearInterval(heartbeat);
     for (const shell of shells.values()) end(shell, "Server shutting down");
   };
   return Object.assign(wss, { closeAll });

@@ -543,7 +543,6 @@ export default function TerminalView({
                 {message && <span className="small muted">{message}</span>}
                 <Button
                   onClick={() => {
-                    fresh.current = true;
                     setGeneration((g) => g + 1);
                   }}
                 >
