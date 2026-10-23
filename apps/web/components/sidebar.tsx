@@ -2,14 +2,21 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import {
   Bell,
-  CheckSquare,
+  Check as CheckIcon,
   ChevronDown,
   ChevronLeft,
+  FolderTree,
+  ListChecks,
   MoreHorizontal,
   Square,
+  SquareTerminal,
   Folder,
   Menu,
   Plus,
+  Table2,
+  Tag,
+  Tags,
+  X,
 } from "lucide-react";
 import {
   api,
@@ -46,6 +53,11 @@ import {
 } from "./ui";
 
 const FOLDERS_KEY = "nexus-closed-folders";
+const VIEWS = [
+  ["tree", "Tree", FolderTree],
+  ["table", "Table", Table2],
+  ["tags", "Tags", Tags],
+] as const;
 export async function newFolder(parentId: string | null = null) {
   const name = await promptDialog("New Folder", "Folder name", "", "Create");
   if (name)
@@ -109,6 +121,11 @@ export function Sidebar({ me }: { me: Row }) {
   const [health, setHealth] = useState<{ title: string; servers: Row[]; groupId?: string } | null>(null);
   const [healthNow, setHealthNow] = useState(() => Date.now());
   useEffect(() => { const timer = setInterval(() => setHealthNow(Date.now()), 60_000); return () => clearInterval(timer); }, []);
+  // Set after mount so the server-rendered label matches the first client render.
+  const [paletteKey, setPaletteKey] = useState("Ctrl K");
+  useEffect(() => { if (/Mac|iPhone|iPad/.test(navigator.userAgent)) setPaletteKey("⌘K"); }, []);
+  const activeTag = tags.find((tag) => tag.id === tagFilter);
+  const exitSelection = () => { setChecked([]); setSelectMode(false); };
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setPaletteOpen(true); }
@@ -431,8 +448,9 @@ export function Sidebar({ me }: { me: Row }) {
   );
   const root = visible.filter((s) => !s.groupId);
   const shownFolders = new Set<string>();
+  // With a tag filter, folders appear only through the matching servers below.
   for (const g of groups) {
-    if (!q || matchesFolder(g.id))
+    if (!tagFilter && (!q || matchesFolder(g.id)))
       folderPath(groups, g.id).forEach((f) => shownFolders.add(f.id));
   }
   visible.forEach((s) =>
@@ -503,9 +521,17 @@ export function Sidebar({ me }: { me: Row }) {
       </button>
       <div className="sidebar-tools">
         <div className="grow">
-          <SearchInput id="server-search" value={search} onChange={setSearch} />
+          <SearchInput
+            id="server-search"
+            value={search}
+            onChange={setSearch}
+            suffix={
+              <button type="button" className="kbd-hint" title={`Command palette (${paletteKey})`} aria-label="Open command palette" onClick={() => setPaletteOpen(true)}>
+                {paletteKey}
+              </button>
+            }
+          />
         </div>
-        <button className="btn btn-secondary" title="Command palette (Ctrl/Cmd+K)" aria-label="Open command palette" onClick={() => setPaletteOpen(true)}>⌘K</button>
         {admin && (
           <button
             className="add-btn"
@@ -531,20 +557,74 @@ export function Sidebar({ me }: { me: Row }) {
           </button>
         )}
       </div>
-      <div className="sidebar-tools" style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-        {(["tree", "table", "tags"] as const).map((mode) => <button key={mode} className="btn btn-secondary" aria-pressed={view === mode} onClick={() => setView(mode)}>{mode === "tree" ? "Tree" : mode === "table" ? "Table" : "By tag"}</button>)}
-        <select className="select" aria-label="Filter by tag" value={tagFilter} onChange={(e) => setTagFilter(e.target.value)}><option value="">All tags</option>{tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}</select>
-        <button className="btn btn-secondary" onClick={() => setExecuteOpen(true)}>Run command…</button>
+      <div className="sidebar-toolbar">
+        <div className="segmented" role="group" aria-label="Server view">
+          {VIEWS.map(([mode, label, Icon]) => (
+            <button key={mode} type="button" className={view === mode ? "active" : ""} aria-pressed={view === mode} onClick={() => setView(mode)}>
+              <Icon size={14} />
+              {label}
+            </button>
+          ))}
+        </div>
+        <span className="grow" />
+        <IconButton
+          size="sm"
+          label={activeTag ? `Filtered by tag ${activeTag.name}` : "Filter by tag"}
+          active={!!activeTag}
+          onClick={(e) =>
+            openMenuAt(e.currentTarget, [
+              { label: "All tags", icon: !tagFilter ? <CheckIcon size={14} /> : undefined, onClick: () => setTagFilter("") },
+              ...(tags.length ? (["sep"] as MenuItem[]) : []),
+              ...tags.map((tag) => ({ label: tag.name, icon: tag.id === tagFilter ? <CheckIcon size={14} /> : undefined, onClick: () => setTagFilter(tag.id) })),
+              ...(admin && tags.length
+                ? (["sep", { label: "Edit tag defaults", items: tags.map((tag) => ({ label: tag.name, onClick: () => setDefaults({ kind: "tags", row: tag }) })) }] as MenuItem[])
+                : []),
+            ])
+          }
+        >
+          <Tag size={15} />
+          {activeTag && <span className="dot" />}
+        </IconButton>
+        <IconButton size="sm" label="Run command on servers" onClick={() => setExecuteOpen(true)}>
+          <SquareTerminal size={15} />
+        </IconButton>
+        {admin && (
+          <IconButton size="sm" label={selectMode ? "Exit selection" : "Select servers"} active={selectMode} aria-pressed={selectMode} onClick={() => (selectMode ? exitSelection() : setSelectMode(true))}>
+            <ListChecks size={15} />
+          </IconButton>
+        )}
       </div>
-      {admin && view === "tags" && <div className="sidebar-tools"><select className="select" aria-label="Edit tag defaults" onChange={(e) => { const tag = tags.find((x) => x.id === e.target.value); if (tag) setDefaults({ kind: "tags", row: tag }); e.currentTarget.value = ""; }} defaultValue=""><option value="">Edit tag defaults…</option>{tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}</select></div>}
-      {admin && <div className="selection-tools">{!selectMode ? <Button variant="secondary" size="sm" onClick={() => setSelectMode(true)}><CheckSquare size={15} /> Select servers</Button> : <><div className="selection-summary"><Square size={15} /> <strong>{new Set(checked).size}</strong> selected</div><Button variant="secondary" size="sm" onClick={() => { const ids = new Set(visible.map((s) => s.id)); setChecked((current) => [...new Set([...current.filter((id) => !ids.has(id)), ...visible.map((s) => s.id)])]); }}>Select visible</Button>{!!checked.length && <><Button size="sm" onClick={() => setBulkOpen(true)}>Bulk edit</Button><Button variant="secondary" size="sm" onClick={() => { setBulkErrors([]); setBulkMoveOpen(true); }}>Move</Button><Button variant="secondary" size="sm" onClick={() => setExecuteOpen(true)}>Run command</Button><Button variant="danger" size="sm" onClick={async () => {
-        const ids = [...new Set(checked)].filter((id) => servers.some((server) => server.id === id));
-        if (!await confirmDialog("Archive selected servers", `Archive ${ids.length} selected servers?`, "Archive", true)) return;
-        const failed: string[] = [];
-        for (const id of ids) { try { await api(`servers/${id}`, {}, "DELETE"); } catch { failed.push(id); } }
-        await refresh("servers"); setChecked(failed);
-        notify.info(`${ids.length - failed.length} archived, ${failed.length} failed${failed.length ? "; failed servers remain selected" : ""}.`);
-      }}>Archive</Button></>}<Button variant="text" size="sm" onClick={() => { setChecked([]); setSelectMode(false); }}>Done</Button></>}</div>}
+      {activeTag && (
+        <div className="filter-chips">
+          <button type="button" className="chip" aria-label={`Clear tag filter ${activeTag.name}`} onClick={() => setTagFilter("")}>
+            <Tag size={12} />
+            {activeTag.name}
+            <X size={12} />
+          </button>
+        </div>
+      )}
+      {admin && selectMode && (
+        <div className="selection-tools">
+          <div className="selection-summary"><Square size={15} /> <strong>{new Set(checked).size}</strong> selected</div>
+          <Button variant="secondary" size="sm" onClick={() => { const ids = new Set(visible.map((s) => s.id)); setChecked((current) => [...new Set([...current.filter((id) => !ids.has(id)), ...visible.map((s) => s.id)])]); }}>Select visible</Button>
+          {!!checked.length && (
+            <>
+              <Button size="sm" onClick={() => setBulkOpen(true)}>Bulk edit</Button>
+              <Button variant="secondary" size="sm" onClick={() => { setBulkErrors([]); setBulkMoveOpen(true); }}>Move</Button>
+              <Button variant="secondary" size="sm" onClick={() => setExecuteOpen(true)}>Run command</Button>
+              <Button variant="danger" size="sm" onClick={async () => {
+                const ids = [...new Set(checked)].filter((id) => servers.some((server) => server.id === id));
+                if (!await confirmDialog("Archive selected servers", `Archive ${ids.length} selected servers?`, "Archive", true)) return;
+                const failed: string[] = [];
+                for (const id of ids) { try { await api(`servers/${id}`, {}, "DELETE"); } catch { failed.push(id); } }
+                await refresh("servers"); setChecked(failed);
+                notify.info(`${ids.length - failed.length} archived, ${failed.length} failed${failed.length ? "; failed servers remain selected" : ""}.`);
+              }}>Archive</Button>
+            </>
+          )}
+          <Button variant="text" size="sm" onClick={exitSelection}>Done</Button>
+        </div>
+      )}
       <nav
         className="tree tree-root"
         aria-label="Servers"
@@ -560,7 +640,7 @@ export function Sidebar({ me }: { me: Row }) {
       >
         {view === "tree" && <>{groups.filter((g) => !g.parentId).map((g) => renderFolder(g))}{root.map((s) => serverRow(s))}</>}
         {view === "table" && <div style={{ overflowX: "auto" }}><table className="table"><thead><tr><th>{admin && selectMode ? "Select" : ""}</th><th>Status</th><th>Name</th><th>Host</th><th>Environment</th><th>vCPU</th><th>RAM</th><th>Disk</th><th>OS</th><th>Role</th><th>Check</th></tr></thead><tbody>{visible.map((s) => <tr key={s.id} onClick={() => select(s.id)}><td>{admin && selectMode && <input type="checkbox" aria-label={`Select ${s.name}`} checked={checked.includes(s.id)} onChange={() => toggleChecked(s.id)} onClick={(e) => e.stopPropagation()} />}</td><td><HealthIndicator server={s} now={healthNow} /></td><td><button className="btn btn-secondary" onClick={() => openServerDrawer({ server: s })}>{s.name}</button></td><td>{s.host}</td><td>{s.effectiveSettings?.values?.environment ?? s.environment}</td><td>{s.vcpu ?? "—"}</td><td>{s.ramBytes ?? "—"}</td><td>{s.diskBytes ?? "—"}</td><td>{s.os || "—"}</td><td>{s.role || "—"}</td><td><button className="btn btn-secondary" onClick={() => setHealth({ title: `Check ${s.name}`, servers: [s] })}>Test</button></td></tr>)}</tbody></table></div>}
-        {view === "tags" && <>{tags.filter((tag) => !tagFilter || tag.id === tagFilter).map((tag) => { const list = visible.filter((s) => (s.tags || []).some((t: Row) => t.id === tag.id)); return list.length || tagFilter ? <section key={tag.id}><div className="tree-folder">{tag.name} ({list.length})</div>{list.map((s) => serverRow(s))}</section> : null; })}{!tagFilter && visible.filter((s) => !(s.tags || []).length).length > 0 && <section><div className="tree-folder">Untagged</div>{visible.filter((s) => !(s.tags || []).length).map((s) => serverRow(s))}</section>}</>}
+        {view === "tags" && <>{tags.filter((tag) => !tagFilter || tag.id === tagFilter).map((tag) => { const list = visible.filter((s) => (s.tags || []).some((t: Row) => t.id === tag.id)); return list.length || tagFilter ? <section key={tag.id}><div className="tree-folder tag-heading"><Tag size={16} strokeWidth={1.5} /><span className="grow ellipsis">{tag.name}</span><span className="tag-count">{list.length}</span></div>{list.map((s) => serverRow(s))}</section> : null; })}{!tagFilter && visible.filter((s) => !(s.tags || []).length).length > 0 && <section><div className="tree-folder tag-heading"><Tag size={16} strokeWidth={1.5} /><span className="grow ellipsis">Untagged</span><span className="tag-count">{visible.filter((s) => !(s.tags || []).length).length}</span></div>{visible.filter((s) => !(s.tags || []).length).map((s) => serverRow(s))}</section>}</>}
         {admin && drag && (
           <div
             className={

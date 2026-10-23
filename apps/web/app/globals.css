@@ -253,6 +253,29 @@ p {
 .search-input .input {
   padding-left: 36px;
 }
+.search-input.has-suffix .input {
+  padding-right: 62px;
+}
+.search-suffix {
+  position: absolute;
+  right: 6px;
+  display: inline-flex;
+}
+.kbd-hint {
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--field-border);
+  border-radius: 4px;
+  background: var(--hover);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.kbd-hint:hover {
+  border-color: var(--primary);
+  color: var(--text-strong);
+}
 .field {
   display: grid;
   gap: 7px;
@@ -655,6 +678,84 @@ p {
 .sidebar-tools .grow .input {
   height: 35px;
 }
+.sidebar-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 9px 8px;
+}
+.sidebar-toolbar .icon-btn {
+  position: relative;
+}
+.sidebar-toolbar .icon-btn.active {
+  color: var(--primary);
+}
+.sidebar-toolbar .icon-btn .dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+.segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 7px;
+  background: var(--hover);
+}
+.segmented button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 7px;
+  border-radius: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+.segmented button:hover {
+  color: var(--text-strong);
+}
+.segmented button.active {
+  background: var(--panel);
+  color: var(--text-strong);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.1);
+}
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 9px 8px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  max-width: 100%;
+  padding: 0 8px;
+  border: 1px solid var(--primary-border);
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-size: 12px;
+}
+.chip:hover {
+  border-color: var(--primary);
+}
+.tag-heading .tag-count {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--hover);
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}
 .add-btn {
   display: grid;
   place-items: center;
@@ -797,7 +898,10 @@ p {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 9px 9px;
+  margin: 0 9px 8px;
+  padding: 6px;
+  border-radius: 7px;
+  background: var(--hover);
   flex-wrap: wrap;
 }
 .selection-tools .btn {

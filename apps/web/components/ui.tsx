@@ -123,14 +123,16 @@ export function SearchInput({
   onChange,
   placeholder = "Search",
   id,
+  suffix,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   id?: string;
+  suffix?: ReactNode;
 }) {
   return (
-    <div className="search-input">
+    <div className={"search-input" + (suffix ? " has-suffix" : "")}>
       <Search size={17} />
       <input
         id={id}
@@ -140,6 +142,7 @@ export function SearchInput({
         value={value}
         onChange={(e) => onChange(e.target.value)}
       />
+      {suffix && <span className="search-suffix">{suffix}</span>}
     </div>
   );
 }
