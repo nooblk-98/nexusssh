@@ -54,14 +54,6 @@ for (const op of [
   "service_restart",
 ])
   schemas[op] = z.object({ ...common, service: target }).strict();
-for (const op of [
-  "docker_inspect",
-  "docker_logs",
-  "docker_start",
-  "docker_stop",
-  "docker_restart",
-])
-  schemas[op] = z.object({ ...common, container: target }).strict();
 schemas.system_logs = z
   .object({
     ...common,

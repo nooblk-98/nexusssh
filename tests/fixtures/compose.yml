@@ -1,9 +1,9 @@
 name: nexusssh-tests
 services:
   ssh:
-    build: {context: ., dockerfile: Dockerfile}
-    ports: ['127.0.0.1:22222:22']
+    build: { context: ., dockerfile: Dockerfile }
+    ports: ["127.0.0.1:22222:22"]
   redis:
     image: redis:7.4-alpine
-    ports: ['127.0.0.1:26379:6379']
-    command: [redis-server, --save, '', --appendonly, 'no']
+    ports: ["127.0.0.1:26379:6379"]
+    command: [redis-server, --save, "", --appendonly, "no"]

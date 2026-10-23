@@ -5,7 +5,11 @@ import {
   needsApproval,
   type Principal,
 } from "../../packages/policy-engine/index.js";
-import { allowedIP, inside } from "../../packages/ssh-core/index.js";
+import {
+  allowedIP,
+  inside,
+  resolveAllowed,
+} from "../../packages/ssh-core/index.js";
 import { parseOperation } from "../../packages/shared/operations.js";
 import { totp, verifyTotp, newTotp } from "../../apps/api/src/totp.js";
 const p: Principal = {
@@ -49,7 +53,6 @@ describe("policy boundaries", () => {
       "ssh_execute",
       "ssh_write_file",
       "ssh_delete_file",
-      "docker_restart",
       "service_stop",
     ])
       expect(needsApproval(op)).toBe(true);
@@ -81,6 +84,15 @@ describe("policy boundaries", () => {
         service: "nginx; id",
       }),
     ).toThrow();
+  });
+  it("never allows cloud metadata addresses, even with a catch-all allowlist", async () => {
+    for (const address of ["169.254.169.254", "169.254.170.2", "fd00:ec2::254"])
+      await expect(
+        resolveAllowed(address, ["0.0.0.0/0", "::/0"]),
+      ).rejects.toThrow("metadata");
+    await expect(resolveAllowed("192.0.2.10", ["0.0.0.0/0"])).resolves.toBe(
+      "192.0.2.10",
+    );
   });
   it("pins IPv4 and IPv6 destinations to allowlists", () => {
     expect(allowedIP("127.0.0.1", ["10.0.0.0/8"])).toBe(false);

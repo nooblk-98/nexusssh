@@ -7,16 +7,19 @@ A self-hosted infrastructure console with real browser SSH, SFTP, and a remote M
 
 ## What works
 
-- Next.js dashboard backed by real SQLite records; dark/light themes and responsive navigation.
+- Next.js workspace backed by real SQLite records: a server tree with [nested folders](docs/FOLDERS.md), drag-and-drop moves for servers and folders, and context menus; tabbed terminal, SFTP and editor sessions with split views; Quick Connect and recent connections; settings pages for account, preferences, identities, users, teams, active sessions, history, MCP, agents, approvals and audit; auto/light/dark themes.
+- Terminal toolbar with snippets, search, command suggestions from history and common options, broadcast typing to several sessions, zoom and full screen; per-server encoding and keyboard settings.
+- Host keys are read with **Scan** in the server form and pinned only after you compare and save them.
 - Owner setup, password login, opaque HttpOnly sessions, TOTP MFA, role and server permissions.
 - Encrypted password/key identities, pinned host keys, destination CIDR allowlists, one-hop bastions.
+- Encrypted [WireGuard VPN profiles](docs/VPN.md), selected per server and optionally combined with an SSH bastion; terminals, SFTP and MCP use the same route.
 - Interactive xterm.js shells over authenticated WebSockets, multiple sessions, split panes, resizing, search and reconnect.
 - SFTP browsing, bounded uploads/downloads, Monaco editing, atomic saves, mkdir, rename/move and deletion.
 - Remote MCP SDK v2 using explicit 2026-07-28 handling, with tested legacy stateless compatibility.
 - Agents with explicit server/tool grants, expiring hashed machine tokens, revocation, and exact single-use approvals.
-- Linux, service and Docker diagnostics through SSH; background execution and cancellation through BullMQ.
+- System information, journal logs and systemd service control through SSH; background execution and cancellation through BullMQ. Docker management and metrics monitoring are out of scope; use a dedicated monitoring tool.
 - SQLite migrations, WAL, integrity checks, online backup and offline restore.
-- Compose services for web, API, MCP, worker, Redis and Nginx. Only the API mounts SQLite.
+- Two production Compose services: `nexusssh` (web, API, MCP, SSH worker and userspace WireGuard behind one application port) and Redis. Native development also starts a small WireGuard container.
 
 ## Quick start: local Compose
 
@@ -53,7 +56,7 @@ The native SQLite URL is resolved relative to `packages/database/prisma`. `npm r
 
 ## Production installation
 
-Follow [deployment and upgrades](docs/DEPLOYMENT.md). Configure a real domain, trusted TLS certificate, network allowlist, secrets and restricted target accounts before using the production Compose file. Production startup refuses an HTTP `APP_URL`.
+Follow [deployment and upgrades](docs/DEPLOYMENT.md). Configure a real domain behind your own TLS reverse proxy, network allowlist, secrets and restricted target accounts before using the production Compose file. The production Compose file starts with no configuration; production startup refuses an HTTP `APP_URL` other than localhost.
 
 The application uses no PostgreSQL, MySQL, MongoDB or external database server. Redis contains bounded transient jobs/results, not application records.
 
@@ -68,7 +71,7 @@ packages/ssh-core/     Verified ssh2 connections, commands and SFTP
 packages/policy-engine/ Shared grants and approval classification
 packages/shared/       Strict schemas, encryption and configuration
 workers/ssh-worker/    BullMQ execution; credentials fetched via authenticated API leases
-infrastructure/       Container builds, Nginx, setup, backup/restore
+infrastructure/       Container build, entrypoint/gateway, setup, backup/restore
 tests/                 Unit, real Linux integration and browser tests
 docs/                  Architecture, operations, security and verification
 ```

@@ -3,7 +3,8 @@ import { lookup } from "node:dns/promises";
 import { createHash, randomUUID } from "node:crypto";
 import posix from "node:path/posix";
 import ipaddr from "ipaddr.js";
-import { parseMetrics } from "./metrics.js";
+import type { Duplex } from "node:stream";
+import { prepareVpn, type VpnRoute, type VpnGateway } from "./vpn.js";
 export type Connection = {
   host: string;
   port: number;
@@ -12,12 +13,24 @@ export type Connection = {
   fileRoot: string;
   credential: { password?: string; privateKey?: string; passphrase?: string };
   bastion?: Connection;
+  vpn?: VpnRoute;
 };
 export type Limits = {
   cidrs: string[];
   connectTimeout: number;
   outputLimit: number;
+  vpnGateway?: VpnGateway;
 };
+// Connection-stage failures whose text carries no remote output or secrets,
+// so they can be shown to the user as-is.
+export const connectionFailures = [
+  /^Verify and save the SSH host fingerprint before connecting$/,
+  /^Host denied \(verification failed\)$/,
+  /^SSH destination is outside the configured allowlist \([0-9a-fA-F.:, ]*\)$/,
+  /^All configured authentication methods failed$/,
+  /^Cloud metadata addresses cannot be SSH destinations$/,
+  /^VPN (gateway|connection|DNS) [a-zA-Z ,;]+$/,
+];
 export function allowedIP(address: string, cidrs: string[]) {
   let ip = ipaddr.parse(address);
   if (ip.kind() === "ipv6" && (ip as ipaddr.IPv6).isIPv4MappedAddress())
@@ -27,10 +40,31 @@ export function allowedIP(address: string, cidrs: string[]) {
     return ip.kind() === net.kind() && ip.match(net, bits);
   });
 }
-export async function resolveAllowed(host: string, cidrs: string[]) {
-  const addresses = await lookup(host, { all: true, verbatim: true });
-  if (!addresses.length || addresses.some((a) => !allowedIP(a.address, cidrs)))
-    throw new Error("SSH destination is outside the configured allowlist");
+// Cloud instance metadata endpoints hand out credentials; they are never
+// SSH destinations, whatever the allowlist says.
+const metadata = [
+  "169.254.169.254/32",
+  "169.254.170.2/32",
+  "100.100.100.200/32",
+  "fd00:ec2::254/128",
+];
+export async function resolveAllowed(
+  host: string,
+  cidrs: string[],
+  resolver?: (host: string) => Promise<string[]>,
+) {
+  const addresses = resolver
+    ? (await resolver(host)).map((address) => ({ address }))
+    : await lookup(host, { all: true, verbatim: true });
+  if (addresses.some((a) => allowedIP(a.address, metadata)))
+    throw new Error("Cloud metadata addresses cannot be SSH destinations");
+  const blocked = addresses.filter((a) => !allowedIP(a.address, cidrs));
+  if (!addresses.length || blocked.length)
+    throw new Error(
+      "SSH destination is outside the configured allowlist (" +
+        blocked.map((a) => a.address).join(", ") +
+        ")",
+    );
   return addresses[0].address;
 }
 export function fingerprint(key: Buffer) {
@@ -39,41 +73,100 @@ export function fingerprint(key: Buffer) {
     createHash("sha256").update(key).digest("base64").replace(/=+$/, "")
   );
 }
+async function transport(
+  c: Pick<Connection, "host" | "port" | "bastion" | "vpn">,
+  l: Limits,
+) {
+  const vpn = c.vpn || c.bastion?.vpn;
+  const tunnel = vpn ? await prepareVpn(vpn, l.vpnGateway) : undefined;
+  const address = await resolveAllowed(
+    c.host,
+    l.cidrs,
+    vpn?.config.dns.length ? tunnel?.resolve : undefined,
+  );
+  let bastion: Client | undefined;
+  let sock: Duplex | undefined;
+  try {
+    if (c.bastion) {
+      if (c.bastion.bastion)
+        throw new Error("Only one bastion hop is supported");
+      if (c.vpn && c.bastion.vpn && c.vpn.id !== c.bastion.vpn.id)
+        throw new Error("Conflicting VPN profiles on target and bastion");
+      bastion = await connect({ ...c.bastion, vpn }, l);
+      sock = await new Promise<ClientChannel>((resolve, reject) =>
+        bastion!.forwardOut("127.0.0.1", 0, address, c.port, (e, s) =>
+          e ? reject(e) : resolve(s),
+        ),
+      );
+    } else if (tunnel) sock = await tunnel.dial(address, c.port);
+    return {
+      address,
+      sock,
+      close: () => {
+        sock?.destroy();
+        bastion?.end();
+      },
+    };
+  } catch (e) {
+    sock?.destroy();
+    bastion?.end();
+    throw e;
+  }
+}
 export async function connect(c: Connection, l: Limits): Promise<Client> {
   if (!c.fingerprint)
     throw new Error(
       "Verify and save the SSH host fingerprint before connecting",
     );
-  const address = await resolveAllowed(c.host, l.cidrs);
+  const route = await transport(c, l);
   const client = new Client();
-  let bastion: Client | undefined;
-  let sock: ClientChannel | undefined;
-  if (c.bastion) {
-    if (c.bastion.bastion) throw new Error("Only one bastion hop is supported");
-    bastion = await connect(c.bastion, l);
-    sock = await new Promise((resolve, reject) =>
-      bastion!.forwardOut("127.0.0.1", 0, address, c.port, (e, s) =>
-        e ? reject(e) : resolve(s),
-      ),
-    );
-    client.once("close", () => bastion?.end());
-  }
+  client.once("close", route.close);
   return new Promise((resolve, reject) => {
     client.once("ready", () => resolve(client));
     client.on("error", (e) => {
-      bastion?.end();
+      route.close();
       reject(e);
     });
     client.connect({
-      host: address,
+      host: route.address,
       port: c.port,
-      sock,
+      sock: route.sock,
       username: c.username,
       ...c.credential,
       readyTimeout: l.connectTimeout,
       keepaliveInterval: 15000,
       keepaliveCountMax: 2,
       hostVerifier: (key: Buffer) => fingerprint(key) === c.fingerprint,
+    });
+  });
+}
+// Reads the host key a server presents without authenticating, so the user can
+// compare it with a trusted value before it is pinned.
+export async function scanHostKey(
+  host: string,
+  port: number,
+  l: Limits,
+  via: Pick<Connection, "vpn" | "bastion"> = {},
+): Promise<string> {
+  const route = await transport({ host, port, ...via }, l);
+  const client = new Client();
+  client.once("close", route.close);
+  return new Promise((resolve, reject) => {
+    let seen: string | undefined;
+    client.on("error", (e) => (seen ? resolve(seen) : reject(e)));
+    client.on("close", () =>
+      seen ? resolve(seen) : reject(new Error("No host key received")),
+    );
+    client.connect({
+      host: route.address,
+      sock: route.sock,
+      port,
+      username: "nexusssh-scan",
+      readyTimeout: l.connectTimeout,
+      hostVerifier: (key: Buffer) => {
+        seen = fingerprint(key);
+        return false;
+      },
     });
   });
 }
@@ -177,7 +270,7 @@ export async function sftp(client: Client) {
 export function inside(root: string, path: string) {
   return path === root || path.startsWith(root === "/" ? "/" : root + "/");
 }
-function invoke<T>(
+export function invoke<T>(
   s: SFTPWrapper,
   method: string,
   ...args: unknown[]
@@ -225,21 +318,7 @@ export async function safePath(
 const quote = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
 export function diagnostic(op: string, a: any): string | undefined {
   const fixed: Record<string, string> = {
-    server_uptime: "uptime",
-    server_metrics:
-      "printf -- '--- uptime ---\\n'; cat /proc/uptime; printf '\\n--- load ---\\n'; cat /proc/loadavg; printf '\\n--- memory ---\\n'; free -b; printf '\\n--- disk ---\\n'; df -P -B1; printf '\\n--- cpu ---\\n'; head -1 /proc/stat; sleep 1; head -1 /proc/stat",
     system_info: "uname -a; cat /etc/os-release",
-    system_processes: "ps aux --sort=-%mem | head -51",
-    system_disk_usage: "df -P -B1",
-    system_memory_usage: "free -b",
-    system_cpu_usage:
-      "head -1 /proc/stat; sleep 1; head -1 /proc/stat; cat /proc/loadavg",
-    docker_list: "docker ps -a --format '{{json .}}'",
-    docker_stats: "docker stats --no-stream --format '{{json .}}'",
-    docker_compose_status: "docker compose ls --format json",
-    docker_images: "docker image ls --format json",
-    docker_networks: "docker network ls --format json",
-    docker_volumes: "docker volume ls --format json",
   };
   if (fixed[op]) return fixed[op];
   if (op === "ssh_execute") return a.command;
@@ -247,16 +326,6 @@ export function diagnostic(op: string, a: any): string | undefined {
     return `journalctl --no-pager -n ${a.lines}${a.service ? " -u " + quote(a.service) : ""}`;
   if (op.startsWith("service_"))
     return `systemctl ${op.slice(8)} -- ${quote(a.service)}`;
-  if (
-    [
-      "docker_inspect",
-      "docker_logs",
-      "docker_start",
-      "docker_stop",
-      "docker_restart",
-    ].includes(op)
-  )
-    return `docker ${op.slice(7)} ${op === "docker_logs" ? "--tail 100 " : ""}-- ${quote(a.container)}`;
 }
 export async function operate(
   c: Connection,
@@ -286,9 +355,7 @@ export async function operate(
         l.outputLimit,
         signal,
       );
-      return op === "server_metrics"
-        ? { ...result, metrics: parseMetrics(result.stdout) }
-        : result;
+      return result;
     }
     const s = await sftp(client);
     const writing = [

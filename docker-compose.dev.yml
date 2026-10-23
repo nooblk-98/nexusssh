@@ -1,11 +1,4 @@
 services:
-  api:
-    environment: {NODE_ENV: development, APP_URL: 'http://localhost:8080', MCP_PUBLIC_URL: 'http://localhost:8080/mcp'}
-  mcp:
-    environment: {NODE_ENV: development, APP_URL: 'http://localhost:8080', MCP_PUBLIC_URL: 'http://localhost:8080/mcp'}
-  ssh-worker:
-    environment: {NODE_ENV: development, APP_URL: 'http://localhost:8080', MCP_PUBLIC_URL: 'http://localhost:8080/mcp'}
-  nginx:
-    ports: !override ['127.0.0.1:8080:80']
-    volumes: !override
-      - ./infrastructure/nginx/dev.conf:/etc/nginx/conf.d/default.conf:ro
+  nexusssh:
+    environment: {NODE_ENV: development, APP_URL: 'http://localhost:8080'}
+    ports: !override ['127.0.0.1:8080:8080']

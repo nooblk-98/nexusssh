@@ -5,6 +5,7 @@ import {
 } from "@nestjs/common";
 import { Queue, QueueEvents } from "bullmq";
 import { randomUUID } from "node:crypto";
+import { reserveAgentCall } from "./agent-quota.js";
 import { db } from "../../../packages/database/index.js";
 import { config, redisConnection } from "../../../packages/shared/config.js";
 import {
@@ -22,7 +23,11 @@ import {
   needsApproval,
   type Principal,
 } from "../../../packages/policy-engine/index.js";
-import type { Connection } from "../../../packages/ssh-core/index.js";
+import {
+  connectionFailures,
+  scanHostKey,
+  type Connection,
+} from "../../../packages/ssh-core/index.js";
 export const queue = new Queue("nexus-ssh", {
   connection: redisConnection,
   defaultJobOptions: {
@@ -57,49 +62,192 @@ export async function authorize(p: Principal, id: string, op: string) {
     where: { id, organizationId: p.organizationId, archived: false },
   });
   if (!server) throw new NotFoundException("Server unavailable");
-  const grant =
-    p.kind === "agent"
-      ? await db.agentPermission.findUnique({
-          where: { agentId_serverId: { agentId: p.id, serverId: id } },
-        })
-      : await db.serverPermission.findUnique({
-          where: { serverId_userId: { serverId: id, userId: p.id } },
-        });
   if (
-    !permitted(
-      p,
-      server.organizationId,
-      op,
-      grant ? JSON.parse(grant.operations) : [],
-    )
+    !(p.managementOperation && op === "server_get_info") &&
+    !permitted(p, server.organizationId, op, await grants(p, id))
   )
     throw new ForbiddenException("Operation is not permitted for this server");
   return server;
+}
+// A person's operations on a server: their own grant plus every grant given
+// to a team they belong to. Agents only have their own grant.
+async function grants(p: Principal, serverId: string): Promise<string[]> {
+  if (p.kind === "agent") {
+    const grant = await db.agentPermission.findUnique({
+      where: { agentId_serverId: { agentId: p.id, serverId } },
+    });
+    return grant ? JSON.parse(grant.operations) : [];
+  }
+  const [own, teams] = await Promise.all([
+    db.serverPermission.findUnique({
+      where: { serverId_userId: { serverId, userId: p.id } },
+    }),
+    db.teamPermission.findMany({
+      where: { serverId, team: { members: { some: { userId: p.id } } } },
+    }),
+  ]);
+  return [
+    ...new Set(
+      [own, ...teams].flatMap((g) => (g ? JSON.parse(g.operations) : [])),
+    ),
+  ];
 }
 export async function listServers(p: Principal) {
   return db.server.findMany({
     where: {
       organizationId: p.organizationId,
-      ...(p.kind === "agent"
+      ...(p.kind === "agent" && !p.managementOperation
         ? { archived: false, agentPermissions: { some: { agentId: p.id } } }
         : ["owner", "administrator"].includes(p.role)
           ? {}
-          : { permissions: { some: { userId: p.id } } }),
+          : {
+              OR: [
+                { permissions: { some: { userId: p.id } } },
+                {
+                  teamPermissions: {
+                    some: { team: { members: { some: { userId: p.id } } } },
+                  },
+                },
+              ],
+            }),
     },
-    include: { group: true, tags: true },
+    include: {
+      group: true,
+      tags: true,
+      vpnProfile: { select: { id: true, name: true } },
+      bastion: { select: { id: true, name: true } },
+    },
     orderBy: [{ favorite: "desc" }, { name: "asc" }],
     take: 500,
   });
 }
+// Optional webhook (Slack, Discord, Teams or any JSON endpoint) told about
+// new approval requests so they are not left waiting unseen.
+export const APPROVAL_WEBHOOK = "notify.approvalWebhook";
+export async function approvalWebhook(org: string) {
+  const row = await db.systemSetting.findUnique({
+    where: {
+      organizationId_key: { organizationId: org, key: APPROVAL_WEBHOOK },
+    },
+  });
+  return row?.value || "";
+}
+async function announceApproval(
+  p: Principal,
+  op: string,
+  serverName: string,
+  approvalId: string,
+) {
+  const url = await approvalWebhook(p.organizationId);
+  if (!url) return;
+  const who =
+    p.kind === "agent"
+      ? (await db.agent.findUnique({ where: { id: p.id } }))?.name + " (agent)"
+      : (await db.user.findUnique({ where: { id: p.id } }))?.name;
+  const text = `NexusSSH: ${who} requests approval for ${op} on ${serverName} (${approvalId}). Review it under Settings > Approvals.`;
+  await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, content: text }),
+    signal: AbortSignal.timeout(5000),
+  }).catch(() => {});
+}
+// SSH destinations allowed for a workspace: the deployment's SSH_ALLOWED_CIDRS
+// plus networks administrators add under Settings > Security.
+export const EXTRA_CIDRS = "ssh.allowedCidrs";
+export async function workspaceCidrs(org: string): Promise<string[]> {
+  const row = await db.systemSetting.findUnique({
+    where: { organizationId_key: { organizationId: org, key: EXTRA_CIDRS } },
+  });
+  return row ? JSON.parse(row.value) : [];
+}
+export async function sshLimits(org: string) {
+  return {
+    vpnGateway: { url: config.VPN_GATEWAY_URL, secret: config.INTERNAL_SECRET },
+    cidrs: [
+      ...config.SSH_ALLOWED_CIDRS.split(","),
+      ...(config.SSH_ALLOWLIST_LOCKED ? [] : await workspaceCidrs(org)),
+    ],
+    connectTimeout: config.SSH_CONNECT_TIMEOUT,
+    outputLimit: config.SSH_OUTPUT_LIMIT,
+  };
+}
+// Workspace setting: trust a host's key on first connection and pin it
+// (OpenSSH accept-new). Keys that differ from a pinned one are still refused.
+export const ACCEPT_NEW_HOST_KEYS = "ssh.acceptNewHostKeys";
+export async function acceptsNewHostKeys(org: string) {
+  const row = await db.systemSetting.findUnique({
+    where: {
+      organizationId_key: { organizationId: org, key: ACCEPT_NEW_HOST_KEYS },
+    },
+  });
+  return row?.value === "true";
+}
+async function pinNewHostKey(
+  s: {
+    id: string;
+    organizationId: string;
+    host: string;
+    port: number;
+    fingerprint: string | null;
+  },
+  via: Pick<Connection, "vpn" | "bastion"> = {},
+) {
+  if (s.fingerprint) return s.fingerprint;
+  const fingerprint = await scanHostKey(
+    s.host,
+    s.port,
+    await sshLimits(s.organizationId),
+    via,
+  );
+  // Only the first key seen is pinned, even if two connections race.
+  const pinned = await db.server.updateMany({
+    where: { id: s.id, fingerprint: null },
+    data: { fingerprint },
+  });
+  if (pinned.count)
+    await db.auditEvent.create({
+      data: {
+        organizationId: s.organizationId,
+        principalId: "system",
+        action: "host_key_auto_accepted",
+        status: "success",
+        serverId: s.id,
+        correlationId: randomUUID(),
+      },
+    });
+  const row = await db.server.findUniqueOrThrow({
+    where: { id: s.id },
+    select: { fingerprint: true },
+  });
+  return row.fingerprint;
+}
 export async function connection(
   serverId: string,
   org: string,
+  inheritedVpn?: Connection["vpn"],
 ): Promise<Connection> {
   const s = await db.server.findFirstOrThrow({
     where: { id: serverId, organizationId: org },
-    include: { identity: true, bastion: { include: { identity: true } } },
+    include: {
+      identity: true,
+      vpnProfile: true,
+      bastion: { include: { identity: true, vpnProfile: true } },
+    },
   });
   const map = (s: any): Connection => ({
+    ...(s.vpnProfile
+      ? {
+          vpn: {
+            id: s.vpnProfile.id,
+            config: unseal(
+              s.vpnProfile.encryptedConfig,
+              config.ENCRYPTION_KEY,
+              org + ":vpn:" + s.vpnProfile.id,
+            ),
+          },
+        }
+      : {}),
     host: s.host,
     port: s.port,
     username: s.username,
@@ -111,7 +259,60 @@ export async function connection(
       org + ":" + s.identityId,
     ),
   });
-  return { ...map(s), ...(s.bastion ? { bastion: map(s.bastion) } : {}) };
+  const result = {
+    ...map(s),
+    ...(s.bastion ? { bastion: map(s.bastion) } : {}),
+  };
+  if (inheritedVpn) {
+    if (result.vpn && result.vpn.id !== inheritedVpn.id)
+      throw new BadRequestException(
+        "Conflicting VPN profiles on target and bastion",
+      );
+    result.vpn = inheritedVpn;
+  }
+  if (s.bastion?.archived || s.bastion?.bastionId)
+    throw new BadRequestException("Bastion is unavailable");
+  if (await acceptsNewHostKeys(org)) {
+    if (s.bastion && result.bastion)
+      result.bastion.fingerprint = await pinNewHostKey(s.bastion, {
+        vpn: result.vpn || result.bastion.vpn,
+      });
+    result.fingerprint = await pinNewHostKey(s, result);
+  }
+  return result;
+}
+export async function connectionPath(
+  org: string,
+  a: { vpnProfileId?: string | null; bastionId?: string | null },
+): Promise<Pick<Connection, "vpn" | "bastion">> {
+  const via: Pick<Connection, "vpn" | "bastion"> = {};
+  if (a.vpnProfileId) {
+    const profile = await db.vpnProfile.findFirst({
+      where: { id: a.vpnProfileId, organizationId: org },
+    });
+    if (!profile) throw new NotFoundException("VPN profile unavailable");
+    via.vpn = {
+      id: profile.id,
+      config: unseal(
+        profile.encryptedConfig,
+        config.ENCRYPTION_KEY,
+        org + ":vpn:" + profile.id,
+      ),
+    };
+  }
+  if (a.bastionId) {
+    const bastion = await db.server.findFirst({
+      where: {
+        id: a.bastionId,
+        organizationId: org,
+        archived: false,
+        bastionId: null,
+      },
+    });
+    if (!bastion) throw new NotFoundException("Bastion unavailable");
+    via.bastion = await connection(bastion.id, org, via.vpn);
+  }
+  return via;
 }
 export async function operation(
   p: Principal,
@@ -144,10 +345,14 @@ export async function operation(
     if (!t) throw new NotFoundException();
     const job = await queue.getJob(t.id);
     if (op === "task_cancel") {
-      await db.backgroundTask.update({
-        where: { id: t.id },
+      const changed = await db.backgroundTask.updateMany({
+        where: { id: t.id, status: { in: ["queued", "running"] } },
         data: { status: "cancelled" },
       });
+      if (changed.count === 0) {
+        const current = await db.backgroundTask.findUniqueOrThrow({ where: { id: t.id } });
+        return { taskId: t.id, status: current.status, message: "Task is already terminal" };
+      }
       if (job && (await job.getState()) === "waiting") await job.remove();
       await audit(p, op, "requested", t.serverId);
       return {
@@ -166,6 +371,20 @@ export async function operation(
   }
   const server = await authorize(p, a.serverId, op);
   if (op === "server_get_info") return { server };
+  // Read-only session calls still consume one agent call; reserve and record
+  // together so concurrent callers cannot exceed the configured cap.
+  if (p.kind === "agent" && (op === "ssh_session_status" || op === "ssh_disconnect")) {
+    await reserveAgentCall(p.id, (tx) => tx.auditEvent.create({
+      data: {
+        organizationId: p.organizationId,
+        principalId: p.id,
+        action: `mcp:${op}`,
+        status: "requested",
+        serverId: server.id,
+        correlationId: randomUUID(),
+      },
+    }));
+  }
   if (op === "ssh_session_status")
     return {
       sessions: await db.sSHSession.findMany({
@@ -204,6 +423,7 @@ export async function operation(
         },
       });
       await audit(p, op, "approval_pending", server.id, approval.id);
+      void announceApproval(p, op, server.name, approval.id);
       return {
         status: "approval_required",
         approvalId: approval.id,
@@ -230,33 +450,42 @@ export async function operation(
         "Approval is missing, expired, mismatched, or already consumed",
       );
   }
-  const task = await db.backgroundTask.create({
-    data: {
-      organizationId: p.organizationId,
-      principalId: p.id,
-      serverId: server.id,
-      operation: op,
-      encryptedArguments: seal(
-        normalized,
-        config.ENCRYPTION_KEY,
-        p.organizationId,
-      ),
-      status: "queued",
-      tokenId: p.tokenId,
-      expiresAt: new Date(Date.now() + 120000),
-    },
-  });
-  await db.commandExecution.create({
-    data: {
-      id: task.id,
-      organizationId: p.organizationId,
-      principalId: p.id,
-      serverId: server.id,
-      operation: op,
-      argumentDigest: digest,
-      status: "queued",
-    },
-  });
+  const createTask = async (
+    tx: Pick<typeof db, "backgroundTask" | "commandExecution">,
+  ) => {
+    const task = await tx.backgroundTask.create({
+      data: {
+        organizationId: p.organizationId,
+        principalId: p.id,
+        serverId: server.id,
+        operation: op,
+        encryptedArguments: seal(
+          normalized,
+          config.ENCRYPTION_KEY,
+          p.organizationId,
+        ),
+        status: "queued",
+        tokenId: p.tokenId,
+        expiresAt: new Date(Date.now() + 120000),
+      },
+    });
+    await tx.commandExecution.create({
+      data: {
+        id: task.id,
+        organizationId: p.organizationId,
+        principalId: p.id,
+        serverId: server.id,
+        operation: op,
+        argumentDigest: digest,
+        status: "queued",
+      },
+    });
+    return task;
+  };
+  const task =
+    p.kind === "agent"
+      ? await reserveAgentCall(p.id, createTask)
+      : await db.$transaction(createTask);
   await audit(p, op, "queued", server.id, task.id);
   const job = await queue.add(
     "operation",
@@ -276,7 +505,10 @@ export async function operation(
   if (signal?.aborted) cancel();
   try {
     return await job.waitUntilFinished(events, 90000);
-  } catch {
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : "";
+    if (connectionFailures.some((r) => r.test(reason)))
+      throw new BadRequestException(reason);
     throw new BadRequestException({
       message:
         "Operation failed or did not finish in time. Inspect the task status.",
@@ -333,6 +565,7 @@ export async function claimTask(id: string) {
   return {
     lease,
     connection: await connection(t.serverId, t.organizationId),
+    limits: await sshLimits(t.organizationId),
     operation: t.operation,
     args: unseal(t.encryptedArguments, config.ENCRYPTION_KEY, t.organizationId),
   };

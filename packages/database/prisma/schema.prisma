@@ -18,6 +18,7 @@ model Organization {
   groups ServerGroup[]
   tags ServerTag[]
   identities SSHIdentity[]
+  vpnProfiles VpnProfile[]
   agents Agent[]
   audit AuditEvent[]
   settings SystemSetting[]
@@ -38,6 +39,8 @@ model User {
   disabled Boolean @default(false)
   totpSecret String?
   totpLastStep Int @default(-1)
+  recoveryCodes String @default("[]")
+  preferences String @default("{}")
   sessions WebSession[]
   teams TeamMember[]
   permissions ServerPermission[]
@@ -63,6 +66,7 @@ model Team {
   organization Organization @relation(fields: [organizationId], references: [id])
   name String
   members TeamMember[]
+  servers TeamPermission[]
   @@unique([organizationId, name])
   @@index([organizationId])
 }
@@ -97,8 +101,12 @@ model ServerGroup {
   organizationId String
   organization Organization @relation(fields: [organizationId], references: [id])
   name String
+  parentId String?
+  parent ServerGroup? @relation("FolderTree", fields: [parentId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  children ServerGroup[] @relation("FolderTree")
   servers Server[]
-  @@unique([organizationId, name])
+  @@unique([organizationId, parentId, name])
+  @@index([parentId])
   @@index([organizationId])
 }
 
@@ -127,6 +135,20 @@ model SSHIdentity {
   @@index([organizationId])
 }
 
+model VpnProfile {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organizationId String
+  organization Organization @relation(fields: [organizationId], references: [id])
+  name String
+  description String @default("")
+  encryptedConfig String
+  summary String
+  servers Server[]
+  @@index([organizationId])
+}
+
 model Server {
   id String @id @default(uuid())
   createdAt DateTime @default(now())
@@ -142,6 +164,8 @@ model Server {
   fingerprint String?
   environment String @default("development")
   description String @default("")
+  icon String @default("linux")
+  terminalSettings String @default("{}")
   groupId String?
   group ServerGroup? @relation(fields: [groupId], references: [id])
   tags ServerTag[]
@@ -151,9 +175,12 @@ model Server {
   status String @default("unknown")
   lastCheckedAt DateTime?
   bastionId String?
+  vpnProfileId String?
+  vpnProfile VpnProfile? @relation(fields: [vpnProfileId], references: [id], onDelete: Restrict)
   bastion Server? @relation("Bastion", fields: [bastionId], references: [id])
   targets Server[] @relation("Bastion")
   permissions ServerPermission[]
+  teamPermissions TeamPermission[]
   agentPermissions AgentPermission[]
   sessions SSHSession[]
   history SSHConnectionHistory[]
@@ -162,6 +189,18 @@ model Server {
   transfers FileTransfer[]
   tasks BackgroundTask[]
   @@index([organizationId])
+}
+
+model TeamPermission {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  serverId String
+  server Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  teamId String
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  operations String
+  @@unique([serverId, teamId])
 }
 
 model ServerPermission {
@@ -188,6 +227,8 @@ model Agent {
   level String @default("viewer")
   revoked Boolean @default(false)
   lastActivityAt DateTime?
+  maxCallsPerMinute Int?
+  maxCallsPerDay Int?
   permissions AgentPermission[]
   tokens AgentToken[]
   @@index([organizationId])
@@ -258,6 +299,7 @@ model CommandExecution {
   exitCode Int?
   durationMs Int?
   @@index([organizationId])
+  @@index([principalId, createdAt])
 }
 
 model SavedCommand {
@@ -302,6 +344,7 @@ model AuditEvent {
   correlationId String
   durationMs Int?
   @@index([organizationId, createdAt])
+  @@index([principalId, createdAt])
 }
 
 model FileTransfer {

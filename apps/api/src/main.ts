@@ -15,11 +15,18 @@ import express from "express";
 import { ZodError } from "zod";
 import { randomUUID } from "node:crypto";
 import { AppController } from "./controller.js";
-import { config } from "../../../packages/shared/config.js";
+import { VpnController } from "./vpn.js";
+import {
+  config,
+  generatedSecrets,
+  sameOrigin,
+} from "../../../packages/shared/config.js";
 import { db, initializeDatabase } from "../../../packages/database/index.js";
 import { terminals } from "./terminal.js";
+import { SftpController } from "./sftp.js";
 import { queue, events } from "./domain.js";
-@Module({ controllers: [AppController] })
+import { reconcileRunningTasks } from "./task-recovery.js";
+@Module({ controllers: [AppController, SftpController, VpnController] })
 class AppModule {}
 @Catch()
 class Errors implements ExceptionFilter {
@@ -49,6 +56,10 @@ class Errors implements ExceptionFilter {
   }
 }
 await initializeDatabase();
+const interruptedTasks = await reconcileRunningTasks();
+if (interruptedTasks) console.warn(`Interrupted ${interruptedTasks} running SSH tasks after restart`);
+if (generatedSecrets.includes("SETUP_TOKEN") && (await db.user.count()) === 0)
+  console.log(`First-run setup token: ${process.env.SETUP_TOKEN}`);
 const app = await NestFactory.create(AppModule, { bodyParser: false });
 app.use(helmet());
 app.use(express.json({ limit: "2mb" }));
@@ -60,20 +71,33 @@ app.use((req: any, res: any, next: any) => {
     ["POST", "PATCH", "DELETE", "PUT"].includes(req.method) &&
     !req.headers.authorization &&
     !req.path.startsWith("/api/internal/") &&
-    req.headers.origin !== new URL(config.APP_URL).origin
+    !sameOrigin(req.headers)
   ) {
     res.status(403).json({ message: "Invalid request origin" });
     return;
   }
   next();
 });
+// Guards credential attempts; reading the session or setup state is not one.
 app.use(
   "/api/auth",
   rateLimit({
     windowMs: 60000,
     limit: 20,
+    skip: (req) => req.method === "GET",
     standardHeaders: "draft-8",
     legacyHeaders: false,
+  }),
+);
+// Host key scans open outbound connections, so they get a tighter budget.
+app.use(
+  "/api/servers/scan-host-key",
+  rateLimit({
+    windowMs: 60000,
+    limit: 10,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    message: { message: "Too many host key scans; try again in a minute" },
   }),
 );
 app.use(
@@ -114,6 +138,7 @@ const retention = setInterval(() => {
 }, 3600000);
 async function shutdown() {
   clearInterval(retention);
+  wss.closeAll();
   for (const client of wss.clients) client.close();
   await queue.close();
   await events.close();
