@@ -104,8 +104,14 @@ test("opens a cluster console in a workspace tab, runs commands, edits history a
   await expect(output).toContainText("configmap/settings configured");
   await page.reload();
   await expect(consolePane.getByLabel("Console namespace")).toHaveCount(0);
-  await expect(output).toContainText("kubectl (production) >");
+  await expect(output).toContainText("kubectl >");
+  await expect(output).not.toContainText("kubectl (production)");
   await expect(output).toContainText("Connected");
+  await input.focus();
+  await page.keyboard.insertText("kubectl get pods");
+  await page.keyboard.press("Enter");
+  await expect.poll(() => commands.length).toBe(4);
+  expect(commands[3].namespace).toBe("production");
   await page.screenshot({
     path: "test-results/kubernetes-console.png",
     fullPage: true,
@@ -120,7 +126,12 @@ test("opens a cluster console in a workspace tab, runs commands, edits history a
     })
     .click();
   await expect(output).toContainText("Connected");
-  await expect(output).toContainText("kubectl (apps) >");
+  await expect(output).toContainText("kubectl >");
+  await input.focus();
+  await page.keyboard.insertText("kubectl get pods");
+  await page.keyboard.press("Enter");
+  await expect.poll(() => commands.length).toBe(5);
+  expect(commands[4].namespace).toBe("apps");
   expect(errors).toEqual([]);
 });
 

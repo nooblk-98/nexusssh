@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { CircleHelp, Eraser, Maximize, Square, Boxes } from "lucide-react";
+import { CircleHelp, Eraser, Maximize, Square } from "lucide-react";
+import { KubernetesIcon } from "./kubernetes-icon";
 import { api, useApi, type Row } from "../lib/api";
 import { usePrefs, useWorkspace, type Tab } from "../lib/store";
 import { terminalFonts, terminalThemes } from "../lib/themes";
@@ -78,7 +79,7 @@ export default function KubernetesConsole({
       let manifest: { command: string[]; text: string } | undefined;
       const write = (value: string) => t.write(value.replace(/\r?\n/g, "\r\n"));
       const prompt = () => {
-        promptText = `kubectl (${selectedNamespace.current}) > `;
+        promptText = "kubectl > ";
         promptRow = 0;
         cursor = line.length;
         t.write(promptText + line);
@@ -400,7 +401,7 @@ export default function KubernetesConsole({
       aria-label={`Kubernetes console ${cluster.name}`}
     >
       <div className="term-toolbar">
-        <Boxes size={18} />
+        <KubernetesIcon size={18} />
         <strong className="ellipsis">{cluster.context}</strong>
         <span className="grow" />
         <IconButton

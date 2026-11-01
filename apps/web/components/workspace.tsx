@@ -3,7 +3,6 @@ import dynamic from "next/dynamic";
 import { useEffect } from "react";
 import {
   ChevronRight,
-  Boxes,
   Columns2,
   FileText,
   Folder,
@@ -17,6 +16,7 @@ import {
 import { useServers } from "../lib/servers";
 import { useWorkspace, type Tab } from "../lib/store";
 import { Home } from "./home";
+import { KubernetesIcon } from "./kubernetes-icon";
 import { openMenu, openMenuAt } from "./ui";
 
 const TerminalView = dynamic(() => import("./terminal"), { ssr: false });
@@ -29,7 +29,7 @@ const kindIcon = {
   terminal: SquareTerminal,
   sftp: Folder,
   editor: FileText,
-  kubernetes: Boxes,
+  kubernetes: KubernetesIcon,
 };
 const layouts = [
   { n: 1, label: "Single view", icon: Square },

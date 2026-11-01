@@ -2,7 +2,6 @@
 import { useEffect, useState } from "react";
 import {
   ArrowLeft,
-  Boxes,
   FileText,
   Pencil,
   Plus,
@@ -35,6 +34,7 @@ import {
   confirmDialog,
 } from "../ui";
 import { PageHead } from "./page-head";
+import { KubernetesIcon } from "../kubernetes-icon";
 import {
   connectCluster,
   useKubernetesImport,
@@ -807,7 +807,7 @@ export function KubernetesClusters() {
             ) : (
               !data.error && (
                 <Empty
-                  icon={<Boxes size={42} />}
+                  icon={<KubernetesIcon size={42} />}
                   title={`No ${labels[resource].toLowerCase()} found`}
                 >
                   Try another namespace or refresh the cluster.
@@ -850,7 +850,7 @@ export function KubernetesClusters() {
               className="card card-pad kube-cluster-card"
             >
               <div className="row">
-                <Boxes size={22} />
+                <KubernetesIcon size={22} />
                 <h2 className="grow ellipsis" title={cluster.name}>
                   {cluster.name}
                 </h2>
@@ -909,7 +909,7 @@ export function KubernetesClusters() {
         !q.error && (
           <div className="card">
             <Empty
-              icon={<Boxes size={64} strokeWidth={1.25} />}
+              icon={<KubernetesIcon size={64} />}
               title="No Kubernetes clusters"
             >
               Import a kubeconfig to connect your first cluster directly.

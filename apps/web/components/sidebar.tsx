@@ -2,7 +2,6 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import {
   Bell,
-  Boxes,
   Check as CheckIcon,
   ChevronDown,
   ChevronLeft,
@@ -34,6 +33,7 @@ import { connectCluster, openKubernetesImport } from "../lib/kubernetes-navigati
 import { connectServer, updateServer, useServers } from "../lib/servers";
 import { useWorkspace } from "../lib/store";
 import { ServerIcon } from "./icons";
+import { KubernetesIcon } from "./kubernetes-icon";
 import { openImportExport } from "./import-export";
 import { openServerDrawer } from "./server-drawer";
 import { DefaultsEditor, MetadataEditor } from "./metadata-editor";
@@ -482,7 +482,9 @@ export function Sidebar({ me }: { me: Row }) {
     ];
     return <div key={cluster.id} className="server-row-wrap kube-cluster-row">
       <button className="tree-server kube-sidebar-cluster" data-cluster-id={cluster.id} style={{ paddingLeft: 10 + depth * 20 }} title={`${cluster.name} · ${folderLabel(groups, cluster.groupId) || cluster.context}`} aria-label={`Open console ${cluster.name}`} {...dragProps("cluster", cluster.id)} {...dropProps(cluster.groupId || "root", cluster.groupId || null)} onClick={() => connectCluster({ id: cluster.id, name: cluster.name })} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); openMenu(event.clientX, event.clientY, menu); }}>
-        <Boxes size={18} /><span className="grow"><span className="server-name ellipsis">{cluster.name}</span><small className="small muted ellipsis">{view !== "tree" && cluster.groupId ? folderLabel(groups, cluster.groupId) + " · " : ""}{cluster.context}</small></span>
+        <span className="srv-icon"><KubernetesIcon size={20} /></span>
+        <span role="img" aria-label={`Cluster ${cluster.status === "connected" ? "connected" : cluster.status === "error" ? "check failed" : "not checked"}`} title={cluster.status === "connected" ? "Connected" : cluster.status === "error" ? "Connection check failed" : "Not checked"} style={{ color: cluster.status === "connected" ? "var(--success)" : cluster.status === "error" ? "var(--danger)" : "var(--muted)", fontWeight: 700 }}>●</span>
+        <span className="grow"><div className="srv-name ellipsis">{cluster.name}</div><div className="srv-sub ellipsis">{view !== "tree" && cluster.groupId ? folderLabel(groups, cluster.groupId) + " · " : ""}{cluster.context}</div></span>
       </button>
       <IconButton className="server-row-menu" label={`Actions for cluster ${cluster.name}`} onClick={(event) => { event.stopPropagation(); openMenuAt(event.currentTarget, menu); }}><MoreHorizontal size={17} /></IconButton>
     </div>;
@@ -685,7 +687,7 @@ export function Sidebar({ me }: { me: Row }) {
       >
         {!!(view === "tree" ? rootClusters : visibleClusters).length && (
           <section aria-label="Kubernetes clusters">
-            <div className="tree-folder tag-heading"><Boxes size={16} /><span>Kubernetes</span></div>
+            <div className="tree-folder tag-heading"><KubernetesIcon size={16} /><span>Kubernetes</span></div>
             {(view === "tree" ? rootClusters : visibleClusters).map((cluster) => clusterRow(cluster))}
           </section>
         )}

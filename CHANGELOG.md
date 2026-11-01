@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Aligned SSH and Kubernetes sidebar rows and replaced generic cluster icons
+  with the Kubernetes logo. The console prompt now shows only `kubectl >`.
 - Kubernetes routes can resolve private API hostnames through the saved SSH
   bastion when host/VPN DNS cannot provide an allowed address. All resolved
   destinations remain allowlisted and TLS identity is preserved.

@@ -35,6 +35,21 @@ test("organize clusters in shared nested folders using drag, move, edit and fold
       data = { id: "owner", name: "Owner", role: "owner" };
     else if (path === "preferences") data = { uiTheme: "light" };
     else if (path === "groups") data = folders;
+    else if (path === "servers")
+      data = [
+        {
+          id: "7f0d68b9-779a-4cc5-a775-4788058040b7",
+          name: "Home Server",
+          host: "192.168.1.106",
+          port: 22,
+          username: "test",
+          groupId: myId,
+          icon: "linux",
+          status: "unknown",
+          tags: [],
+          environment: "development",
+        },
+      ];
     else if (path === "kubernetes/clusters") data = [cluster];
     else if (path === `kubernetes/clusters/${cluster.id}/move`) {
       const body = route.request().postDataJSON();
