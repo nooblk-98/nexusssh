@@ -108,6 +108,7 @@ it("migrates fresh and existing databases without changing encrypted SSH identit
       encryptedConfig: clusterSecret,
       vpnProfileId: null,
       bastionId: null,
+      groupId: null,
     });
     expect(
       unseal(
@@ -116,6 +117,37 @@ it("migrates fresh and existing databases without changing encrypted SSH identit
         `${organization.id}:kubernetes:${clusterId}`,
       ),
     ).toEqual({ token: "existing-cluster-secret" });
+    const parent = await client.serverGroup.create({
+      data: { organizationId: organization.id, name: "SLUDI" },
+    });
+    const folder = await client.serverGroup.create({
+      data: {
+        organizationId: organization.id,
+        name: "DEV",
+        parentId: parent.id,
+      },
+    });
+    await client.kubernetesCluster.update({
+      where: { id: clusterId },
+      data: { groupId: folder.id },
+    });
+    await client.serverGroup.update({
+      where: { id: folder.id },
+      data: { parentId: null, name: "Development" },
+    });
+    expect(
+      (
+        await client.kubernetesCluster.findUniqueOrThrow({
+          where: { id: clusterId },
+        })
+      ).groupId,
+    ).toBe(folder.id);
+    await client.serverGroup.delete({ where: { id: folder.id } });
+    expect(
+      await client.kubernetesCluster.findUniqueOrThrow({
+        where: { id: clusterId },
+      }),
+    ).toMatchObject({ groupId: null, encryptedConfig: clusterSecret });
     const cluster = await client.kubernetesCluster.create({
       data: {
         organizationId: organization.id,

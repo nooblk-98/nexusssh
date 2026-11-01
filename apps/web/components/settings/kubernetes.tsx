@@ -19,6 +19,7 @@ import {
   ApiError,
 } from "../../lib/api";
 import { useServers } from "../../lib/servers";
+import { folderOptions } from "../../lib/folders";
 import {
   resources,
   type Resource,
@@ -49,6 +50,7 @@ type Cluster = {
   authentication: string;
   vpnProfileId: string | null;
   bastionId: string | null;
+  groupId: string | null;
   status: string;
   version: string | null;
   lastCheckedAt: string | null;
@@ -91,17 +93,22 @@ const statusColor = (status: string) =>
 
 function ClusterForm({
   cluster,
+  initialGroupId,
   onClose,
   onSaved,
 }: {
   cluster?: Cluster;
+  initialGroupId?: string | null;
   onClose: () => void;
   onSaved: (cluster: Cluster) => void;
 }) {
   const [name, setName] = useState(cluster?.name || "");
   const [description, setDescription] = useState(cluster?.description || "");
   const vpns = useApi<Row[]>("vpn-profiles");
-  const { servers } = useServers();
+  const { servers, groups } = useServers();
+  const [groupId, setGroupId] = useState(
+    cluster?.groupId || initialGroupId || "",
+  );
   const [vpnProfileId, setVpnProfileId] = useState(cluster?.vpnProfileId || "");
   const [bastionId, setBastionId] = useState(cluster?.bastionId || "");
   const [kubeconfig, setKubeconfig] = useState("");
@@ -156,6 +163,7 @@ function ClusterForm({
           description,
           vpnProfileId: vpnProfileId || null,
           bastionId: bastionId || null,
+          groupId: groupId || null,
           ...(kubeconfig.trim()
             ? { kubeconfig, ...(context ? { context } : {}) }
             : {}),
@@ -207,6 +215,25 @@ function ClusterForm({
           value={name}
           onChange={(event) => setName(event.target.value)}
         />
+      </Field>
+      <Field label="Folder">
+        <select
+          className="select"
+          aria-label="Cluster folder"
+          value={groupId}
+          disabled={busy}
+          onChange={(event) => setGroupId(event.target.value)}
+        >
+          <option value="">Top level</option>
+          {folderOptions(groups).map((folder) => (
+            <option key={folder.id} value={folder.id}>
+              {folder.label}
+            </option>
+          ))}
+          {groupId && !groups.some((folder) => folder.id === groupId) && (
+            <option value={groupId}>Unavailable saved folder</option>
+          )}
+        </select>
       </Field>
       <Field label="Description">
         <input
@@ -477,14 +504,18 @@ export function KubernetesClusters() {
   const q = useApi<Cluster[]>("kubernetes/clusters");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = q.data?.find((cluster) => cluster.id === selectedId);
-  const [form, setForm] = useState<{ cluster?: Cluster } | null>(null);
+  const [form, setForm] = useState<{
+    cluster?: Cluster;
+    groupId?: string | null;
+  } | null>(null);
   const importRequested = useKubernetesImport((state) => state.requested);
+  const importGroupId = useKubernetesImport((state) => state.groupId);
   useEffect(() => {
     if (importRequested) {
-      setForm({});
-      useKubernetesImport.setState({ requested: false });
+      setForm({ groupId: importGroupId });
+      useKubernetesImport.setState({ requested: false, groupId: null });
     }
-  }, [importRequested]);
+  }, [importRequested, importGroupId]);
   const [resource, setResource] = useState<Resource>("pods");
   const [namespace, setNamespace] = useState("default");
   const [namespaceDraft, setNamespaceDraft] = useState("default");
@@ -889,6 +920,7 @@ export function KubernetesClusters() {
       {form && (
         <ClusterForm
           cluster={form.cluster}
+          initialGroupId={form.groupId}
           onClose={() => setForm(null)}
           onSaved={(cluster) => {
             setForm(null);

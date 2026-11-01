@@ -235,6 +235,7 @@ async function perform(
         description: true,
         context: true,
         namespace: true,
+        groupId: true,
         status: true,
         version: true,
         agentPermissions:

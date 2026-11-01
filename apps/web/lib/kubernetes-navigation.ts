@@ -14,11 +14,15 @@ export function connectCluster(cluster: { id: string; name: string }) {
   navigate("/");
 }
 
-export const useKubernetesImport = create<{ requested: boolean }>(() => ({
+export const useKubernetesImport = create<{
+  requested: boolean;
+  groupId: string | null;
+}>(() => ({
   requested: false,
+  groupId: null,
 }));
 
-export function openKubernetesImport() {
-  useKubernetesImport.setState({ requested: true });
+export function openKubernetesImport(groupId: string | null = null) {
+  useKubernetesImport.setState({ requested: true, groupId });
   navigate("/settings/kubernetes");
 }

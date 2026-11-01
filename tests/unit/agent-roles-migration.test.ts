@@ -99,6 +99,8 @@ it("migrates old agent roles without expanding restricted access or losing grant
         authentication: "token",
         encryptedConfig: "encrypted-kube-fixture",
       },
+      // Seed the old schema without selecting columns added by later migrations.
+      select: { id: true },
     });
     const ids = new Map<string, string>();
     for (const level of ["viewer", "operator", "administrator", "custom"]) {

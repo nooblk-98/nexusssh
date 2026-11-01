@@ -31,6 +31,10 @@
 
 ### Added
 
+- Kubernetes clusters can share nested folders with SSH servers. Choose a folder
+  when importing/editing, drag clusters between folders, or use Move to. Folder
+  deletion moves directly contained clusters to the top level and preserves
+  their credentials, routes and permissions.
 - Kubernetes command consoles in workspace tabs, with sidebar cluster entries,
   a namespace selector, history, cancellation, table/JSON/YAML output and inline
   `apply -f -` manifest input. Saved VPN/bastion routes and encrypted credentials

@@ -19,6 +19,18 @@ local `kubectl`. Saved WireGuard VPN and SSH bastion routes are also supported.
 Choose an optional **WireGuard VPN** and/or **SSH bastion** in the cluster form.
 These selections can be changed later without uploading the kubeconfig again.
 
+Choose **Folder** to organize a cluster alongside SSH servers in the existing
+nested folder tree. You can create folders/subfolders from the sidebar, drag a
+cluster into a folder, or use its **Move to…** action. A folder's **New Kubernetes
+cluster** action preselects that folder. Search matches cluster names, contexts
+and folder paths; matching entries are revealed inside collapsed folders.
+Deleting a folder moves its direct clusters to the top level without deleting
+connections or credentials. Folder assignment only organizes the cluster; its
+VPN/bastion selection, command approvals and MCP grants remain the same.
+SSH folder defaults do not apply to cluster connections. MCP cluster creation
+accepts an optional `groupId` from the same workspace, and cluster discovery
+includes that non-secret folder ID.
+
 Supported credentials are an embedded bearer `token` or embedded
 `client-certificate-data` plus `client-key-data`. An optional
 `certificate-authority-data` bundle is used for TLS trust; otherwise the host's

@@ -224,13 +224,14 @@ export const managementTools: Record<string, Tool> = {
     resource,
   ),
   kubernetes_cluster_create: tool(
-    "Add a saved Kubernetes cluster from YAML/JSON kubeconfig text and an optional context. Embedded tokens or client certificates are encrypted. Returns profile metadata only; never returns the kubeconfig, token, certificates, private keys or encrypted credentials. Custom agents need separate cluster/tool grants; Administrator agents automatically have workspace-wide access. Never returns saved connection credentials.",
+    "Add a saved Kubernetes cluster from YAML/JSON kubeconfig text and an optional context and folder groupId in this workspace. Embedded tokens or client certificates are encrypted. Returns profile metadata only; never returns the kubeconfig, token, certificates, private keys or encrypted credentials. Custom agents need separate cluster/tool grants; Administrator agents automatically have workspace-wide access. Never returns saved connection credentials.",
     "POST",
     "kubernetes/clusters",
     z.object({
       name,
       description: z.string().max(2000).optional(),
       kubeconfig: z.string().min(1).max(256 * 1024),
+      groupId: id.nullable().optional(),
       vpnProfileId: id.nullable().optional(),
       bastionId: id.nullable().optional(),
       context: z.string().min(1).max(256).optional(),
@@ -285,7 +286,7 @@ export const managementTools: Record<string, Tool> = {
       .strict(),
   ),
   folder_delete: tool(
-    "Delete a folder, moving its direct servers and subfolders to top level. No servers are deleted.",
+    "Delete a folder, moving its direct servers, Kubernetes clusters and subfolders to top level. No connections are deleted.",
     "DELETE",
     "groups/:id",
     resource,

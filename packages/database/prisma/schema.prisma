@@ -107,6 +107,7 @@ model ServerGroup {
   children ServerGroup[] @relation("FolderTree")
   servers Server[]
   defaults String @default("{}")
+  clusters KubernetesCluster[]
   @@unique([organizationId, parentId, name])
   @@index([parentId])
   @@index([organizationId])
@@ -166,6 +167,8 @@ model KubernetesCluster {
   namespace String @default("default")
   authentication String
   encryptedConfig String
+  groupId String?
+  group ServerGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   vpnProfileId String?
   vpnProfile VpnProfile? @relation(fields: [vpnProfileId], references: [id], onDelete: Restrict)
   bastionId String?
@@ -179,6 +182,7 @@ model KubernetesCluster {
   executions KubernetesExecution[]
   @@unique([organizationId, name])
   @@index([organizationId])
+  @@index([groupId])
 }
 
 model Server {

@@ -56,6 +56,7 @@ import {
 } from "./ui";
 
 const FOLDERS_KEY = "nexus-closed-folders";
+type MovableKind = "server" | "folder" | "cluster";
 const VIEWS = [
   ["tree", "Tree", FolderTree],
   ["table", "Table", Table2],
@@ -111,6 +112,7 @@ export function Sidebar({ me }: { me: Row }) {
   const { servers, groups } = useServers();
   const tagsQuery = useApi<Row[]>("tags");
   const clusters = useApi<Row[]>("kubernetes/clusters", { enabled: admin });
+  const availableClusters = admin ? clusters.data || [] : [];
   const tags = tagsQuery.data || [];
   const [defaults, setDefaults] = useState<{ kind: "groups" | "tags"; row: Row } | null>(null);
   const [view, setView] = useState<"tree" | "table" | "tags">("tree");
@@ -143,11 +145,11 @@ export function Sidebar({ me }: { me: Row }) {
   const [search, setSearch] = useState("");
   const [closed, setClosed] = useState<string[]>([]);
   const [drag, setDrag] = useState<{
-    kind: "server" | "folder";
+    kind: MovableKind;
     id: string;
   } | null>(null);
   const [move, setMove] = useState<{
-    kind: "server" | "folder";
+    kind: MovableKind;
     row: Row;
   } | null>(null);
   const [destination, setDestination] = useState("");
@@ -191,11 +193,12 @@ export function Sidebar({ me }: { me: Row }) {
     [servers, groups, q, tagFilter],
   );
   const toggleChecked = (id: string) => setChecked((current) => current.includes(id) ? current.filter((x) => x !== id) : [...current, id]);
+  const visibleClusters = availableClusters.filter((cluster) => !q || matchesFolder(cluster.groupId) || [cluster.name, cluster.context, cluster.description, cluster.server].join(" ").toLowerCase().includes(q));
   const archiveServer = async (s: Row) => {
     if (!await confirmDialog("Archive Server", <>Archive <b>{s.name}</b>? It will be removed from the active list while audit history keeps its references.</>, "Archive", true)) return;
     await api("servers/" + s.id, {}, "DELETE").then(() => refresh("servers")).catch(notify.error);
   };
-  const startMove = (kind: "server" | "folder", row: Row) => {
+  const startMove = (kind: MovableKind, row: Row) => {
     setMove({ kind, row });
     setDestination((kind === "folder" ? row.parentId : row.groupId) || "");
     setMoveError("");
@@ -211,12 +214,15 @@ export function Sidebar({ me }: { me: Row }) {
     });
   };
   const moveItem = async (
-    item: { kind: "server" | "folder"; id: string },
+    item: { kind: MovableKind; id: string },
     parentId: string | null,
   ) => {
     if (item.kind === "folder") {
       await api("groups/" + item.id, { parentId }, "PATCH");
       await refresh("groups");
+    } else if (item.kind === "cluster") {
+      await api("kubernetes/clusters/" + item.id + "/move", { groupId: parentId }, "PATCH");
+      await refresh("kubernetes/clusters");
     } else {
       await api("servers/" + item.id + "/move", { groupId: parentId }, "PATCH");
       await refresh("servers");
@@ -307,6 +313,7 @@ export function Sidebar({ me }: { me: Row }) {
       : []),
   ];
   const folderMenu = (g: Row, list: Row[]): MenuItem[] => [
+    ...(availableClusters.some((cluster) => folderPath(groups, cluster.groupId).some((folder) => folder.id === g.id)) ? [{ label: "Open cluster consoles", onClick: () => availableClusters.filter((cluster) => folderPath(groups, cluster.groupId).some((folder) => folder.id === g.id)).forEach((cluster) => connectCluster({ id: cluster.id, name: cluster.name })) }] : []),
     {
       label: "Connect",
       disabled: !list.length,
@@ -319,6 +326,7 @@ export function Sidebar({ me }: { me: Row }) {
             label: "New Server",
             onClick: () => openServerDrawer({ groupId: g.id }),
           },
+          { label: "New Kubernetes cluster", onClick: () => openKubernetesImport(g.id) },
           {
             label: "New Subfolder",
             onClick: () => {
@@ -353,7 +361,7 @@ export function Sidebar({ me }: { me: Row }) {
                   <>
                     Delete the folder <b>{g.name}</b>?
                     {
-                      " Its directly contained servers and subfolders move to the top level. No servers are deleted."
+                      " Its directly contained servers, Kubernetes clusters and subfolders move to the top level. No connections are deleted."
                     }
                   </>,
                   "Delete",
@@ -361,7 +369,7 @@ export function Sidebar({ me }: { me: Row }) {
                 )
               )
                 await api("groups/" + g.id, undefined, "DELETE")
-                  .then(() => refresh("groups", "servers"))
+                  .then(() => refresh("groups", "servers", "kubernetes/clusters"))
                   .catch(notify.error);
             },
           },
@@ -374,6 +382,7 @@ export function Sidebar({ me }: { me: Row }) {
           onDragOver: (e: DragEvent) => {
             if (
               !e.dataTransfer.types.includes("text/server") &&
+              !e.dataTransfer.types.includes("text/cluster") &&
               !e.dataTransfer.types.includes("text/folder")
             )
               return;
@@ -401,6 +410,7 @@ export function Sidebar({ me }: { me: Row }) {
             setDrag(null);
             const folder = e.dataTransfer.getData("text/folder");
             const server = e.dataTransfer.getData("text/server");
+            const cluster = e.dataTransfer.getData("text/cluster");
             if (
               folder &&
               folderPath(groups, parentId).some((g) => g.id === folder)
@@ -408,16 +418,18 @@ export function Sidebar({ me }: { me: Row }) {
               return;
             const item = folder
               ? { kind: "folder" as const, id: folder }
+              : cluster ? { kind: "cluster" as const, id: cluster }
               : { kind: "server" as const, id: server };
             const current = folder
               ? groups.find((g) => g.id === folder)?.parentId
+              : cluster ? availableClusters.find((c) => c.id === cluster)?.groupId
               : servers.find((s) => s.id === server)?.groupId;
             if (item.id && (current || null) !== parentId)
               void moveItem(item, parentId).catch(notify.error);
           },
         }
       : {};
-  const dragProps = (kind: "server" | "folder", id: string) => ({
+  const dragProps = (kind: MovableKind, id: string) => ({
     draggable: admin,
     onDragStart: (e: DragEvent) => {
       e.stopPropagation();
@@ -462,6 +474,20 @@ export function Sidebar({ me }: { me: Row }) {
     {admin && <button className="server-row-delete" title={`Archive ${s.name}`} aria-label={`Archive ${s.name}`} onClick={(e) => { e.stopPropagation(); void archiveServer(s); }}><span>Archive</span></button>}
     </div>
   );
+  const clusterRow = (cluster: Row, depth = 0) => {
+    const menu: MenuItem[] = [
+      { label: "Open console", onClick: () => connectCluster({ id: cluster.id, name: cluster.name }) },
+      { label: "Move to…", onClick: () => startMove("cluster", cluster) },
+      { label: "Manage cluster", onClick: () => navigate("/settings/kubernetes") },
+    ];
+    return <div key={cluster.id} className="server-row-wrap kube-cluster-row">
+      <button className="tree-server kube-sidebar-cluster" data-cluster-id={cluster.id} style={{ paddingLeft: 10 + depth * 20 }} title={`${cluster.name} · ${folderLabel(groups, cluster.groupId) || cluster.context}`} aria-label={`Open console ${cluster.name}`} {...dragProps("cluster", cluster.id)} {...dropProps(cluster.groupId || "root", cluster.groupId || null)} onClick={() => connectCluster({ id: cluster.id, name: cluster.name })} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); openMenu(event.clientX, event.clientY, menu); }}>
+        <Boxes size={18} /><span className="grow"><span className="server-name ellipsis">{cluster.name}</span><small className="small muted ellipsis">{view !== "tree" && cluster.groupId ? folderLabel(groups, cluster.groupId) + " · " : ""}{cluster.context}</small></span>
+      </button>
+      <IconButton className="server-row-menu" label={`Actions for cluster ${cluster.name}`} onClick={(event) => { event.stopPropagation(); openMenuAt(event.currentTarget, menu); }}><MoreHorizontal size={17} /></IconButton>
+    </div>;
+  };
+  const rootClusters = visibleClusters.filter((cluster) => !cluster.groupId);
   const root = visible.filter((s) => !s.groupId);
   const shownFolders = new Set<string>();
   // With a tag filter, folders appear only through the matching servers below.
@@ -472,6 +498,7 @@ export function Sidebar({ me }: { me: Row }) {
   visible.forEach((s) =>
     folderPath(groups, s.groupId).forEach((f) => shownFolders.add(f.id)),
   );
+  visibleClusters.forEach((cluster) => folderPath(groups, cluster.groupId).forEach((folder) => shownFolders.add(folder.id)));
   const renderFolder = (g: Row, depth = 0): React.ReactNode => {
     if (!shownFolders.has(g.id)) return null;
     const all = servers.filter((s) =>
@@ -509,6 +536,7 @@ export function Sidebar({ me }: { me: Row }) {
               .filter((child) => child.parentId === g.id)
               .map((child) => renderFolder(child, depth + 1))}
             {list.map((s) => serverRow(s, depth + 1))}
+            {visibleClusters.filter((cluster) => cluster.groupId === g.id).map((cluster) => clusterRow(cluster, depth + 1))}
           </div>
         )}
       </div>
@@ -655,14 +683,10 @@ export function Sidebar({ me }: { me: Row }) {
           ]);
         }}
       >
-        {!!clusters.data?.length && (
+        {!!(view === "tree" ? rootClusters : visibleClusters).length && (
           <section aria-label="Kubernetes clusters">
             <div className="tree-folder tag-heading"><Boxes size={16} /><span>Kubernetes</span></div>
-            {clusters.data.filter((cluster) => !q || `${cluster.name} ${cluster.context}`.toLowerCase().includes(q)).map((cluster) => (
-              <button key={cluster.id} className="tree-server kube-sidebar-cluster" title={`${cluster.name} · ${cluster.context}`} aria-label={`Open console ${cluster.name}`} onClick={() => connectCluster({ id: cluster.id, name: cluster.name })}>
-                <Boxes size={18} /><span className="grow"><span className="server-name ellipsis">{cluster.name}</span><small className="small muted ellipsis">{cluster.context}</small></span>
-              </button>
-            ))}
+            {(view === "tree" ? rootClusters : visibleClusters).map((cluster) => clusterRow(cluster))}
           </section>
         )}
         {view === "tree" && <>{groups.filter((g) => !g.parentId).map((g) => renderFolder(g))}{root.map((s) => serverRow(s))}</>}
@@ -678,7 +702,7 @@ export function Sidebar({ me }: { me: Row }) {
             Move to top level
           </div>
         )}
-        {!servers.length && (
+        {!servers.length && !availableClusters.length && (
           <div className="tree-empty">
             {admin ? (
               <>
@@ -693,8 +717,8 @@ export function Sidebar({ me }: { me: Row }) {
             )}
           </div>
         )}
-        {q && !visible.length && !shownFolders.size && (
-          <div className="tree-empty">No servers match “{search}”.</div>
+        {q && !visible.length && !visibleClusters.length && !shownFolders.size && (
+          <div className="tree-empty">No connections match “{search}”.</div>
         )}
       </nav>
       {defaults && <DefaultsEditor kind={defaults.kind} row={defaults.row} onClose={() => setDefaults(null)} />}

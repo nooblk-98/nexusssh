@@ -97,6 +97,7 @@ it("forwards write-only SSH and Kubernetes credential submissions through manage
   );
   const kubeconfig = "private-uploaded-kubeconfig-text";
   const routing = {
+    groupId: "6f10fcb6-ae11-442a-b872-df1595118588",
     vpnProfileId: "8f6975c2-4c71-41ea-9532-7a5e552e6279",
     bastionId: "237b731e-9d63-42ea-9b47-0241277f3383",
   };

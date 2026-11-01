@@ -1738,6 +1738,8 @@ p {
 .kube-sidebar-cluster { width: 100%; display: flex; align-items: center; gap: 12px; text-align: left; padding: 10px 16px; color: var(--text); background: transparent; border: 0; cursor: pointer; }
 .kube-sidebar-cluster:hover { background: var(--hover); }
 .kube-sidebar-cluster .grow { min-width: 0; display: grid; gap: 2px; }
+.kube-cluster-row > .tree-server { padding-right: 38px; }
+.kube-cluster-row > .server-row-menu { right: 5px; }
 .kube-page > * {
   min-width: 0;
 }

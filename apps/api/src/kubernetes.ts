@@ -59,6 +59,7 @@ const input = z
     context: z.string().min(1).max(256).optional(),
     vpnProfileId: z.uuid().nullable().default(null),
     bastionId: z.uuid().nullable().default(null),
+    groupId: z.uuid().nullable().default(null),
   })
   .strict();
 const selection = {
@@ -71,6 +72,7 @@ const selection = {
   authentication: true,
   vpnProfileId: true,
   bastionId: true,
+  groupId: true,
   status: true,
   version: true,
   lastCheckedAt: true,
@@ -78,6 +80,21 @@ const selection = {
   createdAt: true,
   updatedAt: true,
 } as const;
+
+async function assertClusterFolder(
+  organizationId: string,
+  groupId: string | null,
+  client: Pick<typeof db, "serverGroup">,
+) {
+  if (
+    groupId &&
+    !(await client.serverGroup.findFirst({
+      where: { id: groupId, organizationId },
+      select: { id: true },
+    }))
+  )
+    throw new BadRequestException("Folder unavailable in this workspace.");
+}
 
 @Controller("api/kubernetes")
 export class KubernetesController {
@@ -196,6 +213,7 @@ export class KubernetesController {
             description: existing.description,
             vpnProfileId: existing.vpnProfileId,
             bastionId: existing.bastionId,
+            groupId: existing.groupId,
           }
         : {}),
       ...changes,
@@ -255,6 +273,7 @@ export class KubernetesController {
     try {
       row = existing
         ? await db.$transaction(async (tx) => {
+            await assertClusterFolder(p.organizationId, value.groupId, tx);
             if (
               (secret || routeChanged) &&
               (await tx.kubernetesExecution.count({
@@ -271,6 +290,7 @@ export class KubernetesController {
                 description: value.description,
                 vpnProfileId: value.vpnProfileId,
                 bastionId: value.bastionId,
+                groupId: value.groupId,
                 ...secret,
                 ...(secret || routeChanged
                   ? {
@@ -284,17 +304,21 @@ export class KubernetesController {
               select: selection,
             });
           })
-        : await db.kubernetesCluster.create({
-            data: {
-              id: profileId,
-              organizationId: p.organizationId,
-              name: value.name,
-              description: value.description,
-              vpnProfileId: value.vpnProfileId,
-              bastionId: value.bastionId,
-              ...secret!,
-            },
-            select: selection,
+        : await db.$transaction(async (tx) => {
+            await assertClusterFolder(p.organizationId, value.groupId, tx);
+            return tx.kubernetesCluster.create({
+              data: {
+                id: profileId,
+                organizationId: p.organizationId,
+                name: value.name,
+                description: value.description,
+                vpnProfileId: value.vpnProfileId,
+                bastionId: value.bastionId,
+                groupId: value.groupId,
+                ...secret!,
+              },
+              select: selection,
+            });
           });
     } catch (error) {
       if ((error as { code?: string }).code === "P2002")
@@ -319,6 +343,30 @@ export class KubernetesController {
     @Body() body: unknown,
   ) {
     return this.save(req, body, id);
+  }
+
+  @Patch("clusters/:id/move") async move(
+    @Req() req: Request,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    const p = await this.principal(req);
+    const { groupId } = z
+      .object({ groupId: z.uuid().nullable() })
+      .strict()
+      .parse(body);
+    await db.$transaction(async (tx) => {
+      const cluster = await tx.kubernetesCluster.findFirst({
+        where: { id: z.uuid().parse(id), organizationId: p.organizationId },
+        select: { id: true },
+      });
+      if (!cluster)
+        throw new NotFoundException("Kubernetes cluster unavailable.");
+      await assertClusterFolder(p.organizationId, groupId, tx);
+      await tx.kubernetesCluster.update({ where: { id }, data: { groupId } });
+    });
+    await this.audit(p, "profile_moved", "success", id);
+    return { id, groupId };
   }
 
   @Delete("clusters/:id") async remove(

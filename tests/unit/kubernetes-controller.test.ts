@@ -13,6 +13,7 @@ const fixture = vi.hoisted(() => ({
     disabled: false,
   },
   rows: new Map<string, any>(),
+  folders: new Map<string, any>(),
   audit: [] as any[],
   remote: vi.fn(),
   encryptionKey: "ab".repeat(32),
@@ -59,6 +60,14 @@ vi.mock("../../packages/database/index.js", () => {
           const row = { ...fixture.executions.get(where.id), ...data };
           fixture.executions.set(where.id, row);
           return row;
+        }),
+      },
+      serverGroup: {
+        findFirst: vi.fn(async ({ where }) => {
+          const folder = fixture.folders.get(where.id);
+          return folder?.organizationId === where.organizationId
+            ? folder
+            : null;
         }),
       },
       webSession: {
@@ -187,6 +196,80 @@ beforeEach(() => {
   fixture.remote.mockReset();
   fixture.running = 0;
   fixture.executions.clear();
+  fixture.folders.clear();
+});
+
+describe("Kubernetes folders", () => {
+  const folderId = "4ebd9c70-278d-439f-8e1c-dcd30da7e21c";
+  const otherId = "ecbbd1ec-0de5-48e2-a32f-eefdf68ec37a";
+  it("imports, moves and clears a folder without changing credentials, routes, status or a running command", async () => {
+    fixture.folders.set(folderId, {
+      id: folderId,
+      organizationId: "org-a",
+      name: "DEV",
+    });
+    const controller = new KubernetesController();
+    const cluster = await controller.create(request, {
+      name: "Development",
+      kubeconfig: source(),
+      groupId: folderId,
+    });
+    expect(cluster.groupId).toBe(folderId);
+    const before = { ...fixture.rows.get(cluster.id) };
+    fixture.running = 1;
+    await controller.move(request, cluster.id, { groupId: null });
+    expect(fixture.rows.get(cluster.id)).toMatchObject({
+      ...before,
+      groupId: null,
+      updatedAt: expect.any(Date),
+    });
+    await controller.move(request, cluster.id, { groupId: folderId });
+    await controller.update(request, cluster.id, { description: "Grouped" });
+    expect(fixture.rows.get(cluster.id)).toMatchObject({
+      encryptedConfig: before.encryptedConfig,
+      groupId: folderId,
+      status: before.status,
+    });
+    expect((await controller.list(request))[0]).toMatchObject({
+      groupId: folderId,
+    });
+    expect(fixture.remote).not.toHaveBeenCalled();
+  });
+  it("rejects missing or other-workspace folders on create, edit and move", async () => {
+    fixture.folders.set(otherId, { id: otherId, organizationId: "org-b" });
+    const controller = new KubernetesController();
+    const cluster = await controller.create(request, {
+      name: "Development",
+      kubeconfig: source(),
+    });
+    for (const groupId of [folderId, otherId]) {
+      await expect(
+        controller.create(request, {
+          name: "Invalid",
+          kubeconfig: source(),
+          groupId,
+        }),
+      ).rejects.toThrow(/Folder unavailable/);
+      await expect(
+        controller.update(request, cluster.id, { groupId }),
+      ).rejects.toThrow(/Folder unavailable/);
+      await expect(
+        controller.move(request, cluster.id, { groupId }),
+      ).rejects.toThrow(/Folder unavailable/);
+    }
+    expect(fixture.rows.get(cluster.id).groupId).toBeNull();
+    await expect(
+      controller.move(request, otherId, { groupId: null }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    const agent = {
+      ...request,
+      cookies: {},
+      headers: { authorization: "Bearer fixture-agent" },
+    } as Request;
+    await expect(
+      controller.move(agent, cluster.id, { groupId: null }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
 });
 
 describe("Kubernetes browser console", () => {
