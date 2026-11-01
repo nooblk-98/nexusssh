@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added
+
+- Kubernetes administration with direct HTTPS API connections from uploaded
+  kubeconfigs. Cluster credentials are encrypted; administrators can select
+  contexts, check connections, browse paginated namespaces, nodes, pods,
+  deployments, StatefulSets, DaemonSets, and services, and read container logs.
+- Dedicated `KUBERNETES_ALLOWED_CIDRS` network policy, verified TLS, tenant
+  isolation, credential rotation, audit events, bounded responses, and request
+  limits for direct cluster access.
+
 ### Changed
 
 - Server names use compact single-line rows again. Drag the sidebar's right

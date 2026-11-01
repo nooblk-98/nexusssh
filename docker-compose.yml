@@ -13,6 +13,7 @@ services:
       SETUP_TOKEN: ${SETUP_TOKEN:-}
       ENCRYPTION_KEY_PROVIDER: ${ENCRYPTION_KEY_PROVIDER:-environment}
       SSH_ALLOWED_CIDRS: ${SSH_ALLOWED_CIDRS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+      KUBERNETES_ALLOWED_CIDRS: ${KUBERNETES_ALLOWED_CIDRS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       REDIS_URL: redis://redis:6379
     volumes: [nexusssh_data:/app/data, nexusssh_secrets:/app/secrets]

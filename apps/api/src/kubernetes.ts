@@ -1,0 +1,420 @@
+import {
+  BadRequestException,
+  Body,
+  ConflictException,
+  Controller,
+  Delete,
+  Get,
+  HttpException,
+  NotFoundException,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+} from "@nestjs/common";
+import type { Request } from "express";
+import { randomUUID } from "node:crypto";
+import { z } from "zod";
+import { db } from "../../../packages/database/index.js";
+import { seal, unseal } from "../../../packages/shared/crypto.js";
+import { config } from "../../../packages/shared/config.js";
+import type { Principal } from "../../../packages/policy-engine/index.js";
+import { admin, authenticate, human } from "./auth.js";
+import {
+  kubeconfigContexts,
+  KubeconfigError,
+  namespaceName,
+  parseKubeconfig,
+  resourceName,
+  type ClusterConnection,
+} from "../../../packages/kubernetes/kubeconfig.js";
+import {
+  kubernetesRequest,
+  KubernetesError,
+} from "../../../packages/kubernetes/client.js";
+import {
+  resourceKinds,
+  resourcePath,
+  resources,
+  summarizeResource,
+} from "../../../packages/kubernetes/resources.js";
+
+const input = z
+  .object({
+    name: z.string().trim().min(1).max(100),
+    description: z.string().max(2000).default(""),
+    kubeconfig: z
+      .string()
+      .max(256 * 1024)
+      .optional(),
+    context: z.string().min(1).max(256).optional(),
+  })
+  .strict();
+const selection = {
+  id: true,
+  name: true,
+  description: true,
+  server: true,
+  context: true,
+  namespace: true,
+  authentication: true,
+  status: true,
+  version: true,
+  lastCheckedAt: true,
+  lastError: true,
+  createdAt: true,
+  updatedAt: true,
+} as const;
+
+@Controller("api/kubernetes")
+export class KubernetesController {
+  private active = new Map<string, number>();
+
+  private async principal(req: Request) {
+    const p = await authenticate(req);
+    human(p);
+    admin(p);
+    return p;
+  }
+  private async profile(p: Principal, id: string) {
+    const cluster = await db.kubernetesCluster.findFirst({
+      where: { id: z.uuid().parse(id), organizationId: p.organizationId },
+    });
+    if (!cluster)
+      throw new NotFoundException("Kubernetes cluster unavailable.");
+    return cluster;
+  }
+  private async audit(
+    p: Principal,
+    action: string,
+    status: string,
+    id = "profile",
+  ) {
+    await db.auditEvent.create({
+      data: {
+        organizationId: p.organizationId,
+        principalId: p.id,
+        action: `kubernetes:${action}:${id}`,
+        status,
+        correlationId: randomUUID(),
+      },
+    });
+  }
+  private async read(
+    p: Principal,
+    cluster: { id: string; encryptedConfig: string },
+    path: string,
+    action: string,
+    text = false,
+  ) {
+    const active = this.active.get(p.organizationId) || 0;
+    if (active >= 4)
+      throw new HttpException(
+        "Too many active Kubernetes requests. Try again shortly.",
+        429,
+      );
+    this.active.set(p.organizationId, active + 1);
+    try {
+      const connection = unseal(
+        cluster.encryptedConfig,
+        config.ENCRYPTION_KEY,
+        `${p.organizationId}:kubernetes:${cluster.id}`,
+      ) as ClusterConnection;
+      const data = await kubernetesRequest(
+        connection,
+        path,
+        config.KUBERNETES_ALLOWED_CIDRS.split(",")
+          .map((cidr) => cidr.trim())
+          .filter(Boolean),
+        text,
+      );
+      await this.audit(p, action, "success", cluster.id);
+      return data;
+    } catch (error) {
+      await this.audit(p, action, "failed", cluster.id);
+      if (error instanceof KubernetesError)
+        throw new HttpException(error.message, error.status);
+      throw new HttpException("Kubernetes request failed.", 502);
+    } finally {
+      const remaining = (this.active.get(p.organizationId) || 1) - 1;
+      if (remaining) this.active.set(p.organizationId, remaining);
+      else this.active.delete(p.organizationId);
+    }
+  }
+
+  @Get("clusters") async list(@Req() req: Request) {
+    const p = await this.principal(req);
+    return db.kubernetesCluster.findMany({
+      where: { organizationId: p.organizationId },
+      select: selection,
+      orderBy: { name: "asc" },
+    });
+  }
+
+  @Post("contexts") async contexts(@Req() req: Request, @Body() body: unknown) {
+    await this.principal(req);
+    const { kubeconfig } = z
+      .object({ kubeconfig: z.string().max(256 * 1024) })
+      .strict()
+      .parse(body);
+    try {
+      return kubeconfigContexts(kubeconfig);
+    } catch (error) {
+      throw new BadRequestException(
+        error instanceof KubeconfigError
+          ? error.message
+          : "Invalid kubeconfig.",
+      );
+    }
+  }
+
+  private async save(req: Request, body: unknown, id?: string) {
+    const p = await this.principal(req);
+    const existing = id ? await this.profile(p, id) : undefined;
+    const changes = z.record(z.string(), z.unknown()).parse(body);
+    const value = input.parse({
+      ...(existing
+        ? { name: existing.name, description: existing.description }
+        : {}),
+      ...changes,
+    });
+    const profileId = id || randomUUID();
+    if (!existing && !value.kubeconfig?.trim())
+      throw new BadRequestException("Import a kubeconfig file.");
+    if (value.context && !value.kubeconfig?.trim())
+      throw new BadRequestException(
+        "Upload the kubeconfig again to change its context.",
+      );
+    if (
+      !existing &&
+      (await db.kubernetesCluster.count({
+        where: { organizationId: p.organizationId },
+      })) >= 50
+    )
+      throw new BadRequestException(
+        "This workspace already has 50 cluster profiles.",
+      );
+    let secret:
+      | {
+          encryptedConfig: string;
+          server: string;
+          context: string;
+          namespace: string;
+          authentication: string;
+        }
+      | undefined;
+    if (value.kubeconfig?.trim()) {
+      try {
+        const connection = parseKubeconfig(value.kubeconfig, value.context);
+        secret = {
+          encryptedConfig: seal(
+            connection,
+            config.ENCRYPTION_KEY,
+            `${p.organizationId}:kubernetes:${profileId}`,
+          ),
+          server: connection.server,
+          context: connection.context,
+          namespace: connection.namespace,
+          authentication: connection.authentication,
+        };
+      } catch (error) {
+        throw new BadRequestException(
+          error instanceof KubeconfigError
+            ? error.message
+            : "Invalid kubeconfig.",
+        );
+      }
+    }
+    let row;
+    try {
+      row = existing
+        ? await db.kubernetesCluster.update({
+            where: { id: profileId },
+            data: {
+              name: value.name,
+              description: value.description,
+              ...secret,
+              ...(secret
+                ? {
+                    status: "unknown",
+                    version: null,
+                    lastCheckedAt: null,
+                    lastError: null,
+                  }
+                : {}),
+            },
+            select: selection,
+          })
+        : await db.kubernetesCluster.create({
+            data: {
+              id: profileId,
+              organizationId: p.organizationId,
+              name: value.name,
+              description: value.description,
+              ...secret!,
+            },
+            select: selection,
+          });
+    } catch (error) {
+      if ((error as { code?: string }).code === "P2002")
+        throw new ConflictException("A cluster with this name already exists.");
+      throw error;
+    }
+    await this.audit(
+      p,
+      existing ? "profile_updated" : "profile_created",
+      "success",
+      profileId,
+    );
+    return row;
+  }
+
+  @Post("clusters") create(@Req() req: Request, @Body() body: unknown) {
+    return this.save(req, body);
+  }
+  @Patch("clusters/:id") update(
+    @Req() req: Request,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    return this.save(req, body, id);
+  }
+
+  @Delete("clusters/:id") async remove(
+    @Req() req: Request,
+    @Param("id") id: string,
+  ) {
+    const p = await this.principal(req);
+    await this.profile(p, id);
+    await db.kubernetesCluster.delete({ where: { id } });
+    await this.audit(p, "profile_deleted", "success", id);
+    return { deleted: true };
+  }
+
+  @Post("clusters/:id/check") async check(
+    @Req() req: Request,
+    @Param("id") id: string,
+  ) {
+    const p = await this.principal(req),
+      cluster = await this.profile(p, id);
+    try {
+      const version = await this.read(
+        p,
+        cluster,
+        "/version",
+        "connection_checked",
+      );
+      if (typeof version?.gitVersion !== "string")
+        throw new HttpException(
+          "The endpoint did not return a Kubernetes version.",
+          502,
+        );
+      return await db.kubernetesCluster.update({
+        where: { id },
+        data: {
+          status: "connected",
+          version: version.gitVersion.slice(0, 100),
+          lastCheckedAt: new Date(),
+          lastError: null,
+        },
+        select: selection,
+      });
+    } catch (error) {
+      await db.kubernetesCluster.update({
+        where: { id },
+        data: {
+          status: "error",
+          lastCheckedAt: new Date(),
+          lastError:
+            error instanceof HttpException &&
+            typeof error.getResponse() === "string"
+              ? String(error.getResponse())
+              : "Connection check failed.",
+        },
+        select: { id: true },
+      });
+      throw error;
+    }
+  }
+
+  @Get("clusters/:id/resources/:resource") async listResources(
+    @Req() req: Request,
+    @Param("id") id: string,
+    @Param("resource") raw: string,
+    @Query() query: unknown,
+  ) {
+    const p = await this.principal(req),
+      cluster = await this.profile(p, id);
+    const resource = z.enum(resourceKinds).parse(raw);
+    const args = z
+      .object({
+        namespace: z.union([namespaceName, z.literal("*")]).optional(),
+        cursor: z.string().min(1).max(4096).optional(),
+      })
+      .strict()
+      .parse(query);
+    const data = await this.read(
+      p,
+      cluster,
+      resourcePath(
+        resource,
+        resources[resource].namespaced
+          ? (args.namespace ?? cluster.namespace)
+          : undefined,
+        args.cursor,
+      ),
+      `list_${resource}`,
+    );
+    if (!Array.isArray(data?.items) || data.items.length > 100)
+      throw new HttpException(
+        "The cluster returned an invalid resource page.",
+        502,
+      );
+    return {
+      items: data.items.map((item: unknown) =>
+        summarizeResource(resource, item),
+      ),
+      nextCursor:
+        typeof data.metadata?.continue === "string" &&
+        data.metadata.continue.length <= 4096
+          ? data.metadata.continue || null
+          : null,
+    };
+  }
+
+  @Get("clusters/:id/pods/:namespace/:pod/logs") async logs(
+    @Req() req: Request,
+    @Param("id") id: string,
+    @Param("namespace") rawNamespace: string,
+    @Param("pod") rawPod: string,
+    @Query() query: unknown,
+  ) {
+    const p = await this.principal(req),
+      cluster = await this.profile(p, id);
+    const namespace = namespaceName.parse(rawNamespace),
+      pod = resourceName.parse(rawPod);
+    const args = z
+      .object({
+        container: resourceName,
+        lines: z.coerce.number().int().min(1).max(1000).default(200),
+        previous: z.enum(["true", "false"]).default("false"),
+      })
+      .strict()
+      .parse(query);
+    const params = new URLSearchParams({
+      container: args.container,
+      tailLines: String(args.lines),
+      previous: args.previous,
+      timestamps: "true",
+      limitBytes: String(256 * 1024),
+    });
+    return this.read(
+      p,
+      cluster,
+      `/api/v1/namespaces/${encodeURIComponent(namespace)}/pods/${encodeURIComponent(pod)}/log?${params}`,
+      "pod_logs",
+      true,
+    );
+  }
+}

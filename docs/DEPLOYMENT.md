@@ -102,3 +102,9 @@ Back up and verify restore before upgrading. Review migrations and dependency ch
 `SSH_CONNECT_TIMEOUT`, `SSH_IDLE_TIMEOUT`, `SSH_MAX_SESSIONS`, and `SSH_OUTPUT_LIMIT` bound resources. `SSH_WORKER_CONCURRENCY` (default 4) sets how many interactive SSH operations run at once, and `SSH_HEALTH_CONCURRENCY` (default 4) how many reachability checks run at once. `AUDIT_RETENTION_DAYS` controls audit cleanup. Terminal transcripts are not recorded.
 
 Job output is transient. Restarting Redis loses queued work/results; task metadata may remain queued or running until reconciled. Inspect and explicitly reissue safe operations rather than automatically replaying side effects.
+
+Direct Kubernetes API connections use a separate `KUBERNETES_ALLOWED_CIDRS`
+allowlist, defaulting to RFC 1918 private networks. Configure approved cluster
+endpoint ranges and recreate the application container when changing it. See
+[Kubernetes cluster connections](KUBERNETES.md) for kubeconfig, TLS, and RBAC
+requirements. The SSH VPN/bastion selections do not route these direct API reads.

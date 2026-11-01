@@ -19,6 +19,7 @@ model Organization {
   tags ServerTag[]
   identities SSHIdentity[]
   vpnProfiles VpnProfile[]
+  kubernetesClusters KubernetesCluster[]
   agents Agent[]
   audit AuditEvent[]
   settings SystemSetting[]
@@ -148,6 +149,27 @@ model VpnProfile {
   encryptedConfig String
   summary String
   servers Server[]
+  @@index([organizationId])
+}
+
+model KubernetesCluster {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organizationId String
+  organization Organization @relation(fields: [organizationId], references: [id])
+  name String
+  description String @default("")
+  server String
+  context String
+  namespace String @default("default")
+  authentication String
+  encryptedConfig String
+  status String @default("unknown")
+  version String?
+  lastCheckedAt DateTime?
+  lastError String?
+  @@unique([organizationId, name])
   @@index([organizationId])
 }
 

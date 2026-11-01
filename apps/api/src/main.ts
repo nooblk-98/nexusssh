@@ -16,6 +16,7 @@ import { ZodError } from "zod";
 import { randomUUID } from "node:crypto";
 import { AppController } from "./controller.js";
 import { VpnController } from "./vpn.js";
+import { KubernetesController } from "./kubernetes.js";
 import {
   config,
   generatedSecrets,
@@ -27,7 +28,7 @@ import { SftpController } from "./sftp.js";
 import { queue, events, batchQueue, batchEvents } from "./domain.js";
 import { reconcileRunningTasks } from "./task-recovery.js";
 import { startHealthWorker, enqueuePeriodicHealth, healthQueue } from "./health.js";
-@Module({ controllers: [AppController, SftpController, VpnController] })
+@Module({ controllers: [AppController, SftpController, VpnController, KubernetesController] })
 class AppModule {}
 @Catch()
 class Errors implements ExceptionFilter {
@@ -110,6 +111,7 @@ app.use(
     legacyHeaders: false,
   }),
 );
+app.use("/api/kubernetes", rateLimit({ windowMs: 60000, limit: 120, standardHeaders: "draft-8", legacyHeaders: false }));
 app.useGlobalFilters(new Errors());
 const spec = SwaggerModule.createDocument(
   app,
