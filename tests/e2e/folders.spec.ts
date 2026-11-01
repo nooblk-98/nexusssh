@@ -66,15 +66,18 @@ test("create subfolders, drag folders and servers, and persist moves", async ({
     const b = await create(prefix + " B");
     const child = await create("Services", a);
     const leaf = await create("Production", child);
-    const identities = await api("identities");
-    expect(identities.length).toBeGreaterThan(0);
+    const identity = await api("identities", "POST", {
+      name: prefix + " identity",
+      kind: "password",
+      password: "folder-fixture-only-password",
+    });
     const server = await api("servers", "POST", {
       name: prefix + " server",
       host: "folder-fixture.invalid",
       port: 22,
       username: "root",
       fileRoot: "/root",
-      identityId: identities[0].id,
+      identityId: identity.id,
       groupId: child,
     });
     serverId = server.id;

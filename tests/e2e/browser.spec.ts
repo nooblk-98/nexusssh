@@ -29,7 +29,9 @@ test("first-run setup, login, workspace, settings and responsive layout", async 
   await expect(
     page.getByRole("heading", { name: "Quick Connect" }),
   ).toBeVisible();
-  await expect(page.getByText("Recent Connections")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Recent Connections", exact: true }),
+  ).toBeVisible();
   await page.screenshot({
     path: "test-results/workspace-desktop.png",
     fullPage: true,

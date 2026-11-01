@@ -21,7 +21,7 @@ A self-hosted infrastructure console with real browser SSH, SFTP, and a remote M
 - SQLite migrations, WAL, integrity checks, online backup and offline restore.
 - Two production Compose services: `nexusssh` (web, API, MCP, SSH worker and userspace WireGuard behind one application port) and Redis. Native development also starts a small WireGuard container.
 
-## Quick start: local Compose
+## Installation: local Compose
 
 Requires Docker Engine/Desktop with Linux containers, Docker Compose 2.24.4+ and Node.js 24 for initial setup.
 
@@ -40,6 +40,17 @@ ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub -E sha256
 ```
 
 Add a non-root SSH account, credential, verified fingerprint and restricted file root in the Servers screen. The account needs the remote permissions appropriate to the operations you grant. Passwords/private keys are never returned by an API.
+
+## Usage
+
+Open the workspace to organize servers in folders, connect to SSH terminals,
+and browse or edit files through SFTP. Administrators can import server lists
+and SSH keys, manage inherited connection defaults, run reachability checks,
+and request approval for commands across multiple servers. Configure scoped
+agent access under MCP Server. The About page shows the installed version and
+links to project resources.
+
+See [the changelog](CHANGELOG.md) for version history and upgrade notes.
 
 ## Native development
 
@@ -102,3 +113,8 @@ PowerShell: `$env:RUN_INTEGRATION='1'; npm test`. Integration tests create a dis
 - [Verified behavior and remaining work](docs/STATUS.md)
 
 REST route documentation is available at `/api/docs`. Zod schemas in `packages/shared/operations.ts` are the authoritative tool argument schemas; Swagger currently documents routes and authentication rather than every generated Zod payload.
+
+## License
+
+Copyright (c) 2026 Lahiru S Liyanage. All rights reserved. This is proprietary
+software; see [LICENSE](LICENSE) for the terms.
