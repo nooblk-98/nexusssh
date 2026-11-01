@@ -1733,8 +1733,6 @@ p {
 .kube-console { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .kube-console .term-toolbar { flex-wrap: wrap; height: auto; min-height: 56px; padding-block: 8px; }
 .kube-console .term-host { height: 100%; width: 100%; }
-.kube-console-namespace { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-left: 10px; }
-.kube-console-namespace .input { width: 150px; }
 .kube-sidebar-cluster { width: 100%; display: flex; align-items: center; gap: 12px; text-align: left; padding: 10px 16px; color: var(--text); background: transparent; border: 0; cursor: pointer; }
 .kube-sidebar-cluster:hover { background: var(--hover); }
 .kube-sidebar-cluster .grow { min-width: 0; display: grid; gap: 2px; }

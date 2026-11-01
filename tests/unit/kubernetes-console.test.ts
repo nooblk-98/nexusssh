@@ -1,11 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { splitConsoleCommand } from "../../packages/kubernetes/console-input.js";
+import {
+  splitConsoleCommand,
+  consoleNamespace,
+} from "../../packages/kubernetes/console-input.js";
 import {
   prepareConsoleCommand,
   formatConsoleResult,
 } from "../../packages/kubernetes/console.js";
 
 describe("Kubernetes command console", () => {
+  it("switches only the current console namespace using validated context commands", () => {
+    for (const line of [
+      "kubectl config set-context --current --namespace=production",
+      "config set-context --namespace production --current",
+      "kubectl config set-context --current -n production",
+    ])
+      expect(consoleNamespace(splitConsoleCommand(line))).toBe("production");
+    expect(
+      consoleNamespace(["kubectl", "get", "pods", "-n", "apps"]),
+    ).toBeNull();
+    for (const line of [
+      "kubectl config set-context other --namespace=apps",
+      "kubectl config set-context --current --namespace=../apps",
+      "kubectl config set-context --current --namespace=apps --namespace=other",
+      "kubectl config set-context --current --namespace",
+      "kubectl config set-context --current --namespace=apps --user=other",
+    ])
+      expect(() => consoleNamespace(splitConsoleCommand(line))).toThrow(
+        /--current --namespace=NAME/,
+      );
+  });
   it("preserves quoted inline patches and selectors without interpreting a shell", () => {
     const args = splitConsoleCommand(
       `kubectl patch deploy/api --type=merge -p '{"spec":{"replicas":2}}'`,

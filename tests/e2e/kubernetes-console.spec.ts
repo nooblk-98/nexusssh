@@ -59,8 +59,16 @@ test("opens a cluster console in a workspace tab, runs commands, edits history a
     command: ["kubectl", "get", "nodes"],
     namespace: "apps",
   });
-  await consolePane.getByLabel("Console namespace").fill("production");
+  await expect(consolePane.getByLabel("Console namespace")).toHaveCount(0);
   await input.focus();
+  await page.keyboard.insertText(
+    "kubectl config set-context --current --namespace=production",
+  );
+  await page.keyboard.press("Enter");
+  await expect(output).toContainText("Namespace set to production.");
+  expect(commands).toHaveLength(1);
+  await input.focus();
+  await page.keyboard.press("ArrowUp");
   await page.keyboard.press("ArrowUp");
   await page.keyboard.press("Enter");
   await expect.poll(() => commands.length).toBe(2);
@@ -95,9 +103,8 @@ test("opens a cluster console in a workspace tab, runs commands, edits history a
   });
   await expect(output).toContainText("configmap/settings configured");
   await page.reload();
-  await expect(consolePane.getByLabel("Console namespace")).toHaveValue(
-    "production",
-  );
+  await expect(consolePane.getByLabel("Console namespace")).toHaveCount(0);
+  await expect(output).toContainText("kubectl (production) >");
   await expect(output).toContainText("Connected");
   await page.screenshot({
     path: "test-results/kubernetes-console.png",
@@ -113,6 +120,7 @@ test("opens a cluster console in a workspace tab, runs commands, edits history a
     })
     .click();
   await expect(output).toContainText("Connected");
+  await expect(output).toContainText("kubectl (apps) >");
   expect(errors).toEqual([]);
 });
 

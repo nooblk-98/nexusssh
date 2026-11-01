@@ -16,6 +16,9 @@
 
 ### Changed
 
+- Removed the console toolbar's namespace selector. Switch a tab's default
+  using `kubectl config set-context --current --namespace=NAME`, or use `-n`
+  for an individual command. The selected namespace is remembered per tab.
 - MCP agents now use only Administrator and Custom roles. Administrator enables
   all current/future workspace servers, clusters, tools and management access
   automatically; Custom provides selectable grants and workspace management.
@@ -36,7 +39,7 @@
   deletion moves directly contained clusters to the top level and preserves
   their credentials, routes and permissions.
 - Kubernetes command consoles in workspace tabs, with sidebar cluster entries,
-  a namespace selector, history, cancellation, table/JSON/YAML output and inline
+  namespace switching, history, cancellation, table/JSON/YAML output and inline
   `apply -f -` manifest input. Saved VPN/bastion routes and encrypted credentials
   are reused. MCP executes the same supported kubectl commands with its existing
   exact-command approval and access controls.

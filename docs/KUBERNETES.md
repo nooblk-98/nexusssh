@@ -116,7 +116,9 @@ an identity permission issue when the API returns HTTP 403.
 
 **Open console** opens a workspace terminal tab alongside SSH terminals. Type
 `kubectl get nodes`, `kubectl get pods -A`, or `help`. Each tab remembers its
-selected namespace; `-n` overrides that default for one command. Up/Down recalls
+selected namespace. Switch it with
+`kubectl config set-context --current --namespace=apps`; this changes only the
+current console tab's default. `-n` overrides that default for one command. Up/Down recalls
 commands during the current visit. Reloading restores the tab and namespace,
 but command history/output are not stored in browser storage or replayed.
 

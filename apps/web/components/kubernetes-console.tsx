@@ -10,6 +10,7 @@ import { terminalFonts, terminalThemes } from "../lib/themes";
 import {
   consoleHelp,
   splitConsoleCommand,
+  consoleNamespace,
 } from "../../../packages/kubernetes/console-input";
 import { IconButton } from "./ui";
 
@@ -31,7 +32,6 @@ export default function KubernetesConsole({
     help: () => void;
     clear: () => void;
     cancel: () => void;
-    refreshPrompt: () => void;
   } | null>(null);
   const [namespace, setNamespace] = useState("default");
   const selectedNamespace = useRef(namespace);
@@ -178,6 +178,17 @@ export default function KubernetesConsole({
         }
         try {
           const command = splitConsoleCommand(input);
+          const nextNamespace = consoleNamespace(command);
+          if (nextNamespace !== null) {
+            selectedNamespace.current = nextNamespace;
+            setNamespace(nextNamespace);
+            useWorkspace
+              .getState()
+              .updateTab(tab.id, { namespace: nextNamespace });
+            write(`Namespace set to ${nextNamespace}.\n`);
+            prompt();
+            return;
+          }
           const args = command[0] === "kubectl" ? command.slice(1) : command;
           if (
             args[0] === "apply" &&
@@ -284,12 +295,6 @@ export default function KubernetesConsole({
       });
       controls.current = {
         cancel,
-        refreshPrompt: () => {
-          if (!busy && !manifest) {
-            promptText = `kubectl (${selectedNamespace.current}) > `;
-            redraw();
-          }
-        },
         clear: () => {
           if (!busy && !manifest) {
             t.clear();
@@ -375,9 +380,6 @@ export default function KubernetesConsole({
       terminal.current?.focus();
     }
   }, [visible]);
-  useEffect(() => {
-    controls.current?.refreshPrompt();
-  }, [namespace]);
   if (clusters.isPending)
     return <div className="empty-state">Loading cluster…</div>;
   if (!cluster)
@@ -400,22 +402,6 @@ export default function KubernetesConsole({
       <div className="term-toolbar">
         <Boxes size={18} />
         <strong className="ellipsis">{cluster.context}</strong>
-        <label className="kube-console-namespace">
-          Namespace{" "}
-          <input
-            className="input"
-            aria-label="Console namespace"
-            value={namespace}
-            disabled={running}
-            maxLength={63}
-            onChange={(event) => {
-              setNamespace(event.target.value);
-              useWorkspace
-                .getState()
-                .updateTab(tab.id, { namespace: event.target.value });
-            }}
-          />
-        </label>
         <span className="grow" />
         <IconButton
           label="Console help"
