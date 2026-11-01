@@ -10,7 +10,7 @@ import {
 } from "../../../packages/shared/management.js";
 export function buildMcp(token: string) {
   const server = new McpServer(
-    { name: "NexusSSH", version: "0.1.0" },
+    { name: "NexusSSH", version: "0.2.0" },
     { capabilities: { tools: {} } },
   );
   for (const [name, schema] of Object.entries(schemas)) {
@@ -38,7 +38,7 @@ export function buildMcp(token: string) {
             },
             body: JSON.stringify(args),
             signal: AbortSignal.any([
-              AbortSignal.timeout(95000),
+              AbortSignal.timeout(name === "ssh_execute_many" ? 210000 : 95000),
               ctx.mcpReq.signal,
             ]),
           },

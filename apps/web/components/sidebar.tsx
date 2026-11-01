@@ -2,11 +2,21 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import {
   Bell,
+  Check as CheckIcon,
   ChevronDown,
   ChevronLeft,
+  FolderTree,
+  ListChecks,
+  MoreHorizontal,
+  Square,
+  SquareTerminal,
   Folder,
   Menu,
   Plus,
+  Table2,
+  Tag,
+  Tags,
+  X,
 } from "lucide-react";
 import {
   api,
@@ -24,6 +34,10 @@ import { useWorkspace } from "../lib/store";
 import { ServerIcon } from "./icons";
 import { openImportExport } from "./import-export";
 import { openServerDrawer } from "./server-drawer";
+import { DefaultsEditor, MetadataEditor } from "./metadata-editor";
+import { HealthIndicator, ServerHealth } from "./server-health";
+import { CommandPalette } from "./command-palette";
+import { ExecuteMany } from "./execute-many";
 import {
   Button,
   Drawer,
@@ -39,6 +53,11 @@ import {
 } from "./ui";
 
 const FOLDERS_KEY = "nexus-closed-folders";
+const VIEWS = [
+  ["tree", "Tree", FolderTree],
+  ["table", "Table", Table2],
+  ["tags", "Tags", Tags],
+] as const;
 export async function newFolder(parentId: string | null = null) {
   const name = await promptDialog("New Folder", "Folder name", "", "Create");
   if (name)
@@ -79,12 +98,42 @@ export function mainMenu(admin: boolean): MenuItem[] {
         ] as MenuItem[])
       : []),
     "sep",
+    { label: "About", onClick: go("about") },
     { label: "Logout", onClick: signOut },
   ];
 }
 export function Sidebar({ me }: { me: Row }) {
   const admin = ["owner", "administrator"].includes(me.role);
   const { servers, groups } = useServers();
+  const tagsQuery = useApi<Row[]>("tags");
+  const tags = tagsQuery.data || [];
+  const [defaults, setDefaults] = useState<{ kind: "groups" | "tags"; row: Row } | null>(null);
+  const [view, setView] = useState<"tree" | "table" | "tags">("tree");
+  const [tagFilter, setTagFilter] = useState("");
+  const [checked, setChecked] = useState<string[]>([]);
+  const [selectMode, setSelectMode] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [executeOpen, setExecuteOpen] = useState(false);
+  const [bulkMoveOpen, setBulkMoveOpen] = useState(false);
+  const [bulkDestination, setBulkDestination] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkErrors, setBulkErrors] = useState<string[]>([]);
+  const [health, setHealth] = useState<{ title: string; servers: Row[]; groupId?: string } | null>(null);
+  const [healthNow, setHealthNow] = useState(() => Date.now());
+  useEffect(() => { const timer = setInterval(() => setHealthNow(Date.now()), 60_000); return () => clearInterval(timer); }, []);
+  // Set after mount so the server-rendered label matches the first client render.
+  const [paletteKey, setPaletteKey] = useState("Ctrl K");
+  useEffect(() => { if (/Mac|iPhone|iPad/.test(navigator.userAgent)) setPaletteKey("⌘K"); }, []);
+  const activeTag = tags.find((tag) => tag.id === tagFilter);
+  const exitSelection = () => { setChecked([]); setSelectMode(false); };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setPaletteOpen(true); }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
   const { selected, select, setCollapsed } = useWorkspace();
   const [search, setSearch] = useState("");
   const [closed, setClosed] = useState<string[]>([]);
@@ -121,7 +170,7 @@ export function Sidebar({ me }: { me: Row }) {
     () =>
       servers.filter(
         (s) =>
-          !q ||
+          (!tagFilter || (s.tags || []).some((t: Row) => t.id === tagFilter)) && (!q ||
           matchesFolder(s.groupId) ||
           [
             s.name,
@@ -132,10 +181,15 @@ export function Sidebar({ me }: { me: Row }) {
           ]
             .join(" ")
             .toLowerCase()
-            .includes(q),
+            .includes(q)),
       ),
-    [servers, groups, q],
+    [servers, groups, q, tagFilter],
   );
+  const toggleChecked = (id: string) => setChecked((current) => current.includes(id) ? current.filter((x) => x !== id) : [...current, id]);
+  const archiveServer = async (s: Row) => {
+    if (!await confirmDialog("Archive Server", <>Archive <b>{s.name}</b>? It will be removed from the active list while audit history keeps its references.</>, "Archive", true)) return;
+    await api("servers/" + s.id, {}, "DELETE").then(() => refresh("servers")).catch(notify.error);
+  };
   const startMove = (kind: "server" | "folder", row: Row) => {
     setMove({ kind, row });
     setDestination((kind === "folder" ? row.parentId : row.groupId) || "");
@@ -166,6 +220,7 @@ export function Sidebar({ me }: { me: Row }) {
   };
   const serverMenu = (s: Row): MenuItem[] => [
     { label: "Connect", onClick: () => connectServer(s) },
+    { label: "Test connection and host key", onClick: () => setHealth({ title: `Check ${s.name}`, servers: [s] }) },
     { label: "Open SFTP", onClick: () => connectServer(s, "sftp") },
     {
       label: "Copy to Clipboard",
@@ -205,10 +260,19 @@ export function Sidebar({ me }: { me: Row }) {
           { label: "Move to…", onClick: () => startMove("server", s) },
           {
             label: "Duplicate",
-            onClick: () =>
-              void api("servers/" + s.id + "/duplicate", {})
-                .then(() => refresh("servers"))
-                .catch(notify.error),
+            // Host and port are unique per folder, so the copy needs its own address.
+            onClick: async () => {
+              const host = await promptDialog(
+                "Duplicate Server",
+                "Host for the copy",
+                s.host,
+                "Duplicate",
+              );
+              if (host)
+                await api("servers/" + s.id + "/duplicate", { host: host.trim() })
+                  .then(() => refresh("servers"))
+                  .catch(notify.error);
+            },
           },
           {
             label: "Delete",
@@ -243,6 +307,7 @@ export function Sidebar({ me }: { me: Row }) {
       disabled: !list.length,
       onClick: () => list.forEach((s) => connectServer(s)),
     },
+    { label: "Test all", disabled: !list.length, onClick: () => setHealth({ title: `Test folder: ${g.name}`, groupId: g.id, servers: [...new Map(list.map((s) => [s.id, s])).values()] }) },
     ...(admin
       ? ([
           {
@@ -256,6 +321,7 @@ export function Sidebar({ me }: { me: Row }) {
               return newFolder(g.id);
             },
           },
+          { label: "Edit defaults", onClick: () => setDefaults({ kind: "groups", row: g }) },
           { label: "Move to…", onClick: () => startMove("folder", g) },
           "sep",
           {
@@ -360,8 +426,9 @@ export function Sidebar({ me }: { me: Row }) {
     },
   });
   const serverRow = (s: Row, depth = 0) => (
+    <div key={s.id} className="server-row-wrap">
+    {admin && selectMode && <input className="server-select" type="checkbox" aria-label={`Select ${s.name}`} checked={checked.includes(s.id)} onChange={() => toggleChecked(s.id)} />}
     <button
-      key={s.id}
       className={"tree-server" + (selected === s.id ? " selected" : "")}
       style={{ paddingLeft: 10 + depth * 20 }}
       data-server-id={s.id}
@@ -380,16 +447,21 @@ export function Sidebar({ me }: { me: Row }) {
       <span className="srv-icon">
         <ServerIcon name={s.icon} />
       </span>
+      <HealthIndicator server={s} now={healthNow} />
       <span className="grow">
         <div className="srv-name">{s.name}</div>
         <div className="srv-sub ellipsis">{s.host}&nbsp; | &nbsp;SSH2</div>
       </span>
     </button>
+    {admin && <IconButton className="server-row-menu" label={`Actions for ${s.name}`} onClick={(e) => { e.stopPropagation(); openMenuAt(e.currentTarget, serverMenu(s)); }}><MoreHorizontal size={17} /></IconButton>}
+    {admin && <button className="server-row-delete" title={`Archive ${s.name}`} aria-label={`Archive ${s.name}`} onClick={(e) => { e.stopPropagation(); void archiveServer(s); }}><span>Archive</span></button>}
+    </div>
   );
   const root = visible.filter((s) => !s.groupId);
   const shownFolders = new Set<string>();
+  // With a tag filter, folders appear only through the matching servers below.
   for (const g of groups) {
-    if (!q || matchesFolder(g.id))
+    if (!tagFilter && (!q || matchesFolder(g.id)))
       folderPath(groups, g.id).forEach((f) => shownFolders.add(f.id));
   }
   visible.forEach((s) =>
@@ -460,7 +532,16 @@ export function Sidebar({ me }: { me: Row }) {
       </button>
       <div className="sidebar-tools">
         <div className="grow">
-          <SearchInput id="server-search" value={search} onChange={setSearch} />
+          <SearchInput
+            id="server-search"
+            value={search}
+            onChange={setSearch}
+            suffix={
+              <button type="button" className="kbd-hint" title={`Command palette (${paletteKey})`} aria-label="Open command palette" onClick={() => setPaletteOpen(true)}>
+                {paletteKey}
+              </button>
+            }
+          />
         </div>
         {admin && (
           <button
@@ -487,6 +568,74 @@ export function Sidebar({ me }: { me: Row }) {
           </button>
         )}
       </div>
+      <div className="sidebar-toolbar">
+        <div className="segmented" role="group" aria-label="Server view">
+          {VIEWS.map(([mode, label, Icon]) => (
+            <button key={mode} type="button" className={view === mode ? "active" : ""} aria-pressed={view === mode} onClick={() => setView(mode)}>
+              <Icon size={14} />
+              {label}
+            </button>
+          ))}
+        </div>
+        <span className="grow" />
+        <IconButton
+          size="sm"
+          label={activeTag ? `Filtered by tag ${activeTag.name}` : "Filter by tag"}
+          active={!!activeTag}
+          onClick={(e) =>
+            openMenuAt(e.currentTarget, [
+              { label: "All tags", icon: !tagFilter ? <CheckIcon size={14} /> : undefined, onClick: () => setTagFilter("") },
+              ...(tags.length ? (["sep"] as MenuItem[]) : []),
+              ...tags.map((tag) => ({ label: tag.name, icon: tag.id === tagFilter ? <CheckIcon size={14} /> : undefined, onClick: () => setTagFilter(tag.id) })),
+              ...(admin && tags.length
+                ? (["sep", { label: "Edit tag defaults", items: tags.map((tag) => ({ label: tag.name, onClick: () => setDefaults({ kind: "tags", row: tag }) })) }] as MenuItem[])
+                : []),
+            ])
+          }
+        >
+          <Tag size={15} />
+          {activeTag && <span className="dot" />}
+        </IconButton>
+        <IconButton size="sm" label="Run command on servers" onClick={() => setExecuteOpen(true)}>
+          <SquareTerminal size={15} />
+        </IconButton>
+        {admin && (
+          <IconButton size="sm" label={selectMode ? "Exit selection" : "Select servers"} active={selectMode} aria-pressed={selectMode} onClick={() => (selectMode ? exitSelection() : setSelectMode(true))}>
+            <ListChecks size={15} />
+          </IconButton>
+        )}
+      </div>
+      {activeTag && (
+        <div className="filter-chips">
+          <button type="button" className="chip" aria-label={`Clear tag filter ${activeTag.name}`} onClick={() => setTagFilter("")}>
+            <Tag size={12} />
+            {activeTag.name}
+            <X size={12} />
+          </button>
+        </div>
+      )}
+      {admin && selectMode && (
+        <div className="selection-tools">
+          <div className="selection-summary"><Square size={15} /> <strong>{new Set(checked).size}</strong> selected</div>
+          <Button variant="secondary" size="sm" onClick={() => { const ids = new Set(visible.map((s) => s.id)); setChecked((current) => [...new Set([...current.filter((id) => !ids.has(id)), ...visible.map((s) => s.id)])]); }}>Select visible</Button>
+          {!!checked.length && (
+            <>
+              <Button size="sm" onClick={() => setBulkOpen(true)}>Bulk edit</Button>
+              <Button variant="secondary" size="sm" onClick={() => { setBulkErrors([]); setBulkMoveOpen(true); }}>Move</Button>
+              <Button variant="secondary" size="sm" onClick={() => setExecuteOpen(true)}>Run command</Button>
+              <Button variant="danger" size="sm" onClick={async () => {
+                const ids = [...new Set(checked)].filter((id) => servers.some((server) => server.id === id));
+                if (!await confirmDialog("Archive selected servers", `Archive ${ids.length} selected servers?`, "Archive", true)) return;
+                const failed: string[] = [];
+                for (const id of ids) { try { await api(`servers/${id}`, {}, "DELETE"); } catch { failed.push(id); } }
+                await refresh("servers"); setChecked(failed);
+                notify.info(`${ids.length - failed.length} archived, ${failed.length} failed${failed.length ? "; failed servers remain selected" : ""}.`);
+              }}>Archive</Button>
+            </>
+          )}
+          <Button variant="text" size="sm" onClick={exitSelection}>Done</Button>
+        </div>
+      )}
       <nav
         className="tree tree-root"
         aria-label="Servers"
@@ -500,8 +649,9 @@ export function Sidebar({ me }: { me: Row }) {
           ]);
         }}
       >
-        {groups.filter((g) => !g.parentId).map((g) => renderFolder(g))}
-        {root.map((s) => serverRow(s))}
+        {view === "tree" && <>{groups.filter((g) => !g.parentId).map((g) => renderFolder(g))}{root.map((s) => serverRow(s))}</>}
+        {view === "table" && <div style={{ overflowX: "auto" }}><table className="table"><thead><tr><th>{admin && selectMode ? "Select" : ""}</th><th>Status</th><th>Name</th><th>Host</th><th>Environment</th><th>vCPU</th><th>RAM</th><th>Disk</th><th>OS</th><th>Role</th><th>Check</th></tr></thead><tbody>{visible.map((s) => <tr key={s.id} onClick={() => select(s.id)}><td>{admin && selectMode && <input type="checkbox" aria-label={`Select ${s.name}`} checked={checked.includes(s.id)} onChange={() => toggleChecked(s.id)} onClick={(e) => e.stopPropagation()} />}</td><td><HealthIndicator server={s} now={healthNow} /></td><td><button className="btn btn-secondary" onClick={() => openServerDrawer({ server: s })}>{s.name}</button></td><td>{s.host}</td><td>{s.effectiveSettings?.values?.environment ?? s.environment}</td><td>{s.vcpu ?? "—"}</td><td>{s.ramBytes ?? "—"}</td><td>{s.diskBytes ?? "—"}</td><td>{s.os || "—"}</td><td>{s.role || "—"}</td><td><button className="btn btn-secondary" onClick={() => setHealth({ title: `Check ${s.name}`, servers: [s] })}>Test</button></td></tr>)}</tbody></table></div>}
+        {view === "tags" && <>{tags.filter((tag) => !tagFilter || tag.id === tagFilter).map((tag) => { const list = visible.filter((s) => (s.tags || []).some((t: Row) => t.id === tag.id)); return list.length || tagFilter ? <section key={tag.id}><div className="tree-folder tag-heading"><Tag size={16} strokeWidth={1.5} /><span className="grow ellipsis">{tag.name}</span><span className="tag-count">{list.length}</span></div>{list.map((s) => serverRow(s))}</section> : null; })}{!tagFilter && visible.filter((s) => !(s.tags || []).length).length > 0 && <section><div className="tree-folder tag-heading"><Tag size={16} strokeWidth={1.5} /><span className="grow ellipsis">Untagged</span><span className="tag-count">{visible.filter((s) => !(s.tags || []).length).length}</span></div>{visible.filter((s) => !(s.tags || []).length).map((s) => serverRow(s))}</section>}</>}
         {admin && drag && (
           <div
             className={
@@ -531,6 +681,37 @@ export function Sidebar({ me }: { me: Row }) {
           <div className="tree-empty">No servers match “{search}”.</div>
         )}
       </nav>
+      {defaults && <DefaultsEditor kind={defaults.kind} row={defaults.row} onClose={() => setDefaults(null)} />}
+      {paletteOpen && <CommandPalette servers={servers} canManage={admin} onCheck={(server) => setHealth({ title: `Check ${server.name}`, servers: [server] })} onClose={() => setPaletteOpen(false)} />}
+      {executeOpen && <ExecuteMany servers={servers} groups={groups} tags={tags} selectedIds={checked} onClose={() => setExecuteOpen(false)} />}
+      {health && <ServerHealth title={health.title} servers={health.servers} groupId={health.groupId} canManage={admin} onClose={() => setHealth(null)} />}
+      {bulkMoveOpen && <Drawer title={`Move ${new Set(checked).size} servers`} onClose={() => !bulkBusy && setBulkMoveOpen(false)} footer={<><Button variant="secondary" disabled={bulkBusy} onClick={() => setBulkMoveOpen(false)}>Close</Button><Button disabled={bulkBusy} onClick={async () => {
+        setBulkBusy(true); setBulkErrors([]);
+        const errors: string[] = [];
+        const failedIds: string[] = [];
+        const ids = [...new Set(checked)].filter((id) => servers.some((server) => server.id === id));
+        try {
+          for (const id of ids) {
+            try { await api(`servers/${id}/move`, { groupId: bulkDestination || null }, "PATCH"); }
+            catch (e) { failedIds.push(id); errors.push(`${servers.find((server) => server.id === id)?.name || id}: ${(e as Error).message}`); }
+          }
+          await refresh("servers"); setBulkErrors(errors); setChecked(failedIds);
+          notify.info(`${ids.length - errors.length} moved, ${errors.length} failed.`);
+          if (!errors.length) setBulkMoveOpen(false);
+        } catch (e) { setBulkErrors([(e as Error).message]); }
+        finally { setBulkBusy(false); }
+      }}>{bulkBusy ? "Moving…" : "Move selected"}</Button></>}>
+        <Field label="Destination folder"><select className="select" value={bulkDestination} onChange={(event) => setBulkDestination(event.target.value)}><option value="">Top level</option>{folderOptions(groups).map((folder) => <option key={folder.id} value={folder.id}>{folder.label}</option>)}</select></Field>
+        {bulkErrors.map((message) => <div key={message} className="alert danger">{message}</div>)}
+      </Drawer>}
+      {bulkOpen && <MetadataEditor title={`Bulk edit ${new Set(checked).size} servers`} bulk hardware onClose={() => setBulkOpen(false)} onSave={async ({ settings, inherit, metadata }) => {
+        const serverIds = [...new Set(checked)].filter((id) => servers.some((s) => s.id === id));
+        if (!serverIds.length) throw new Error("No selected servers are available.");
+        if (serverIds.length > 100) throw new Error("Select at most 100 servers.");
+        if (!Object.keys(settings).length && !inherit.length && !Object.keys(metadata).length) throw new Error("Choose at least one change.");
+        const result = await api<{ updated: number }>("servers/metadata/bulk", { serverIds, settings, inherit, metadata });
+        await refresh("servers"); setChecked([]); notify.success(`Updated ${result.updated} servers together.`);
+      }} />}
       {move && (
         <Drawer
           title={"Move " + move.row.name}

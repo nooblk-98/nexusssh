@@ -5,6 +5,7 @@ import {
   CircleArrowLeft,
   CirclePlay,
   History,
+  Info,
   Plug,
   ScrollText,
   ShieldCheck,
@@ -29,6 +30,7 @@ import {
 import { Agents, Approvals, AuditLog, McpServer } from "./mcp";
 import { VpnProfiles } from "./vpn";
 import { Network } from "lucide-react";
+import { About } from "./about";
 
 type Page = {
   slug: string;
@@ -136,6 +138,17 @@ const sections: { label: string; pages: Page[] }[] = [
         icon: ScrollText,
         admin: true,
         render: () => <AuditLog />,
+      },
+    ],
+  },
+  {
+    label: "Application",
+    pages: [
+      {
+        slug: "about",
+        label: "About",
+        icon: Info,
+        render: () => <About />,
       },
     ],
   },

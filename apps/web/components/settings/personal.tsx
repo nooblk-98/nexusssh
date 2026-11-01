@@ -11,6 +11,7 @@ import {
 } from "../../lib/api";
 import { savePrefs, usePrefs } from "../../lib/store";
 import { editorThemes, terminalFonts, terminalThemes } from "../../lib/themes";
+import { VERSION } from "../../lib/app-info";
 import {
   Button,
   Check,
@@ -22,8 +23,8 @@ import {
   IconButton,
 } from "../ui";
 import { PageHead } from "./page-head";
+import { KeyFolderImport } from "./key-folder-import";
 
-export const VERSION = "0.1.0";
 export function Account({ me }: { me: Row }) {
   const prefs = usePrefs();
   const [editName, setEditName] = useState<string | null>(null);
@@ -537,6 +538,7 @@ export function Identities() {
           <KeyRound size={17} /> Add Identity
         </Button>
       </PageHead>
+      <KeyFolderImport />
       <div className="card table-card">
         {list.length ? (
           <table className="table">

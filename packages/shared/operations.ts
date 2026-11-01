@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { readOperations, writeOperations } from "../policy-engine/index.js";
+import { canonical, hash } from "./crypto.js";
 const id = z.uuid(),
   path = z
     .string()
@@ -19,7 +20,13 @@ const common = {
 export const schemas: Record<string, z.ZodObject<any>> = {};
 for (const op of [...readOperations, ...writeOperations])
   schemas[op] = z.object(common).strict();
-schemas.servers_list = z.object({}).strict();
+schemas.servers_list = z.object({
+  folder: z.uuid().nullable().optional(),
+  tag: z.string().min(1).max(32).optional(),
+  search: z.string().max(100).optional(),
+  fields: z.string().max(300).optional(),
+  cursor: z.uuid().optional(),
+}).strict();
 schemas.ssh_execute = z
   .object({
     ...common,
@@ -27,6 +34,12 @@ schemas.ssh_execute = z
     timeoutMs: z.number().int().min(100).max(60000).default(30000),
   })
   .strict();
+schemas.ssh_execute_many = z.object({
+  serverIds: z.array(id).min(1).max(10).refine((ids) => new Set(ids).size === ids.length, "Server IDs must be unique"),
+  command: z.string().min(1).max(8192),
+  timeoutMs: z.number().int().min(100).max(60000).default(30000),
+  approvalId: id.optional(),
+}).strict();
 for (const op of [
   "ssh_list_directory",
   "ssh_read_file",
@@ -54,6 +67,17 @@ for (const op of [
   "service_restart",
 ])
   schemas[op] = z.object({ ...common, service: target }).strict();
+const kubernetesName = z.string().min(1).max(253)
+  .regex(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/)
+  .refine((value) => value.split(".").every((label) => label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)),
+    "Valid Kubernetes DNS name required");
+schemas.kubernetes_get = z.object({
+  ...common,
+  resource: z.enum(["pods", "deployments", "services", "namespaces", "nodes"]),
+  namespace: kubernetesName.optional(),
+  name: kubernetesName.optional(),
+}).strict().refine((a) => !["nodes", "namespaces"].includes(a.resource) || !a.namespace,
+  "Namespace is not valid for cluster-scoped resources");
 schemas.system_logs = z
   .object({
     ...common,
@@ -71,4 +95,19 @@ export function parseOperation(op: string, args: unknown): any {
 export function executionArgs(args: Record<string, unknown>) {
   const { approvalId: _approval, async: _async, ...rest } = args;
   return rest;
+}
+export function batchApprovalDigest(serverIds: string[], command: string, timeoutMs: number) {
+  return hash(canonical({ serverIds: [...serverIds].sort(), command, timeoutMs }));
+}
+export function batchApprovalPayload(serverIds: string[], command: string, timeoutMs: number) {
+  const args = { serverIds: [...serverIds].sort(), command, timeoutMs };
+  return { args, digest: batchApprovalDigest(args.serverIds, command, timeoutMs) };
+}
+export function completedBatchResult(result: unknown) {
+  if (!result || typeof result !== "object" || !("status" in result) || result.status !== "completed")
+    throw new Error("Execution has not completed");
+  return Object.fromEntries(Object.entries(result).map(([key, value]) => [key, typeof value === "string" ? value.slice(0, 16384) : value]));
+}
+export function batchTokenAllowed(approvedTokenId: string | null | undefined, token: { id: string; scopes: string[] } | null) {
+  return !!approvedTokenId && !!token && token.id === approvedTokenId && token.scopes.includes("ssh_execute_many") && token.scopes.includes("ssh_execute");
 }

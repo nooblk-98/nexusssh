@@ -18,10 +18,13 @@ import {
 import { ApiTags, ApiCookieAuth } from "@nestjs/swagger";
 import type { Request, Response } from "express";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { randomBytes, randomUUID } from "node:crypto";
 import ipaddr from "ipaddr.js";
+import ssh2 from "ssh2";
 import { db } from "../../../packages/database/index.js";
+import { batchTokenAllowed } from "../../../packages/shared/operations.js";
 import {
   config,
   mcpAudience,
@@ -50,6 +53,7 @@ import {
   workspaceCidrs,
   audit,
   listServers,
+  listServersPage,
   authorize,
   operation,
   claimTask,
@@ -57,9 +61,29 @@ import {
 import { verifyTotp, newTotp, totpStep } from "./totp.js";
 import { scanHostKey } from "../../../packages/ssh-core/index.js";
 import { connectionPath } from "./domain.js";
+import { settingsSchema, metadataSchema, settingKeys, parseSettings, mergeSettings, validateSettings, resolveSettings, preflightAffected, settingsReferenceCount, numericMetadata } from "./metadata.js";
 import { closeSftp } from "./sftp.js";
+
+async function preflightDefaults(tx: Prisma.TransactionClient, org: string, type: "folder" | "tag", id: string, value: ReturnType<typeof parseSettings>) {
+  const servers = await tx.server.findMany({ where: { organizationId: org }, include: { tags: { select: { id: true } } } });
+  const folders = type === "folder" ? await tx.serverGroup.findMany({ where: { organizationId: org }, select: { id: true, parentId: true } }) : [];
+  const parents = new Map(folders.map((folder) => [folder.id, folder.parentId]));
+  const affected = servers.filter((server) => {
+    if (type === "tag") return server.tags.some((tag) => tag.id === id);
+    const seen = new Set<string>();
+    let current = server.groupId;
+    while (current && !seen.has(current)) {
+      if (current === id) return true;
+      seen.add(current);
+      current = parents.get(current) ?? null;
+    }
+    return false;
+  });
+  return preflightAffected(tx, org, affected.map((server) => server.id), { type, id, value });
+}
 import { finishTask } from "./task-finish.js";
 import { saveFolder, deleteFolder } from "./folders.js";
+import { enqueueHealthBatch } from "./health.js";
 import {
   WORKSPACE_MANAGE,
   managementTools,
@@ -156,6 +180,16 @@ const credentials = z
       v.kind === "password" ? Boolean(v.password) : Boolean(v.privateKey),
     "Credential is required",
   );
+function validateKeyCredential(value: z.infer<typeof credentials>) {
+  if (value.kind !== "key") return;
+  try {
+    const parsed = ssh2.utils.parseKey(value.privateKey!, value.passphrase);
+    if (!(parsed instanceof Error) && parsed.isPrivateKey()) return;
+  } catch {
+    // Parser errors may contain sensitive key details; never return them.
+  }
+  throw new BadRequestException("Invalid SSH private key or passphrase");
+}
 const serverSchema = z
   .object({
     name: z.string().min(1).max(100),
@@ -165,7 +199,7 @@ const serverSchema = z
       .max(253)
       .regex(/^[a-zA-Z0-9.:-]+$/),
     port: z.number().int().min(1).max(65535).default(22),
-    username: z.string().regex(/^[a-z_][a-z0-9_-]{0,31}$/),
+    username: z.string().regex(/^[a-z_][a-z0-9_.-]{0,31}$/),
     identityId: z.uuid(),
     fingerprint: z
       .string()
@@ -198,6 +232,20 @@ const serverSchema = z
     tags: z.array(z.string().min(1).max(32)).max(20).default([]),
   })
   .strict();
+const canonicalHost = (host: string) => host.trim().toLowerCase().replace(/\.+$/, "");
+// Mirrors the Server_identity_* database triggers, which compare active servers only.
+// Prisma reports their abort as a generic constraint error (P2003), so writers check
+// first to return a clear conflict.
+async function assertServerIdentityFree(org: string, host: string, port: number, groupId: string | null, exceptId?: string) {
+  const candidates = await db.server.findMany({
+    where: { organizationId: org, port, groupId, archived: false, ...(exceptId ? { id: { not: exceptId } } : {}) },
+    select: { host: true },
+  });
+  if (candidates.some((s) => canonicalHost(s.host) === canonicalHost(host)))
+    throw new ConflictException("A server with this host and port already exists in this folder");
+}
+const isServerIdentityConflict = (error: unknown) =>
+  String(error).includes("server_identity_conflict") || (error as { code?: string })?.code === "P2003";
 const login = z.object({
   email: z.email(),
   password: z.string().min(12).max(200),
@@ -572,6 +620,7 @@ export class AppController {
     admin(p);
     const a = credentials.parse(body),
       id = randomUUID();
+    validateKeyCredential(a);
     await db.sSHIdentity.create({
       data: {
         id,
@@ -598,6 +647,7 @@ export class AppController {
     const p = await authenticate(req);
     admin(p);
     const a = credentials.parse(body);
+    validateKeyCredential(a);
     const result = await db.sSHIdentity.updateMany({
       where: { id, organizationId: p.organizationId },
       data: {
@@ -622,22 +672,26 @@ export class AppController {
   ) {
     const p = await authenticate(req);
     admin(p);
-    const used = await db.server.count({
-      where: { identityId: id, organizationId: p.organizationId },
-    });
-    if (used)
-      throw new ConflictException(
-        `This identity is used by ${used} server${used === 1 ? "" : "s"}`,
-      );
-    const result = await db.sSHIdentity.deleteMany({
-      where: { id, organizationId: p.organizationId },
+    const result = await db.$transaction(async (tx) => {
+      const used = await settingsReferenceCount(tx, p.organizationId, "identityId", id);
+      if (used) throw new ConflictException(`This identity is used by ${used} saved setting${used === 1 ? "" : "s"}`);
+      return tx.sSHIdentity.deleteMany({ where: { id, organizationId: p.organizationId } });
     });
     if (!result.count) throw new NotFoundException();
     await audit(p, "identity_deleted", "success");
     return { deleted: true };
   }
-  @Get("servers") async servers(@Req() req: Request) {
-    return listServers(await authenticate(req));
+  @Get("servers") async servers(@Req() req: Request, @Query() query: Record<string, unknown>) {
+    const p = await authenticate(req);
+    if (!Object.keys(query).length) return listServers(p);
+    const q = z.object({
+      folder: z.union([z.uuid(), z.literal("null")]).optional(),
+      tag: z.string().min(1).max(32).optional(),
+      search: z.string().max(100).optional(),
+      fields: z.string().max(300).optional(),
+      cursor: z.uuid().optional(),
+    }).strict().parse(query);
+    return listServersPage(p, { ...q, folder: q.folder === "null" ? null : q.folder });
   }
   async serverData(p: any, body: unknown, id?: string) {
     const { tags, ...a } = serverSchema.parse(body);
@@ -701,8 +755,9 @@ export class AppController {
     const p = await authenticate(req);
     admin(p);
     const data = await this.serverData(p, body);
+    await assertServerIdentityFree(p.organizationId, data.host, data.port, data.groupId);
     const s = await db.server.create({
-      data: { ...data, organizationId: p.organizationId },
+      data: { ...data, organizationId: p.organizationId, overrides: JSON.stringify({ identityId: data.identityId, username: data.username, environment: data.environment, vpnProfileId: data.vpnProfileId }) },
     });
     if (p.kind === "agent")
       await db.agentPermission.create({
@@ -717,7 +772,62 @@ export class AppController {
         },
       });
     await audit(p, "server_created", "success", s.id);
-    return s;
+    return numericMetadata(s);
+  }
+  @Post("servers/import") async importServers(@Req() req: Request, @Body() body: unknown) {
+    const p = await authenticate(req);
+    admin(p);
+    const input = z.object({ servers: z.array(z.unknown()).min(1).max(100) }).strict().parse(body);
+    const results = [];
+    for (const [index, raw] of input.servers.entries()) {
+      try {
+        const parsed = serverSchema.parse(raw);
+        const host = parsed.host.trim().toLowerCase().replace(/\.+$/, "");
+        const candidates = await db.server.findMany({ where: {
+          organizationId: p.organizationId, port: parsed.port, groupId: parsed.groupId, archived: false,
+        } });
+        const existing = candidates.find((s) => s.host.trim().toLowerCase().replace(/\.+$/, "") === host);
+        if (existing) {
+          results.push({ index, status: "duplicate", server: numericMetadata(existing) });
+          continue;
+        }
+        const data = await this.serverData(p, { ...raw as object, host });
+        const server = await db.$transaction(async (tx) => {
+          const created = await tx.server.create({ data: { ...data, organizationId: p.organizationId, overrides: JSON.stringify({ identityId: data.identityId, username: data.username, environment: data.environment, vpnProfileId: data.vpnProfileId }) } });
+          if (p.kind === "agent") await tx.agentPermission.create({ data: {
+            agentId: p.id, serverId: created.id,
+            operations: JSON.stringify(p.scopes.filter((op) => allOperations.includes(op) && op !== "terminal")),
+          } });
+          await tx.auditEvent.create({ data: {
+            organizationId: p.organizationId, principalId: p.id,
+            action: "server_created", status: "success", serverId: created.id,
+            correlationId: randomUUID(),
+          } });
+          return created;
+        });
+        results.push({ index, status: "created", server: numericMetadata(server) });
+      } catch (error) {
+        // A concurrent writer can win after the lookup. The database trigger is
+        // authoritative; resolve that collision to the same per-row response.
+        if (isServerIdentityConflict(error)) {
+          const parsed = serverSchema.safeParse(raw);
+          if (parsed.success) {
+            const key = parsed.data;
+            const host = key.host.trim().toLowerCase().replace(/\.+$/, "");
+            const candidates = await db.server.findMany({ where: {
+              organizationId: p.organizationId, port: key.port, groupId: key.groupId, archived: false,
+            } });
+            const existing = candidates.find((s) => s.host.trim().toLowerCase().replace(/\.+$/, "") === host);
+            if (existing) {
+              results.push({ index, status: "duplicate", server: numericMetadata(existing) });
+              continue;
+            }
+          }
+        }
+        results.push({ index, status: "error", error: "Invalid server or unavailable referenced resource" });
+      }
+    }
+    return { results };
   }
   @Patch("servers/:id") async editServer(
     @Req() req: Request,
@@ -751,33 +861,68 @@ export class AppController {
       archived: old.archived,
       tags: tags.map((t) => t.name),
     };
-    const data = await this.serverData(
-      p,
-      { ...saved, ...z.record(z.string(), z.unknown()).parse(body) },
-      id,
-    );
+    const { inherit, ...patch } = z.record(z.string(), z.unknown()).parse(body) as Record<string, unknown> & { inherit?: unknown };
+    const inheritKeys = inherit === undefined ? [] : z.array(z.enum(settingKeys)).max(4).parse(inherit);
+    const data = await this.serverData(p, { ...saved, ...patch }, id);
+    // Like the trigger, only a changed address, folder or restore is checked, so legacy rows stay editable.
+    if (!data.archived && (old.archived || canonicalHost(data.host) !== canonicalHost(old.host) || data.port !== old.port || data.groupId !== old.groupId))
+      await assertServerIdentityFree(p.organizationId, data.host, data.port, data.groupId, id);
+    const changed = Object.fromEntries(Object.entries(patch).filter(([key]) => settingKeys.includes(key as (typeof settingKeys)[number])));
+    const overrides = mergeSettings(old.overrides, settingsSchema.parse(changed), inheritKeys);
+    await resolveSettings(id, p.organizationId, { overrides: parseSettings(overrides), groupId: data.groupId, tagIds: data.tags.connect.map((tag) => tag.id) });
     const s = await db.server.update({
       where: { id },
-      data: { ...data, status: "unknown" },
+      data: { ...data, overrides, status: "unknown" },
     });
     closeSftp(id);
     await audit(p, "server_updated", "success", id);
-    return s;
+    return numericMetadata(s);
   }
   @Post("servers/:id/duplicate") async duplicate(
     @Req() req: Request,
     @Param("id") id: string,
+    @Body() body: unknown,
   ) {
     const p = await authenticate(req);
     admin(p);
     const old = await authorize(p, id, "server_get_info");
+    // Two servers cannot share a host and port in one folder, so a copy that keeps
+    // them needs a different folder.
+    const a = z
+      .object({
+        name: serverSchema.shape.name.optional(),
+        host: serverSchema.shape.host.optional(),
+        port: z.number().int().min(1).max(65535).optional(),
+        groupId: z.uuid().nullable().optional(),
+      })
+      .strict()
+      .parse(body ?? {});
+    if (
+      a.groupId &&
+      !(await db.serverGroup.findFirst({
+        where: { id: a.groupId, organizationId: p.organizationId },
+      }))
+    )
+      throw new BadRequestException("Destination folder unavailable");
+    const host = a.host ?? old.host,
+      port = a.port ?? old.port,
+      groupId = a.groupId === undefined ? old.groupId : a.groupId;
+    if (!old.archived) await assertServerIdentityFree(p.organizationId, host, port, groupId);
     const { id: _id, createdAt: _c, updatedAt: _u, ...data } = old;
     const s = await db.server.create({
       data: {
         ...data,
-        name: old.name + " copy",
+        overrides: old.overrides,
+        name: a.name ?? old.name + " copy",
+        host,
+        port,
+        groupId,
+        // A pinned host key belongs to the original address only.
+        fingerprint: host === old.host && port === old.port ? old.fingerprint : null,
         status: "unknown",
         lastCheckedAt: null,
+        healthFailureCategory: null,
+        latestHealthCheckId: null,
         favorite: false,
       },
     });
@@ -794,7 +939,7 @@ export class AppController {
         },
       });
     await audit(p, "server_duplicated", "success", s.id);
-    return s;
+    return numericMetadata(s);
   }
   @Patch("servers/:id/move") async moveServer(
     @Req() req: Request,
@@ -803,9 +948,11 @@ export class AppController {
   ) {
     const p = await authenticate(req);
     admin(p);
-    await authorize(p, id, "server_get_info");
+    const current = await authorize(p, id, "server_get_info");
     const a = z.object({ groupId: z.uuid().nullable() }).strict().parse(body);
-    await db.$transaction(async (tx) => {
+    if (a.groupId !== current.groupId && !current.archived)
+      await assertServerIdentityFree(p.organizationId, current.host, current.port, a.groupId, id);
+    const invalidated = await db.$transaction(async (tx) => {
       if (
         a.groupId &&
         !(await tx.serverGroup.findFirst({
@@ -814,7 +961,9 @@ export class AppController {
       )
         throw new BadRequestException("Destination folder unavailable");
       await tx.server.update({ where: { id }, data: { groupId: a.groupId } });
+      return preflightAffected(tx, p.organizationId, [id]);
     });
+    for (const serverId of invalidated) closeSftp(serverId);
     await audit(p, "server_moved", "success", id);
     return { id, groupId: a.groupId };
   }
@@ -875,6 +1024,90 @@ export class AppController {
     );
     return group;
   }
+  @Patch("groups/:id/defaults") async folderDefaults(@Req() req: Request, @Param("id") id: string, @Body() body: unknown) {
+    const p = await authenticate(req); admin(p);
+    const envelope = z.object({ settings: settingsSchema.optional(), inherit: z.array(z.enum(settingKeys)).max(4).optional() }).strict().safeParse(body);
+    const change = envelope.success ? envelope.data.settings ?? {} : settingsSchema.parse(body);
+    const inherit = envelope.success ? envelope.data.inherit ?? [] : [];
+    const folder = await db.serverGroup.findFirst({ where: { id, organizationId: p.organizationId } });
+    if (!folder) throw new NotFoundException("Folder unavailable");
+    const defaults = mergeSettings(folder.defaults, change, inherit, true);
+    await validateSettings(p.organizationId, parseSettings(defaults));
+    const affected = await db.$transaction(async (tx) => {
+      const ids = await preflightDefaults(tx, p.organizationId, "folder", id, parseSettings(defaults));
+      await tx.serverGroup.update({ where: { id }, data: { defaults } });
+      return ids;
+    });
+    for (const serverId of affected) closeSftp(serverId);
+    return { id, defaults: parseSettings(defaults) };
+  }
+  @Get("tags") async tagsList(@Req() req: Request) {
+    const p = await authenticate(req);
+    return db.serverTag.findMany({ where: { organizationId: p.organizationId }, select: { id: true, name: true, defaults: true } });
+  }
+  @Patch("tags/:id/defaults") async tagDefaults(@Req() req: Request, @Param("id") id: string, @Body() body: unknown) {
+    const p = await authenticate(req); admin(p);
+    const envelope = z.object({ settings: settingsSchema.optional(), inherit: z.array(z.enum(settingKeys)).max(4).optional() }).strict().safeParse(body);
+    const change = envelope.success ? envelope.data.settings ?? {} : settingsSchema.parse(body);
+    const inherit = envelope.success ? envelope.data.inherit ?? [] : [];
+    const tag = await db.serverTag.findFirst({ where: { id, organizationId: p.organizationId } });
+    if (!tag) throw new NotFoundException("Tag unavailable");
+    const defaults = mergeSettings(tag.defaults, change, inherit, true);
+    await validateSettings(p.organizationId, parseSettings(defaults));
+    const affected = await db.$transaction(async (tx) => {
+      const ids = await preflightDefaults(tx, p.organizationId, "tag", id, parseSettings(defaults));
+      await tx.serverTag.update({ where: { id }, data: { defaults } });
+      return ids;
+    });
+    for (const serverId of affected) closeSftp(serverId);
+    return { id, defaults: parseSettings(defaults) };
+  }
+  @Get("servers/:id/effective-settings") async effectiveSettings(@Req() req: Request, @Param("id") id: string) {
+    const p = await authenticate(req); await authorize(p, id, "server_get_info");
+    return resolveSettings(id, p.organizationId);
+  }
+  @Patch("servers/:id/overrides") async updateOverrides(@Req() req: Request, @Param("id") id: string, @Body() body: unknown) {
+    const p = await authenticate(req); admin(p);
+    const server = await authorize(p, id, "server_get_info");
+    const input = z.object({ settings: settingsSchema.optional(), inherit: z.array(z.enum(settingKeys)).max(4).optional(), metadata: metadataSchema.optional() }).strict().parse(body);
+    const overrides = mergeSettings(server.overrides, input.settings ?? {}, input.inherit ?? []);
+    await validateSettings(p.organizationId, parseSettings(overrides));
+    await resolveSettings(id, p.organizationId, { overrides: parseSettings(overrides) });
+    const metadata = input.metadata ?? {};
+    await db.server.update({ where: { id }, data: {
+      overrides, ...(metadata.vcpu !== undefined ? { vcpu: metadata.vcpu } : {}),
+      ...(metadata.ramBytes !== undefined ? { ramBytes: metadata.ramBytes } : {}),
+      ...(metadata.diskBytes !== undefined ? { diskBytes: metadata.diskBytes } : {}),
+      ...(metadata.os !== undefined ? { os: metadata.os } : {}), ...(metadata.role !== undefined ? { role: metadata.role } : {}),
+    } });
+    closeSftp(id);
+    return resolveSettings(id, p.organizationId);
+  }
+  @Post("servers/metadata/bulk") async bulkMetadata(@Req() req: Request, @Body() body: unknown) {
+    const p = await authenticate(req); admin(p);
+    const input = z.object({ serverIds: z.array(z.uuid()).min(1).max(100), settings: settingsSchema.optional(), inherit: z.array(z.enum(settingKeys)).max(4).optional(), metadata: metadataSchema.optional() }).strict().parse(body);
+    const ids = [...new Set(input.serverIds)];
+    const changes: { id: string; overrides: string }[] = [];
+    for (const id of ids) {
+      const server = await authorize(p, id, "server_get_info");
+      const overrides = mergeSettings(server.overrides, input.settings ?? {}, input.inherit ?? []);
+      await validateSettings(p.organizationId, parseSettings(overrides));
+      await resolveSettings(id, p.organizationId, { overrides: parseSettings(overrides) });
+      changes.push({ id, overrides });
+    }
+    const metadata = input.metadata ?? {};
+    await db.$transaction(async (tx) => {
+      for (const change of changes) await tx.server.update({ where: { id: change.id }, data: {
+        overrides: change.overrides,
+        ...(metadata.vcpu !== undefined ? { vcpu: metadata.vcpu } : {}),
+        ...(metadata.ramBytes !== undefined ? { ramBytes: metadata.ramBytes } : {}),
+        ...(metadata.diskBytes !== undefined ? { diskBytes: metadata.diskBytes } : {}),
+        ...(metadata.os !== undefined ? { os: metadata.os } : {}), ...(metadata.role !== undefined ? { role: metadata.role } : {}),
+      } });
+    });
+    for (const id of ids) closeSftp(id);
+    return { serverIds: ids, updated: ids.length };
+  }
   @Post("servers/scan-host-key") async scan(
     @Req() req: Request,
     @Body() body: unknown,
@@ -905,6 +1138,51 @@ export class AppController {
     } catch (e) {
       throw new BadRequestException((e as Error).message);
     }
+  }
+  @Post("servers/:id/check") async checkServer(@Req() req: Request, @Param("id") id: string) {
+    const p = await authenticate(req);
+    await authorize(p, z.uuid().parse(id), "server_test_connection");
+    const result = await enqueueHealthBatch(p.organizationId, p.id, [id]);
+    await audit(p, "health_check_started", "success", id);
+    return result;
+  }
+  @Post("groups/:id/checks") async checkFolder(@Req() req: Request, @Param("id") id: string) {
+    const p = await authenticate(req);
+    const folder = await db.serverGroup.findFirst({ where: { id: z.uuid().parse(id), organizationId: p.organizationId } });
+    if (!folder) throw new NotFoundException("Folder unavailable");
+    const folders = await db.serverGroup.findMany({ where: { organizationId: p.organizationId }, select: { id: true, parentId: true } });
+    const descendants = new Set([id]);
+    let previous = -1;
+    while (previous !== descendants.size) {
+      previous = descendants.size;
+      for (const child of folders) if (child.parentId && descendants.has(child.parentId)) descendants.add(child.id);
+    }
+    const servers = await db.server.findMany({ where: { organizationId: p.organizationId, archived: false, groupId: { in: [...descendants] } }, select: { id: true }, take: 101 });
+    if (servers.length > 100) throw new BadRequestException("Folder check is limited to 100 servers");
+    for (const server of servers) await authorize(p, server.id, "server_test_connection");
+    const result = await enqueueHealthBatch(p.organizationId, p.id, servers.map((server) => server.id));
+    await audit(p, "folder_health_check_started", "success");
+    return result;
+  }
+  @Get("checks/:batchId") async healthBatch(@Req() req: Request, @Param("batchId") batchId: string) {
+    const p = await authenticate(req);
+    const batch = await db.healthBatch.findFirst({ where: { id: z.uuid().parse(batchId), organizationId: p.organizationId, principalId: p.id }, include: { checks: { orderBy: { createdAt: "asc" } } } });
+    if (!batch) throw new NotFoundException("Health batch unavailable");
+    for (const check of batch.checks) await authorize(p, check.serverId, "server_test_connection");
+    return { batchId: batch.id, status: batch.expiresAt < new Date() && batch.status !== "completed" ? "expired" : batch.status, authenticationVerified: false, checks: batch.checks.map((check) => ({ serverId: check.serverId, checkId: check.id, status: check.status, checkedAt: check.checkedAt, failureCategory: check.failureCategory, observedFingerprint: check.observedFingerprint, fingerprintComparison: check.fingerprintComparison })) };
+  }
+  @Post("servers/:id/host-key/verify") async verifyHostKey(@Req() req: Request, @Param("id") id: string, @Body() body: unknown) {
+    const p = await authenticate(req);
+    human(p);
+    admin(p);
+    const input = z.object({ checkId: z.uuid(), fingerprint: z.string().regex(/^SHA256:[A-Za-z0-9+/]{43}$/) }).strict().parse(body);
+    const check = await db.healthCheck.findFirst({ where: { id: input.checkId, serverId: z.uuid().parse(id), organizationId: p.organizationId, observedFingerprint: input.fingerprint, status: "reachable", checkedAt: { gt: new Date(Date.now() - 30 * 60_000) } } });
+    if (!check) throw new BadRequestException("No matching observed fingerprint for this server");
+    const updated = await db.server.updateMany({ where: { id, organizationId: p.organizationId, archived: false, latestHealthCheckId: input.checkId, host: check.checkedHost ?? "", port: check.checkedPort ?? -1 }, data: { fingerprint: input.fingerprint } });
+    if (!updated.count) throw new BadRequestException("Server changed since this fingerprint was observed; scan it again");
+    closeSftp(id);
+    await audit(p, "server_host_key_verified", "success", id);
+    return { serverId: id, fingerprint: input.fingerprint };
   }
   @Delete("groups/:id") async removeGroup(
     @Req() req: Request,
@@ -1079,6 +1357,38 @@ export class AppController {
     await audit(p, "agent_access_updated", "success", undefined, id);
     return { updated: true };
   }
+  @Post("agents/:id/grants") async agentGrant(@Req() req: Request, @Param("id") id: string, @Body() body: unknown) {
+    const p = await authenticate(req);
+    admin(p);
+    const input = z.object({ serverId: z.uuid(), operations: z.array(z.enum(allOperations.filter((op) => op !== "terminal") as [string, ...string[]])).min(1).max(60) }).strict().parse(body);
+    await db.$transaction(async (tx) => {
+      const agent = await tx.agent.findFirst({ where: { id, organizationId: p.organizationId, revoked: false, owner: { disabled: false } } });
+      if (!agent) throw new NotFoundException("Agent unavailable");
+      const server = await tx.server.findFirst({ where: { id: input.serverId, organizationId: p.organizationId, archived: false } });
+      if (!server) throw new NotFoundException("Server unavailable");
+      if (agent.level === "viewer" && input.operations.some((op) => !readOperations.includes(op)))
+        throw new BadRequestException("Viewer agents may only receive read operations");
+      const operations = JSON.stringify([...new Set(input.operations)]);
+      await tx.agentPermission.upsert({ where: { agentId_serverId: { agentId: id, serverId: input.serverId } }, create: { agentId: id, serverId: input.serverId, operations }, update: { operations } });
+      await tx.auditEvent.create({ data: { organizationId: p.organizationId, principalId: p.id, action: "agent_grant_updated", status: "success", serverId: input.serverId, correlationId: randomUUID() } });
+    });
+    return { agentId: id, serverId: input.serverId, operations: [...new Set(input.operations)] };
+  }
+  @Delete("agents/:id/grants/:serverId") async agentRevokeGrant(@Req() req: Request, @Param("id") id: string, @Param("serverId") serverId: string) {
+    const p = await authenticate(req);
+    admin(p);
+    z.uuid().parse(serverId);
+    const removed = await db.$transaction(async (tx) => {
+      const agent = await tx.agent.findFirst({ where: { id, organizationId: p.organizationId, revoked: false, owner: { disabled: false } } });
+      if (!agent) throw new NotFoundException("Agent unavailable");
+      const server = await tx.server.findFirst({ where: { id: serverId, organizationId: p.organizationId, archived: false } });
+      if (!server) throw new NotFoundException("Server unavailable");
+      const result = await tx.agentPermission.deleteMany({ where: { agentId: id, serverId } });
+      await tx.auditEvent.create({ data: { organizationId: p.organizationId, principalId: p.id, action: "agent_grant_revoked", status: "success", serverId, correlationId: randomUUID() } });
+      return result.count > 0;
+    });
+    return { agentId: id, serverId, removed };
+  }
   @Patch("agents/:id/limits") async agentLimits(
     @Req() req: Request,
     @Param("id") id: string,
@@ -1171,9 +1481,16 @@ export class AppController {
       orderBy: { createdAt: "desc" },
       take: 100,
     });
-    return items.map(({ encryptedArguments, ...row }) => ({
+    const decoded = items.map(({ encryptedArguments, tokenId: _tokenId, ...row }) => ({
       ...row,
-      args: unseal(encryptedArguments, config.ENCRYPTION_KEY, p.organizationId),
+      args: unseal(encryptedArguments, config.ENCRYPTION_KEY, p.organizationId) as Record<string, unknown>,
+    }));
+    const batchIds = [...new Set(decoded.flatMap((item) => item.operation === "ssh_execute_many" && Array.isArray(item.args.serverIds) ? item.args.serverIds.filter((id): id is string => typeof id === "string") : []))];
+    const targets = batchIds.length ? await db.server.findMany({ where: { id: { in: batchIds }, organizationId: p.organizationId }, select: { id: true, name: true } }) : [];
+    const names = new Map(targets.map((server) => [server.id, server.name]));
+    return decoded.map((item) => ({
+      ...item,
+      ...(item.operation === "ssh_execute_many" && Array.isArray(item.args.serverIds) ? { targetNames: item.args.serverIds.map((id) => names.get(String(id)) ?? "Unavailable server"), targetCount: item.args.serverIds.length } : {}),
     }));
   }
   @Post("approvals/:id") async decide(
@@ -1666,6 +1983,71 @@ export class AppController {
     internal(req);
     return claimTask(z.uuid().parse(id));
   }
+  @Get("internal/batches/:id/status") async batchStatus(@Req() req: Request, @Param("id") id: string) {
+    internal(req);
+    const batch = await db.batchDispatch.findUnique({ where: { id: z.uuid().parse(id) }, select: { status: true } });
+    if (!batch) throw new NotFoundException("Batch unavailable");
+    return batch;
+  }
+  @Post("internal/batches/:id/abort") async abortBatch(@Req() req: Request, @Param("id") id: string) {
+    internal(req);
+    const batchId = z.uuid().parse(id);
+    return db.$transaction(async (tx) => {
+      const changed = await tx.batchDispatch.updateMany({ where: { id: batchId, status: { in: ["released", "executing"] } }, data: { status: "aborted" } });
+      if (!changed.count) return { aborted: false };
+      const tasks = await tx.backgroundTask.findMany({ where: { batchId }, select: { id: true } });
+      await tx.backgroundTask.updateMany({ where: { batchId, status: { in: ["queued", "running"] } }, data: { status: "failed", leaseHash: null } });
+      await tx.commandExecution.updateMany({ where: { id: { in: tasks.map((task) => task.id) }, status: { in: ["queued", "running"] } }, data: { status: "failed" } });
+      await tx.auditEvent.updateMany({ where: { correlationId: batchId, action: "ssh_execute_many", status: "queued" }, data: { status: "failed" } });
+      return { aborted: true };
+    });
+  }
+  @Post("internal/batches/:id/start") async startBatch(@Req() req: Request, @Param("id") id: string) {
+    internal(req);
+    const batchId = z.uuid().parse(id);
+    return db.$transaction(async (tx) => {
+      const batch = await tx.batchDispatch.findFirst({ where: { id: batchId, status: "released" } });
+      if (!batch) throw new ForbiddenException("Batch unavailable");
+      const tasks = await tx.backgroundTask.findMany({ where: { batchId }, select: { principalId: true, organizationId: true, tokenId: true, serverId: true, status: true } });
+      if (!tasks.length || tasks.some((task) => task.principalId !== batch.principalId || task.organizationId !== batch.organizationId || task.status !== "running"))
+        throw new ForbiddenException("Batch preflight is incomplete");
+      const agent = await tx.agent.findFirst({ where: { id: batch.principalId, organizationId: batch.organizationId, revoked: false, owner: { disabled: false } }, include: { tokens: { where: { id: tasks[0].tokenId ?? "", revoked: false, expiresAt: { gt: new Date() } } } } });
+      if (agent) {
+        const token = agent.tokens[0];
+        const scopes: string[] = token ? JSON.parse(token.scopes) : [];
+        if (tasks.some((task) => task.tokenId !== tasks[0].tokenId) || !batchTokenAllowed(tasks[0].tokenId, token ? { id: token.id, scopes } : null))
+          throw new ForbiddenException("Original agent token no longer permits this batch");
+      } else {
+        if (tasks.some((task) => task.tokenId !== null)) throw new ForbiddenException("Original agent is unavailable");
+        const user = await tx.user.findFirst({ where: { id: batch.principalId, organizationId: batch.organizationId, disabled: false } });
+        if (!user) throw new ForbiddenException("Requesting user is unavailable");
+        for (const task of tasks) {
+          const server = await tx.server.findFirst({ where: { id: task.serverId, organizationId: batch.organizationId, archived: false } });
+          if (!server) throw new ForbiddenException("Batch server is unavailable");
+          if (["owner", "administrator"].includes(user.role)) continue;
+          const [own, teams] = await Promise.all([
+            tx.serverPermission.findUnique({ where: { serverId_userId: { serverId: task.serverId, userId: user.id } } }),
+            tx.teamPermission.findMany({ where: { serverId: task.serverId, team: { members: { some: { userId: user.id } } } } }),
+          ]);
+          if (user.role === "viewer" || ![own, ...teams].some((grant) => grant && JSON.parse(grant.operations).includes("ssh_execute")))
+            throw new ForbiddenException("Batch server execution grant was removed");
+        }
+      }
+      if (agent) for (const task of tasks) {
+        const server = await tx.server.findFirst({ where: { id: task.serverId, organizationId: batch.organizationId, archived: false } });
+        const grant = await tx.agentPermission.findUnique({ where: { agentId_serverId: { agentId: agent.id, serverId: task.serverId } } });
+        if (!server || !grant || !JSON.parse(grant.operations).includes("ssh_execute"))
+          throw new ForbiddenException("Batch server execution grant was removed");
+      }
+      await tx.batchDispatch.update({ where: { id: batchId }, data: { status: "executing" } });
+      return { started: true };
+    });
+  }
+  @Post("internal/batches/:id/complete") async completeBatch(@Req() req: Request, @Param("id") id: string) {
+    internal(req);
+    await db.batchDispatch.updateMany({ where: { id: z.uuid().parse(id), status: "executing" }, data: { status: "completed" } });
+    return { completed: true };
+  }
   @Get("internal/tasks/:id/status") async taskStatus(
     @Req() req: Request,
     @Param("id") id: string,
@@ -1679,12 +2061,16 @@ export class AppController {
     const user = agent
       ? null
       : await db.user.findUnique({ where: { id: t.principalId } });
+    const batchToken = t.batchId && agent && t.tokenId ? await db.agentToken.findFirst({ where: { id: t.tokenId, agentId: agent.id, revoked: false, expiresAt: { gt: new Date() } } }) : null;
+    const batchScopes: string[] = batchToken ? JSON.parse(batchToken.scopes) : [];
     return {
       cancelled:
         t.status === "cancelled" ||
         t.status === "interrupted" ||
+        !!(t.batchId && (await db.batchDispatch.findUnique({ where: { id: t.batchId }, select: { status: true } }))?.status === "aborted") ||
         !!agent?.revoked ||
         !!agent?.owner.disabled ||
+        !!(t.batchId && agent && !batchTokenAllowed(t.tokenId, batchToken ? { id: batchToken.id, scopes: batchScopes } : null)) ||
         !!user?.disabled ||
         t.expiresAt < new Date(),
     };
@@ -1707,14 +2093,6 @@ export class AppController {
     if (!t.leaseHash || !equal(t.leaseHash, hash(a.lease)))
       throw new ForbiddenException();
     const status = await finishTask(id, t.leaseHash, a);
-    if (t.operation === "server_test_connection")
-      await db.server.update({
-        where: { id: t.serverId },
-        data: {
-          status: status === "completed" ? "reachable" : "unreachable",
-          lastCheckedAt: new Date(),
-        },
-      });
     await audit(
       {
         id: t.principalId,

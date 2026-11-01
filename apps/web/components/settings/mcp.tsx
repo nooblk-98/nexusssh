@@ -761,6 +761,7 @@ function AgentActivity({ agent, close }: { agent: Row; close: () => void }) {
 
 export function Approvals() {
   const q = useApi<Row[]>("approvals", { interval: 15000 });
+  const [batchResults, setBatchResults] = useState<Record<string, Row[]>>({});
   const list = q.data || [];
   const decide = (id: string, decision: "approved" | "rejected") =>
     void api("approvals/" + id, { decision })
@@ -796,7 +797,9 @@ export function Approvals() {
                 return (
                   <tr key={a.id}>
                     <td className="mono small">{a.operation}</td>
-                    <td>{a.server?.name}</td>
+                    <td title={a.operation === "ssh_execute_many" ? (a.targetNames || []).join(", ") : undefined}>
+                      {a.operation === "ssh_execute_many" ? `${a.targetCount || 0} servers: ${(a.targetNames || []).join(", ")}` : a.server?.name}
+                    </td>
                     <td
                       className="mono small ellipsis"
                       style={{ maxWidth: 320 }}
@@ -849,8 +852,12 @@ export function Approvals() {
                               ...a.args,
                               approvalId: a.id,
                             })
-                              .then(() => {
-                                notify.success("Operation completed.");
+                              .then((result) => {
+                                if (a.operation === "ssh_execute_many" && Array.isArray(result.results)) {
+                                  setBatchResults((previous) => ({ ...previous, [a.id]: result.results }));
+                                  const succeeded = result.results.filter((entry: Row) => entry.status === "success").length;
+                                  notify.info(`${succeeded} succeeded, ${result.results.length - succeeded} failed.`);
+                                } else notify.success("Operation completed.");
                                 void refresh("approvals");
                               })
                               .catch(notify.error)
@@ -858,6 +865,18 @@ export function Approvals() {
                         >
                           Execute
                         </Button>
+                      )}
+                      {batchResults[a.id] && (
+                        <details className="small">
+                          <summary>Batch results</summary>
+                          {batchResults[a.id].map((entry: Row) => (
+                            <div key={entry.serverId} className="mono small" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                              {entry.serverId}: {entry.status}{entry.error ? ` — ${entry.error}` : ""}{entry.taskId ? ` (task ${entry.taskId})` : ""}
+                              {entry.result?.stdout ? `\n${entry.result.stdout}` : ""}
+                              {entry.result?.stderr ? `\n${entry.result.stderr}` : ""}
+                            </div>
+                          ))}
+                        </details>
                       )}
                     </td>
                   </tr>

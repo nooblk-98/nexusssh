@@ -79,8 +79,9 @@ The helper verifies the backup, replaces the file atomically, and never silently
 
 ## Upgrade
 
-CI builds an image tagged with the exact source commit and retains its compressed
-Docker archive and `image-manifest.txt` as a seven-day workflow artifact. The
+CI builds an image tagged with the exact source commit on every run. For pushes to
+`main` and tags that pass all checks, it retains the compressed Docker archive and
+`image-manifest.txt` as a seven-day workflow artifact. The
 manifest includes Docker's immutable image ID. To deploy that exact build,
 download the artifact, check the loaded image ID against the manifest, run
 `docker load -i nexusssh-image.tar.gz`, and set `NEXUSSSH_IMAGE` to the recorded
@@ -98,6 +99,6 @@ Back up and verify restore before upgrading. Review migrations and dependency ch
 
 `APP_URL` is also the exact permitted browser Origin. `MCP_PUBLIC_URL` is the agent token audience. `MCP_AUTH_ISSUER` is the issuing authority recorded on machine credentials. `ENCRYPTION_KEY` is 32 random bytes in hexadecimal. `INTERNAL_SECRET` protects worker/MCP-to-API calls. `SETUP_TOKEN` protects first-owner enrollment. Browser sessions are opaque random database-backed credentials; `SESSION_SECRET`, `AUTH_AUDIENCE`, `ENCRYPTION_KEY_PROVIDER` and `LOG_LEVEL` are retained configuration slots, not implemented pluggable providers.
 
-`SSH_CONNECT_TIMEOUT`, `SSH_IDLE_TIMEOUT`, `SSH_MAX_SESSIONS`, and `SSH_OUTPUT_LIMIT` bound resources. `AUDIT_RETENTION_DAYS` controls audit cleanup. Terminal transcripts are not recorded.
+`SSH_CONNECT_TIMEOUT`, `SSH_IDLE_TIMEOUT`, `SSH_MAX_SESSIONS`, and `SSH_OUTPUT_LIMIT` bound resources. `SSH_WORKER_CONCURRENCY` (default 4) sets how many interactive SSH operations run at once, and `SSH_HEALTH_CONCURRENCY` (default 4) how many reachability checks run at once. `AUDIT_RETENTION_DAYS` controls audit cleanup. Terminal transcripts are not recorded.
 
 Job output is transient. Restarting Redis loses queued work/results; task metadata may remain queued or running until reconciled. Inspect and explicitly reissue safe operations rather than automatically replaying side effects.

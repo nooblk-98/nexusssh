@@ -10,6 +10,14 @@ export async function reserveAgentCall<T>(
   agentId: string,
   record: (tx: Transaction) => Promise<T>,
 ): Promise<T> {
+  return reserveAgentCalls(agentId, 1, record);
+}
+
+export async function reserveAgentCalls<T>(
+  agentId: string,
+  count: number,
+  record: (tx: Transaction) => Promise<T>,
+): Promise<T> {
   return db.$transaction(async (tx) => {
     const agent = await tx.agent.update({
       where: { id: agentId },
@@ -34,7 +42,7 @@ export async function reserveAgentCall<T>(
           },
         }),
       ]);
-      if (ssh + management >= cap)
+      if (ssh + management + count > cap)
         throw new HttpException("Agent call limit reached", 429);
     }
     return record(tx);

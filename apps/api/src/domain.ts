@@ -5,7 +5,9 @@ import {
 } from "@nestjs/common";
 import { Queue, QueueEvents } from "bullmq";
 import { randomUUID } from "node:crypto";
-import { reserveAgentCall } from "./agent-quota.js";
+import type { Prisma } from "@prisma/client";
+import { reserveAgentCall, reserveAgentCalls } from "./agent-quota.js";
+import { resolveSettings, numericMetadata } from "./metadata.js";
 import { db } from "../../../packages/database/index.js";
 import { config, redisConnection } from "../../../packages/shared/config.js";
 import {
@@ -17,6 +19,9 @@ import {
 import {
   parseOperation,
   executionArgs,
+  batchApprovalPayload,
+  completedBatchResult,
+  batchTokenAllowed,
 } from "../../../packages/shared/operations.js";
 import {
   permitted,
@@ -39,6 +44,11 @@ export const queue = new Queue("nexus-ssh", {
 export const events = new QueueEvents("nexus-ssh", {
   connection: redisConnection,
 });
+export const batchQueue = new Queue("nexus-ssh-batch", {
+  connection: redisConnection,
+  defaultJobOptions: { attempts: 1, removeOnComplete: { age: 3600, count: 1000 }, removeOnFail: { age: 3600, count: 1000 } },
+});
+export const batchEvents = new QueueEvents("nexus-ssh-batch", { connection: redisConnection });
 export async function audit(
   p: Principal,
   action: string,
@@ -62,6 +72,16 @@ export async function authorize(p: Principal, id: string, op: string) {
     where: { id, organizationId: p.organizationId, archived: false },
   });
   if (!server) throw new NotFoundException("Server unavailable");
+  if (p.kind === "agent" && !(p.managementOperation && op === "server_get_info")) {
+    const grant = await db.agentPermission.findUnique({ where: { agentId_serverId: { agentId: p.id, serverId: id } } });
+    if (!grant || !JSON.parse(grant.operations).includes(op))
+      throw new ForbiddenException({ code: "server_not_granted", message: "This server operation is not granted to the agent" });
+    if (!p.scopes.includes(op))
+      throw new ForbiddenException({ code: "operation_not_in_token_scope", message: "This operation is not in the agent token scope" });
+    if (!permitted(p, server.organizationId, op, JSON.parse(grant.operations)))
+      throw new ForbiddenException({ code: "agent_policy_denied", message: "The agent level does not permit this operation" });
+    return server;
+  }
   if (
     !(p.managementOperation && op === "server_get_info") &&
     !permitted(p, server.organizationId, op, await grants(p, id))
@@ -92,9 +112,8 @@ async function grants(p: Principal, serverId: string): Promise<string[]> {
     ),
   ];
 }
-export async function listServers(p: Principal) {
-  return db.server.findMany({
-    where: {
+export function serverVisibility(p: Principal) {
+  return {
       organizationId: p.organizationId,
       ...(p.kind === "agent" && !p.managementOperation
         ? { archived: false, agentPermissions: { some: { agentId: p.id } } }
@@ -110,7 +129,11 @@ export async function listServers(p: Principal) {
                 },
               ],
             }),
-    },
+    };
+}
+export async function listServers(p: Principal) {
+  const servers = await db.server.findMany({
+    where: serverVisibility(p),
     include: {
       group: true,
       tags: true,
@@ -120,6 +143,33 @@ export async function listServers(p: Principal) {
     orderBy: [{ favorite: "desc" }, { name: "asc" }],
     take: 500,
   });
+  return Promise.all(servers.map(async (server) => ({ ...numericMetadata(server), effectiveSettings: await resolveSettings(server.id, p.organizationId) })));
+}
+export async function listServersPage(p: Principal, q: {
+  folder?: string | null; tag?: string; search?: string; fields?: string; cursor?: string;
+}) {
+  const allowed = ["effectiveSettings", "vcpu", "ramBytes", "diskBytes", "os", "role", "id", "name", "host", "port", "username", "groupId", "environment", "description", "icon", "favorite", "archived", "createdAt", "updatedAt", "status", "lastCheckedAt", "healthFailureCategory", "healthStale", "group", "tags", "vpnProfile", "bastion", "identity"];
+  const fields = q.fields?.split(",").map((s) => s.trim()).filter(Boolean);
+  if (fields?.some((f) => !allowed.includes(f)))
+    throw new BadRequestException("Invalid fields selection");
+  const page = await db.server.findMany({
+    where: {
+      AND: [serverVisibility(p)],
+      ...(q.folder !== undefined ? { groupId: q.folder } : {}),
+      ...(q.tag ? { tags: { some: { name: q.tag } } } : {}),
+      ...(q.search ? { OR: ["name", "host", "description"].map((field) => ({ [field]: { contains: q.search } })) } : {}),
+      ...(q.cursor ? { id: { gt: q.cursor } } : {}),
+    },
+    include: { group: true, tags: true, vpnProfile: { select: { id: true, name: true } }, bastion: { select: { id: true, name: true } }, identity: { select: { id: true, name: true } } },
+    orderBy: { id: "asc" }, take: 101,
+  });
+  return {
+    servers: await Promise.all(page.slice(0, 100).map(async (s) => {
+      const row = { ...numericMetadata(s), effectiveSettings: await resolveSettings(s.id, p.organizationId) };
+      return fields ? Object.fromEntries(fields.map((f) => [f, row[f as keyof typeof row]])) : row;
+    })),
+    nextCursor: page.length > 100 ? page[99].id : null,
+  };
 }
 // Optional webhook (Slack, Discord, Teams or any JSON endpoint) told about
 // new approval requests so they are not left waiting unseen.
@@ -226,6 +276,7 @@ export async function connection(
   serverId: string,
   org: string,
   inheritedVpn?: Connection["vpn"],
+  allowAutoPin = true,
 ): Promise<Connection> {
   const s = await db.server.findFirstOrThrow({
     where: { id: serverId, organizationId: org },
@@ -235,33 +286,25 @@ export async function connection(
       bastion: { include: { identity: true, vpnProfile: true } },
     },
   });
-  const map = (s: any): Connection => ({
-    ...(s.vpnProfile
-      ? {
-          vpn: {
-            id: s.vpnProfile.id,
-            config: unseal(
-              s.vpnProfile.encryptedConfig,
-              config.ENCRYPTION_KEY,
-              org + ":vpn:" + s.vpnProfile.id,
-            ),
-          },
-        }
-      : {}),
-    host: s.host,
-    port: s.port,
-    username: s.username,
-    fingerprint: s.fingerprint,
-    fileRoot: s.fileRoot,
-    credential: unseal(
-      s.identity.encryptedSecret,
-      config.ENCRYPTION_KEY,
-      org + ":" + s.identityId,
-    ),
-  });
+  const effective = await resolveSettings(s.id, org);
+  const bastionEffective = s.bastion ? await resolveSettings(s.bastion.id, org) : null;
+  const effectiveVpnIds = [effective.values.vpnProfileId, bastionEffective?.values.vpnProfileId].filter(Boolean);
+  if (new Set(effectiveVpnIds).size > 1) throw new BadRequestException("Conflicting VPN profiles on target and bastion");
+  const map = async (row: { host: string; port: number; fingerprint: string | null; fileRoot: string }, settings: typeof effective.values): Promise<Connection> => {
+    const identity = await db.sSHIdentity.findFirst({ where: { id: settings.identityId, organizationId: org } });
+    if (!identity) throw new BadRequestException("Identity unavailable");
+    const profile = settings.vpnProfileId ? await db.vpnProfile.findFirst({ where: { id: settings.vpnProfileId, organizationId: org } }) : null;
+    if (settings.vpnProfileId && !profile) throw new BadRequestException("VPN profile unavailable");
+    return {
+      ...(profile ? { vpn: { id: profile.id, config: unseal(profile.encryptedConfig, config.ENCRYPTION_KEY, org + ":vpn:" + profile.id) } } : {}),
+      host: row.host, port: row.port, username: settings.username,
+      fingerprint: row.fingerprint, fileRoot: row.fileRoot,
+      credential: unseal(identity.encryptedSecret, config.ENCRYPTION_KEY, org + ":" + identity.id),
+    };
+  };
   const result = {
-    ...map(s),
-    ...(s.bastion ? { bastion: map(s.bastion) } : {}),
+    ...await map(s, effective.values),
+    ...(s.bastion && bastionEffective ? { bastion: await map(s.bastion, bastionEffective.values) } : {}),
   };
   if (inheritedVpn) {
     if (result.vpn && result.vpn.id !== inheritedVpn.id)
@@ -272,7 +315,7 @@ export async function connection(
   }
   if (s.bastion?.archived || s.bastion?.bastionId)
     throw new BadRequestException("Bastion is unavailable");
-  if (await acceptsNewHostKeys(org)) {
+  if (allowAutoPin && await acceptsNewHostKeys(org)) {
     if (s.bastion && result.bastion)
       result.bastion.fingerprint = await pinNewHostKey(s.bastion, {
         vpn: result.vpn || result.bastion.vpn,
@@ -320,8 +363,125 @@ export async function operation(
   input: unknown,
   signal?: AbortSignal,
 ): Promise<any> {
+  if (op === "ssh_execute_many") return executeMany(p, input, signal);
+  return singleOperation(p, op, input, signal);
+}
+
+async function executeMany(p: Principal, input: unknown, signal?: AbortSignal) {
+  const a = parseOperation("ssh_execute_many", input);
+  const ids: string[] = [...a.serverIds].sort();
+  if (Math.ceil(ids.length / 3) * (a.timeoutMs + config.SSH_CONNECT_TIMEOUT) > 180000)
+    throw new BadRequestException("Batch timeout is too long for this number of servers; reduce timeoutMs or serverIds");
+  const { args: normalized, digest } = batchApprovalPayload(ids, a.command, a.timeoutMs);
+  let subject = p;
+  if (a.approvalId) {
+    const approval = await db.approvalRequest.findFirst({ where: { id: a.approvalId, organizationId: p.organizationId, operation: "ssh_execute_many", status: "approved", consumedAt: null, expiresAt: { gt: new Date() }, argumentDigest: digest } });
+    if (!approval) throw new ForbiddenException("Approval is missing, expired, mismatched, or already consumed");
+    if (approval.principalId === p.id && p.kind === "agent" && !batchTokenAllowed(approval.tokenId, p.tokenId ? { id: p.tokenId, scopes: p.scopes } : null))
+      throw new ForbiddenException("The requesting agent token is no longer the approved token");
+    if (approval.principalId !== p.id) {
+      if (p.kind !== "user" || !["owner", "administrator"].includes(p.role))
+        throw new ForbiddenException("Only an administrator may execute another principal's approved batch");
+      const agent = await db.agent.findFirst({ where: { id: approval.principalId, organizationId: p.organizationId, revoked: false, owner: { disabled: false } }, include: { tokens: { where: { id: approval.tokenId ?? "", revoked: false, expiresAt: { gt: new Date() } } } } });
+      if (agent) {
+        const token = agent.tokens[0];
+        const scopes: string[] = token ? JSON.parse(token.scopes) : [];
+        if (!batchTokenAllowed(approval.tokenId, token ? { id: token.id, scopes } : null)) throw new ForbiddenException("The originally approved agent token is no longer active for batch execution");
+        subject = { id: agent.id, organizationId: p.organizationId, kind: "agent", role: agent.level, scopes: JSON.parse(token.scopes), tokenId: token.id, ownerId: agent.ownerId };
+      } else {
+        if (approval.tokenId) throw new ForbiddenException("The originally approved agent is unavailable");
+        const user = await db.user.findFirst({ where: { id: approval.principalId, organizationId: p.organizationId, disabled: false } });
+        if (!user) throw new ForbiddenException("Requesting principal is unavailable");
+        subject = { id: user.id, organizationId: p.organizationId, kind: "user", role: user.role, scopes: [] };
+      }
+    }
+  }
+  if (subject.kind === "agent" && !subject.scopes.includes("ssh_execute_many"))
+    throw new ForbiddenException({ code: "operation_not_in_token_scope", message: "Batch execution is not in the agent token scope" });
+  // Check every target before creating or consuming the exact-set approval.
+  const servers = await Promise.all(ids.map((id) => authorize(subject, id, "ssh_execute")));
+  if (!a.approvalId) {
+    const approval = await db.approvalRequest.create({ data: {
+      organizationId: subject.organizationId, principalId: subject.id, tokenId: subject.tokenId ?? null, serverId: ids[0],
+      operation: "ssh_execute_many", argumentDigest: digest,
+      encryptedArguments: seal(normalized, config.ENCRYPTION_KEY, subject.organizationId),
+      expiresAt: new Date(Date.now() + 600000),
+    } });
+    await audit(subject, "ssh_execute_many", "approval_pending", ids[0], approval.id);
+    void announceApproval(subject, "ssh_execute_many", servers.map((s) => s.name).join(", "), approval.id);
+    return { status: "approval_required", approvalId: approval.id, expiresAt: approval.expiresAt };
+  }
+  const createBatch = async (tx: Prisma.TransactionClient) => {
+    const used = await tx.approvalRequest.updateMany({
+      where: { id: a.approvalId, organizationId: subject.organizationId, principalId: subject.id, tokenId: subject.tokenId ?? null,
+        serverId: ids[0], operation: "ssh_execute_many", argumentDigest: digest,
+        status: "approved", consumedAt: null, expiresAt: { gt: new Date() } },
+      data: { status: "consumed", consumedAt: new Date() },
+    });
+    if (used.count !== 1) throw new ForbiddenException("Approval is missing, expired, mismatched, or already consumed");
+    const batch = await tx.batchDispatch.create({ data: { organizationId: subject.organizationId, principalId: subject.id } });
+    const taskIds: string[] = [];
+    for (const serverId of ids) {
+      const args = { serverId, command: a.command, timeoutMs: a.timeoutMs };
+      const task = await tx.backgroundTask.create({ data: {
+        organizationId: subject.organizationId, principalId: subject.id, serverId,
+        operation: "ssh_execute", encryptedArguments: seal(args, config.ENCRYPTION_KEY, subject.organizationId),
+        status: "queued", tokenId: subject.tokenId, batchId: batch.id,
+        expiresAt: new Date(Date.now() + 240000),
+      } });
+      await tx.commandExecution.create({ data: { id: task.id, organizationId: subject.organizationId, principalId: subject.id, serverId, operation: "ssh_execute", argumentDigest: hash(canonical(args)), status: "queued" } });
+      taskIds.push(task.id);
+    }
+    await tx.auditEvent.create({ data: { organizationId: subject.organizationId, principalId: subject.id, action: "ssh_execute_many", status: "queued", serverId: ids[0], correlationId: batch.id } });
+    return { batchId: batch.id, taskIds };
+  };
+  const batch = subject.kind === "agent"
+    ? await reserveAgentCalls(subject.id, ids.length, createBatch)
+    : await db.$transaction(createBatch);
+  const abortBatch = async () => db.$transaction(async (tx) => {
+    const stopped = await tx.batchDispatch.updateMany({ where: { id: batch.batchId, status: "pending" }, data: { status: "aborted" } });
+    if (!stopped.count) return false;
+    await tx.backgroundTask.updateMany({ where: { batchId: batch.batchId, status: "queued" }, data: { status: "failed" } });
+    await tx.commandExecution.updateMany({ where: { id: { in: batch.taskIds }, status: "queued" }, data: { status: "failed" } });
+    await tx.auditEvent.updateMany({ where: { correlationId: batch.batchId, action: "ssh_execute_many", status: "queued" }, data: { status: "failed" } });
+    await tx.approvalRequest.updateMany({ where: { id: a.approvalId, status: "consumed", principalId: subject.id }, data: { status: "approved", consumedAt: null } });
+    return true;
+  });
+  let job;
+  try {
+    job = await batchQueue.add("batch", { batchId: batch.batchId, taskIds: batch.taskIds, serverIds: ids }, { jobId: batch.batchId });
+    const released = await db.batchDispatch.updateMany({ where: { id: batch.batchId, status: "pending" }, data: { status: "released" } });
+    if (!released.count) throw new Error("Batch could not be released");
+  } catch {
+    const stopped = await abortBatch().catch(() => false);
+    throw new BadRequestException({ message: stopped ? "Batch could not be queued; no command was started" : "Batch state is uncertain; inspect task status before retrying", batchId: batch.batchId, taskIds: batch.taskIds });
+  }
+  const cancelDispatched = () => {
+    void db.$transaction(async (tx) => {
+      const changed = await tx.batchDispatch.updateMany({ where: { id: batch.batchId, status: { in: ["released", "executing"] } }, data: { status: "aborted" } });
+      if (!changed.count) return;
+      await tx.backgroundTask.updateMany({ where: { batchId: batch.batchId, status: { in: ["queued", "running"] } }, data: { status: "cancelled" } });
+      await tx.commandExecution.updateMany({ where: { id: { in: batch.taskIds }, status: { in: ["queued", "running"] } }, data: { status: "cancelled" } });
+      await tx.auditEvent.updateMany({ where: { correlationId: batch.batchId, action: "ssh_execute_many", status: "queued" }, data: { status: "cancelled" } });
+    }).catch((error) => console.error("Could not cancel dispatched batch", batch.batchId, error));
+  };
+  signal?.addEventListener("abort", cancelDispatched, { once: true });
+  if (signal?.aborted) cancelDispatched();
+  try {
+    const result = await job.waitUntilFinished(batchEvents, 195000);
+    return { results: result.results.map((entry: { serverId: string; status: string; result?: unknown; error?: string; taskId?: string }) => entry.status === "success" ? { ...entry, result: completedBatchResult(entry.result) } : entry) };
+  } catch {
+    throw new BadRequestException({ message: "Batch did not finish; inspect task status before retrying", batchId: batch.batchId, taskIds: batch.taskIds });
+  } finally {
+    signal?.removeEventListener("abort", cancelDispatched);
+  }
+}
+
+async function singleOperation(
+  p: Principal, op: string, input: unknown, signal?: AbortSignal,
+): Promise<any> {
   const a = parseOperation(op, input);
-  if (op === "servers_list") return { servers: await listServers(p) };
+  if (op === "servers_list") return listServersPage(p, a);
   if (op === "approval_get_status") {
     const row = await db.approvalRequest.findFirst({
       where: {
@@ -370,7 +530,7 @@ export async function operation(
     };
   }
   const server = await authorize(p, a.serverId, op);
-  if (op === "server_get_info") return { server };
+  if (op === "server_get_info") return { server: { ...numericMetadata(server), effectiveSettings: await resolveSettings(server.id, p.organizationId) } };
   // Read-only session calls still consume one agent call; reserve and record
   // together so concurrent callers cannot exceed the configured cap.
   if (p.kind === "agent" && (op === "ssh_session_status" || op === "ssh_disconnect")) {
@@ -522,6 +682,11 @@ export async function claimTask(id: string) {
   const t = await db.backgroundTask.findUnique({ where: { id } });
   if (!t || t.status !== "queued" || t.expiresAt < new Date())
     throw new ForbiddenException("Task unavailable");
+  if (t.batchId) {
+    const batch = await db.batchDispatch.findUnique({ where: { id: t.batchId } });
+    if (!batch || batch.status !== "released" || batch.organizationId !== t.organizationId || batch.principalId !== t.principalId)
+      throw new ForbiddenException("Batch unavailable");
+  }
   const agent = await db.agent.findUnique({
     where: { id: t.principalId },
     include: {
@@ -555,6 +720,8 @@ export async function claimTask(id: string) {
       ? Array.from(new Set(agent.tokens.flatMap((v) => JSON.parse(v.scopes))))
       : [],
   };
+  if (t.batchId && agent && !batchTokenAllowed(t.tokenId, agent.tokens[0] ? { id: agent.tokens[0].id, scopes: p.scopes } : null))
+    throw new ForbiddenException({ code: "operation_not_in_token_scope", message: "The original agent token no longer permits batch execution" });
   await authorize(p, t.serverId, t.operation);
   const lease = randomUUID();
   const updated = await db.backgroundTask.updateMany({
@@ -564,7 +731,7 @@ export async function claimTask(id: string) {
   if (updated.count !== 1) throw new ForbiddenException("Task already claimed");
   return {
     lease,
-    connection: await connection(t.serverId, t.organizationId),
+    connection: await connection(t.serverId, t.organizationId, undefined, !t.batchId),
     limits: await sshLimits(t.organizationId),
     operation: t.operation,
     args: unseal(t.encryptedArguments, config.ENCRYPTION_KEY, t.organizationId),

@@ -877,7 +877,7 @@ describe.runIf(enabled)(
       expect((await call()).r.status).toBe(201);
       const limited = await call();
       expect(limited.r.status).toBe(429);
-      expect(limited.data.message).toContain("rate limit");
+      expect(limited.data.message).toContain("call limit");
     });
     it("keeps unsent server fields on a partial update", async () => {
       const before = (await request("servers")).data[0];
@@ -1038,7 +1038,7 @@ describe.runIf(enabled)(
         });
         expect(created.vpnProfileId).toBe(vpn.id);
         expect(
-          (await call("workspace_servers_list")).items.some(
+          (await call("workspace_servers_list")).servers.some(
             (s: any) => s.id === created.id,
           ),
         ).toBe(true);
@@ -1064,8 +1064,17 @@ describe.runIf(enabled)(
           name: "Moved child",
           parentId: null,
         });
-        const duplicate = await call("server_duplicate", { id: created.id });
+        // A copy cannot keep the same host and port in the same folder.
+        const sameAddress: any = await c.callTool({ name: "server_duplicate", arguments: { id: created.id } });
+        expect(sameAddress.isError).toBe(true);
+        expect(sameAddress.content?.[0]?.text).toContain("already exists in this folder");
+        const duplicate = await call("server_duplicate", { id: created.id, host: "127.0.0.2" });
+        expect(duplicate.host).toBe("127.0.0.2");
+        expect(duplicate.fingerprint).toBeNull();
         await call("server_archive", { id: duplicate.id });
+        // Archiving is deletion, so the same address can be added to the folder again.
+        const readded = await call("server_duplicate", { id: created.id, host: "127.0.0.2" });
+        await call("server_archive", { id: readded.id });
         const user = await call("user_create", {
           name: "MCP Viewer",
           email: "mcp-viewer@example.test",
@@ -1646,15 +1655,19 @@ describe.runIf(enabled)(
         "--api-stopped",
       ]);
       expect(readFileSync(backup).length).toBeGreaterThan(0);
-      const output = execFileSync(
-        "python",
-        [
-          "-c",
-          `import sqlite3; c=sqlite3.connect(r'${restored}'); print(c.execute('select count(*) from Server').fetchone()[0])`,
-        ],
-        { encoding: "utf8" },
-      );
-      expect(output.trim()).toBe("1");
+      // Earlier tests add servers, so compare against the live database rather than a fixed count.
+      const servers = (file: string) =>
+        execFileSync(
+          "python",
+          [
+            "-c",
+            `import sqlite3; c=sqlite3.connect(r'${file}'); print(c.execute('select count(*) from Server').fetchone()[0])`,
+          ],
+          { encoding: "utf8" },
+        ).trim();
+      const live = servers(path.join(directory, "test.db"));
+      expect(Number(live)).toBeGreaterThan(0);
+      expect(servers(restored)).toBe(live);
     });
   },
 );

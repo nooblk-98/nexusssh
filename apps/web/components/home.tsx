@@ -14,7 +14,7 @@ export function parseTarget(text: string) {
     .trim()
     .replace(/^ssh:\/\//i, "")
     .match(
-      /^(?:([a-z_][a-z0-9_-]{0,31})@)?([a-zA-Z0-9.-]+|\[[0-9a-fA-F:]+\])(?::(\d{1,5}))?\/?$/,
+      /^(?:([a-z_][a-z0-9_.-]{0,31})@)?([a-zA-Z0-9.-]+|\[[0-9a-fA-F:]+\])(?::(\d{1,5}))?\/?$/,
     );
   if (!m) return null;
   const port = Number(m[3] || 22);

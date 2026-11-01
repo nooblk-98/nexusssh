@@ -13,6 +13,7 @@ import {
 } from "../lib/servers";
 import { serverIcons, ServerIcon, type ServerIconName } from "./icons";
 import { Button, Check, Drawer, Field } from "./ui";
+import { MetadataEditor, parseDefaults } from "./metadata-editor";
 
 type Open = {
   server?: Row;
@@ -64,6 +65,8 @@ function ServerDrawer({ o, close }: { o: Open; close: () => void }) {
   const settings = useApi<Row>("settings");
   const { servers, groups } = useServers();
   const [advanced, setAdvanced] = useState(false);
+  const [editingMetadata, setEditingMetadata] = useState(false);
+  const effective = useApi<Row>(s ? `servers/${s.id}/effective-settings` : "servers", { enabled: !!s });
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [iconOpen, setIconOpen] = useState(false);
@@ -88,6 +91,38 @@ function ServerDrawer({ o, close }: { o: Open; close: () => void }) {
     vpnProfileId: s?.vpnProfileId || "",
     tags: (s?.tags || []).map((t: Row) => t.name).join(", "),
   }));
+  const [matchingServers, setMatchingServers] = useState<Row[]>([]);
+  const [duplicateCheckError, setDuplicateCheckError] = useState(false);
+  useEffect(() => {
+    const host = v.host.trim().toLowerCase().replace(/\.+$/, "");
+    if (!host) { setMatchingServers([]); return; }
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const rows: Row[] = [];
+        let cursor: string | null = null;
+        const seen = new Set<string>();
+        for (let page = 0; page < 1000; page++) {
+          const result: { servers: Row[]; nextCursor: string | null } = await api(`servers?search=${encodeURIComponent(host)}&fields=id,name,host,port,groupId${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
+          if (!Array.isArray(result.servers) || result.servers.length > 100) throw new Error("Invalid server page");
+          rows.push(...result.servers);
+          if (!result.nextCursor) break;
+          if (seen.has(result.nextCursor) || page === 999) throw new Error("Server page limit exceeded");
+          seen.add(result.nextCursor);
+          cursor = result.nextCursor;
+        }
+        if (!cancelled) { setMatchingServers(rows); setDuplicateCheckError(false); }
+      } catch {
+        if (!cancelled) { setMatchingServers([]); setDuplicateCheckError(true); }
+      }
+    }, 300);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [v.host]);
+  const canonicalHost = (host: string) => host.trim().toLowerCase().replace(/\.+$/, "");
+  const duplicate = matchingServers.find((server) =>
+    server.id !== s?.id && canonicalHost(server.host) === canonicalHost(v.host) &&
+    Number(server.port) === Number(v.port) && (server.groupId || null) === (v.groupId || null),
+  );
   const [term, setTerm] = useState({
     ...terminalDefaults,
     ...(s ? settingsOf(s) : {}),
@@ -124,7 +159,7 @@ function ServerDrawer({ o, close }: { o: Open; close: () => void }) {
     const port = Number(v.port);
     if (!Number.isInteger(port) || port < 1 || port > 65535)
       err.port = "Port must be between 1 and 65535";
-    if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(v.username))
+    if (!/^[a-z_][a-z0-9_.-]{0,31}$/.test(v.username))
       err.username = "Use a valid Linux user name.";
     if (!v.identityId) {
       if (v.authType === "password" && !v.password && !s)
@@ -200,6 +235,13 @@ function ServerDrawer({ o, close }: { o: Open; close: () => void }) {
     setTimeout(() => document.addEventListener("click", f, { once: true }));
     return () => document.removeEventListener("click", f);
   }, [iconOpen]);
+  if (s && editingMetadata) return <MetadataEditor title={`Settings and hardware: ${s.name}`}
+    initial={parseDefaults(s.overrides)} values={(effective.data || s.effectiveSettings)?.values} sources={(effective.data || s.effectiveSettings)?.sources} hardware hardwareInitial={s}
+    onClose={() => setEditingMetadata(false)} onSave={async ({ settings, inherit, metadata }) => {
+      await api(`servers/${s.id}/overrides`, { settings, inherit, metadata }, "PATCH");
+      await refresh("servers", `servers/${s.id}/effective-settings`);
+      notify.success("Settings and hardware saved.");
+    }} />;
   if (advanced)
     return (
       <Drawer
@@ -602,6 +644,10 @@ function ServerDrawer({ o, close }: { o: Open; close: () => void }) {
             ))}
           </select>
         </Field>
+        {duplicate && <p role="status" className="small" style={{ color: "var(--warning)" }}>
+          A server with this address, port, and folder already exists: {duplicate.name}. You can still save; the server database will check for conflicts.
+        </p>}
+        {duplicateCheckError && <p role="status" className="small">Could not check for an existing server. The database will check when you save.</p>}
         <Field label="Notes">
           <textarea
             className="textarea"
@@ -611,6 +657,7 @@ function ServerDrawer({ o, close }: { o: Open; close: () => void }) {
             onChange={put("description")}
           />
         </Field>
+        {s && <Button variant="secondary" block onClick={() => setEditingMetadata(true)}>Inherited settings and hardware</Button>}
         <Button variant="secondary" block onClick={() => setAdvanced(true)}>
           Advanced Settings
         </Button>

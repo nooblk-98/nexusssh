@@ -24,8 +24,9 @@ import {
 import { db, initializeDatabase } from "../../../packages/database/index.js";
 import { terminals } from "./terminal.js";
 import { SftpController } from "./sftp.js";
-import { queue, events } from "./domain.js";
+import { queue, events, batchQueue, batchEvents } from "./domain.js";
 import { reconcileRunningTasks } from "./task-recovery.js";
+import { startHealthWorker, enqueuePeriodicHealth, healthQueue } from "./health.js";
 @Module({ controllers: [AppController, SftpController, VpnController] })
 class AppModule {}
 @Catch()
@@ -114,13 +115,16 @@ const spec = SwaggerModule.createDocument(
   app,
   new DocumentBuilder()
     .setTitle("NexusSSH API")
-    .setVersion("0.1.0")
+    .setVersion("0.2.0")
     .addCookieAuth("nexus_session")
     .addBearerAuth()
     .build(),
 );
 SwaggerModule.setup("api/docs", app, spec);
 await app.listen(config.API_PORT, "0.0.0.0");
+const healthWorker = startHealthWorker();
+const healthRefresh = setInterval(() => { void enqueuePeriodicHealth().catch((error) => console.error("Health refresh failed:", error instanceof Error ? error.name : "unknown")); }, 5 * 60_000);
+void enqueuePeriodicHealth().catch((error) => console.error("Initial health refresh failed:", error instanceof Error ? error.name : "unknown"));
 const wss = terminals(app.getHttpServer());
 const retention = setInterval(() => {
   void db.auditEvent
@@ -138,10 +142,15 @@ const retention = setInterval(() => {
 }, 3600000);
 async function shutdown() {
   clearInterval(retention);
+  clearInterval(healthRefresh);
   wss.closeAll();
   for (const client of wss.clients) client.close();
   await queue.close();
   await events.close();
+  await batchQueue.close();
+  await batchEvents.close();
+  await healthWorker.close();
+  await healthQueue.close();
   await app.close();
   await db.$disconnect();
   process.exit(0);

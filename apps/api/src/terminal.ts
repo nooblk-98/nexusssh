@@ -16,6 +16,10 @@ import type { Principal } from "../../../packages/policy-engine/index.js";
 // kept (bounded) and replayed to a resuming browser so its screen comes back.
 const GRACE_MS = 120000;
 const REPLAY_BYTES = 256 * 1024;
+// Output arriving within a few milliseconds is sent as one frame, so bulk output
+// does not become thousands of tiny base64 messages. Large bursts flush early.
+const OUTPUT_FLUSH_MS = 5;
+const OUTPUT_FRAME_BYTES = 64 * 1024;
 const HEARTBEAT_MS = 25000;
 const METRICS_MS = 30000;
 const METRICS_TIMEOUT_MS = 5000;
@@ -43,6 +47,9 @@ type Shell = {
   metricsPending?: symbol;
   metricsEpoch?: number;
   cpuSample?: CpuSample;
+  pending?: Buffer[];
+  pendingBytes?: number;
+  flushTimer?: NodeJS.Timeout;
   ended: boolean;
 };
 export function parseMetrics(raw: string, previous?: CpuSample) {
@@ -162,6 +169,7 @@ export function terminals(server: Server) {
     clearTimeout(shell.idle);
     clearInterval(shell.revalidate);
     stopMetrics(shell);
+    flush(shell);
     shell.stream.close();
     shell.client.end();
     if (shell.ws?.readyState === WebSocket.OPEN) shell.ws.close(1000, reason);
@@ -192,6 +200,8 @@ export function terminals(server: Server) {
       shell.ws.close(1000, "Taken over");
     }
     clearTimeout(shell.grace);
+    // A resuming browser gets everything through the replay below.
+    dropPending(shell);
     shell.ws = ws;
     shell.authReq = authReq;
     send(ws, {
@@ -240,8 +250,24 @@ export function terminals(server: Server) {
     shell.replayBytes += data.length;
     while (shell.replayBytes > REPLAY_BYTES && shell.replay.length > 1)
       shell.replayBytes -= shell.replay.shift()!.length;
+    if (shell.ws?.readyState !== WebSocket.OPEN) return;
+    (shell.pending ??= []).push(data);
+    shell.pendingBytes = (shell.pendingBytes || 0) + data.length;
+    if (shell.pendingBytes >= OUTPUT_FRAME_BYTES) flush(shell);
+    else shell.flushTimer ??= setTimeout(() => flush(shell), OUTPUT_FLUSH_MS);
+  }
+  // Pending output is already in the replay buffer, so dropping it is safe.
+  function dropPending(shell: Shell) {
+    clearTimeout(shell.flushTimer);
+    shell.flushTimer = undefined;
+    shell.pending = undefined;
+    shell.pendingBytes = 0;
+  }
+  function flush(shell: Shell) {
+    const pending = shell.pending;
+    dropPending(shell);
     const ws = shell.ws;
-    if (ws?.readyState !== WebSocket.OPEN) return;
+    if (!pending?.length || ws?.readyState !== WebSocket.OPEN) return;
     if (ws.bufferedAmount > config.SSH_OUTPUT_LIMIT) {
       send(ws, {
         type: "error",
@@ -249,7 +275,7 @@ export function terminals(server: Server) {
       });
       return end(shell);
     }
-    send(ws, { type: "output", data: data.toString("base64") });
+    send(ws, { type: "output", data: Buffer.concat(pending).toString("base64") });
   }
   server.on("upgrade", async (req, socket, head) => {
     let ws: WebSocket | undefined;

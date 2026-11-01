@@ -34,8 +34,9 @@ test("server, terminal, SFTP, editor and host key prompt", async ({ page }) => {
     kind: "password",
     password: "nexus-fixture-only-password",
   });
-  const create = async (name: string, fingerprint: string | null) =>
-    api("servers", {
+  const create = async (name: string, fingerprint: string | null) => {
+    const group = await api("groups", { name: name + " folder" });
+    return api("servers", {
       name,
       host: "127.0.0.1",
       port: 22222,
@@ -43,7 +44,9 @@ test("server, terminal, SFTP, editor and host key prompt", async ({ page }) => {
       identityId: identity.id,
       fingerprint,
       fileRoot: "/home/nexus/files",
+      groupId: group.id,
     });
+  };
   const { fingerprint } = await api("servers/scan-host-key", {
     host: "127.0.0.1",
     port: 22222,
