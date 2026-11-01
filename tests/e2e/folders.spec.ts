@@ -105,9 +105,14 @@ test("create subfolders, drag folders and servers, and persist moves", async ({
         .parentId,
     ).toBe(b);
     await dragToRoot(serverRow);
-    await expect(
-      nav.locator(`:scope > [data-server-id="${serverId}"]`),
-    ).toBeVisible();
+    await expect
+      .poll(async () => {
+        const servers = await api("servers");
+        return servers.find((server: { id: string }) => server.id === serverId)
+          ?.groupId;
+      })
+      .toBeNull();
+    await expect(serverRow).toBeVisible();
     await dragToRoot(folderButton(child));
     await expect(
       nav.locator(`:scope > [data-folder-id="${child}"]`),
