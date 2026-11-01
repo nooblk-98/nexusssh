@@ -3,6 +3,7 @@ import dynamic from "next/dynamic";
 import { useEffect } from "react";
 import {
   ChevronRight,
+  Boxes,
   Columns2,
   FileText,
   Folder,
@@ -21,7 +22,15 @@ import { openMenu, openMenuAt } from "./ui";
 const TerminalView = dynamic(() => import("./terminal"), { ssr: false });
 const SftpView = dynamic(() => import("./sftp"), { ssr: false });
 const EditorView = dynamic(() => import("./editor"), { ssr: false });
-const kindIcon = { terminal: SquareTerminal, sftp: Folder, editor: FileText };
+const KubernetesConsole = dynamic(() => import("./kubernetes-console"), {
+  ssr: false,
+});
+const kindIcon = {
+  terminal: SquareTerminal,
+  sftp: Folder,
+  editor: FileText,
+  kubernetes: Boxes,
+};
 const layouts = [
   { n: 1, label: "Single view", icon: Square },
   { n: 2, label: "Two columns", icon: Columns2 },
@@ -49,6 +58,20 @@ export function Workspace() {
   const tabMenu = (t: Tab) => {
     const server = servers.find((s) => s.id === t.serverId);
     return [
+      ...(t.kind === "kubernetes"
+        ? [
+            {
+              label: "Duplicate console",
+              onClick: () =>
+                open({
+                  kind: t.kind,
+                  serverId: t.serverId,
+                  title: t.title,
+                  status: "connecting" as const,
+                }),
+            },
+          ]
+        : []),
       ...(server && t.kind !== "editor"
         ? [
             {
@@ -211,7 +234,9 @@ export function Workspace() {
               }
               onMouseDown={() => split && activate(t.id)}
             >
-              {!server ? (
+              {t.kind === "kubernetes" ? (
+                <KubernetesConsole tab={t} visible={visible} />
+              ) : !server ? (
                 <div className="empty-state">
                   <h3>Server unavailable</h3>
                   <p>

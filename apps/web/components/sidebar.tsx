@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import {
   Bell,
+  Boxes,
   Check as CheckIcon,
   ChevronDown,
   ChevronLeft,
@@ -29,7 +30,7 @@ import {
 } from "../lib/api";
 import { folderPath, folderLabel, folderOptions } from "../lib/folders";
 import { navigate } from "../lib/router";
-import { openKubernetesImport } from "../lib/kubernetes-navigation";
+import { connectCluster, openKubernetesImport } from "../lib/kubernetes-navigation";
 import { connectServer, updateServer, useServers } from "../lib/servers";
 import { useWorkspace } from "../lib/store";
 import { ServerIcon } from "./icons";
@@ -109,6 +110,7 @@ export function Sidebar({ me }: { me: Row }) {
   const admin = ["owner", "administrator"].includes(me.role);
   const { servers, groups } = useServers();
   const tagsQuery = useApi<Row[]>("tags");
+  const clusters = useApi<Row[]>("kubernetes/clusters", { enabled: admin });
   const tags = tagsQuery.data || [];
   const [defaults, setDefaults] = useState<{ kind: "groups" | "tags"; row: Row } | null>(null);
   const [view, setView] = useState<"tree" | "table" | "tags">("tree");
@@ -653,6 +655,16 @@ export function Sidebar({ me }: { me: Row }) {
           ]);
         }}
       >
+        {!!clusters.data?.length && (
+          <section aria-label="Kubernetes clusters">
+            <div className="tree-folder tag-heading"><Boxes size={16} /><span>Kubernetes</span></div>
+            {clusters.data.filter((cluster) => !q || `${cluster.name} ${cluster.context}`.toLowerCase().includes(q)).map((cluster) => (
+              <button key={cluster.id} className="tree-server kube-sidebar-cluster" title={`${cluster.name} · ${cluster.context}`} aria-label={`Open console ${cluster.name}`} onClick={() => connectCluster({ id: cluster.id, name: cluster.name })}>
+                <Boxes size={18} /><span className="grow"><span className="server-name ellipsis">{cluster.name}</span><small className="small muted ellipsis">{cluster.context}</small></span>
+              </button>
+            ))}
+          </section>
+        )}
         {view === "tree" && <>{groups.filter((g) => !g.parentId).map((g) => renderFolder(g))}{root.map((s) => serverRow(s))}</>}
         {view === "table" && <div style={{ overflowX: "auto" }}><table className="table"><thead><tr><th>{admin && selectMode ? "Select" : ""}</th><th>Status</th><th>Name</th><th>Host</th><th>Environment</th><th>vCPU</th><th>RAM</th><th>Disk</th><th>OS</th><th>Role</th><th>Check</th></tr></thead><tbody>{visible.map((s) => <tr key={s.id} onClick={() => select(s.id)}><td>{admin && selectMode && <input type="checkbox" aria-label={`Select ${s.name}`} checked={checked.includes(s.id)} onChange={() => toggleChecked(s.id)} onClick={(e) => e.stopPropagation()} />}</td><td><HealthIndicator server={s} now={healthNow} /></td><td><button className="btn btn-secondary" onClick={() => openServerDrawer({ server: s })}>{s.name}</button></td><td>{s.host}</td><td>{s.effectiveSettings?.values?.environment ?? s.environment}</td><td>{s.vcpu ?? "—"}</td><td>{s.ramBytes ?? "—"}</td><td>{s.diskBytes ?? "—"}</td><td>{s.os || "—"}</td><td>{s.role || "—"}</td><td><button className="btn btn-secondary" onClick={() => setHealth({ title: `Check ${s.name}`, servers: [s] })}>Test</button></td></tr>)}</tbody></table></div>}
         {view === "tags" && <>{tags.filter((tag) => !tagFilter || tag.id === tagFilter).map((tag) => { const list = visible.filter((s) => (s.tags || []).some((t: Row) => t.id === tag.id)); return list.length || tagFilter ? <section key={tag.id}><div className="tree-folder tag-heading"><Tag size={16} strokeWidth={1.5} /><span className="grow ellipsis">{tag.name}</span><span className="tag-count">{list.length}</span></div>{list.map((s) => serverRow(s))}</section> : null; })}{!tagFilter && visible.filter((s) => !(s.tags || []).length).length > 0 && <section><div className="tree-folder tag-heading"><Tag size={16} strokeWidth={1.5} /><span className="grow ellipsis">Untagged</span><span className="tag-count">{visible.filter((s) => !(s.tags || []).length).length}</span></div>{visible.filter((s) => !(s.tags || []).length).map((s) => serverRow(s))}</section>}</>}

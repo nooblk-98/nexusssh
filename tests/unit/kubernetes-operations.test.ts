@@ -429,6 +429,20 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
       await call("kubernetes_execution_status", { executionId: saved.id }),
     ).toMatchObject({ status: "completed", result: { spec: { replicas: 2 } } });
   });
+  it("runs the console's version command through MCP with an exact single-use approval", async () => {
+    const command = { clusterId: cluster, command: ["kubectl", "version"] };
+    const approvedCommand = await approved("kubernetes_execute", command);
+    expect(fixture.request).not.toHaveBeenCalled();
+    fixture.request.mockResolvedValueOnce({ gitVersion: "v1.28.9+rke2r1" });
+    expect(await call("kubernetes_execute", approvedCommand)).toMatchObject({
+      status: "completed",
+      result: { gitVersion: "v1.28.9+rke2r1" },
+    });
+    expect(fixture.request.mock.calls[0][1]).toBe("/version");
+    await expect(call("kubernetes_execute", approvedCommand)).rejects.toThrow(
+      /consumed/,
+    );
+  });
   it("offers scoped resource pages, version checks and bounded previous-container logs", async () => {
     fixture.request.mockResolvedValueOnce({
       items: [

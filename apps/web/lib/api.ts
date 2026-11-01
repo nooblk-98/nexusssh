@@ -23,10 +23,12 @@ export async function api<T = Row>(
   path: string,
   body?: unknown,
   method?: string,
+  signal?: AbortSignal,
 ): Promise<T> {
   const response = await fetch("/api/" + path, {
     method: method || (body ? "POST" : "GET"),
     headers: { "Content-Type": "application/json" },
+    signal,
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   const data = await response.json().catch(() => ({}));

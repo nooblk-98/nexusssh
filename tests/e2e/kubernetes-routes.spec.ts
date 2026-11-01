@@ -120,8 +120,12 @@ test("a cluster routing failure shows its cause without claiming namespace permi
     await route.fulfill({ json: data });
   });
   await page.goto("/settings/kubernetes");
-  await page.getByRole("button", { name: "Open cluster", exact: true }).click();
-  await expect(page.getByRole("alert").filter({ hasText: failure })).toBeVisible();
+  await page
+    .getByRole("button", { name: "Browse resources", exact: true })
+    .click();
+  await expect(
+    page.getByRole("alert").filter({ hasText: failure }),
+  ).toBeVisible();
   await expect(
     page.getByText(
       "Namespace discovery is unavailable until the cluster connection succeeds.",
@@ -133,7 +137,5 @@ test("a cluster routing failure shows its cause without claiming namespace permi
       exact: false,
     }),
   ).toHaveCount(0);
-  await expect(
-    page.getByLabel("Namespace", { exact: true }),
-  ).toBeEnabled();
+  await expect(page.getByLabel("Namespace", { exact: true })).toBeEnabled();
 });

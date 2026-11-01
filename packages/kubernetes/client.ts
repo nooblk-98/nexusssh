@@ -29,6 +29,7 @@ export async function kubernetesRequest(
     method?: string;
     body?: string;
     contentType?: string;
+    accept?: string;
     signal?: AbortSignal;
     timeoutMs?: number;
   } = {},
@@ -56,7 +57,7 @@ export async function kubernetesRequest(
         method: options.method || "GET",
         headers: {
           ...target.headers,
-          Accept: text ? "text/plain" : "application/json",
+          Accept: options.accept || (text ? "text/plain" : "application/json"),
           ...(options.contentType
             ? { "Content-Type": options.contentType }
             : {}),

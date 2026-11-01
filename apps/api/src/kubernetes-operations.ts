@@ -33,7 +33,10 @@ import {
   KubernetesError,
 } from "../../../packages/kubernetes/client.js";
 import { kubernetesExec } from "../../../packages/kubernetes/exec.js";
-import { planCommand } from "../../../packages/kubernetes/commands.js";
+import {
+  prepareConsoleCommand,
+  runConsoleCommand,
+} from "../../../packages/kubernetes/console.js";
 import {
   resourcePath,
   resources,
@@ -290,10 +293,10 @@ async function perform(
     `${p.organizationId}:kubernetes:${cluster.id}`,
   ) as ClusterConnection;
   if (kubernetesWriteOperations.includes(op)) {
-    let plan: ReturnType<typeof planCommand> | undefined;
+    let plan: ReturnType<typeof prepareConsoleCommand> | undefined;
     if (op === "kubernetes_execute") {
       try {
-        plan = planCommand(a as any, cluster.namespace);
+        plan = prepareConsoleCommand(a as any, cluster.namespace);
       } catch {
         throw new BadRequestException(
           "Unsupported Kubernetes command, flags, namespace, or manifest. See the MCP command reference.",
@@ -411,18 +414,11 @@ async function perform(
                 signal,
                 routing.network,
               )
-            : await kubernetesRequest(
-                connection,
-                plan!.path,
-                cidrs(),
-                plan!.text,
-                {
-                  ...plan,
-                  signal,
-                  timeoutMs: a.timeoutMs,
-                  route: routing.network,
-                },
-              );
+            : await runConsoleCommand(connection, plan!, cidrs(), {
+                signal,
+                timeoutMs: a.timeoutMs,
+                route: routing.network,
+              });
       } catch (error) {
         // A lost response never proves that a remote mutation/command failed.
         status = "interrupted";

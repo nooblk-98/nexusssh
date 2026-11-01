@@ -14,8 +14,9 @@ import {
   Post,
   Query,
   Req,
+  Res,
 } from "@nestjs/common";
-import type { Request } from "express";
+import type { Request, Response } from "express";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { db } from "../../../packages/database/index.js";
@@ -41,6 +42,11 @@ import {
   resources,
   summarizeResource,
 } from "../../../packages/kubernetes/resources.js";
+import {
+  prepareConsoleCommand,
+  runConsoleCommand,
+  formatConsoleResult,
+} from "../../../packages/kubernetes/console.js";
 
 const input = z
   .object({
@@ -379,6 +385,130 @@ export class KubernetesController {
         select: { id: true },
       });
       throw error;
+    }
+  }
+
+  @Post("clusters/:id/console") async consoleCommand(
+    @Req() req: Request,
+    @Param("id") id: string,
+    @Body() body: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const abort = new AbortController();
+    const onClose = () => {
+      if (!res.writableEnded) abort.abort();
+    };
+    res.on("close", onClose);
+    try {
+      const p = await this.principal(req);
+      const args = z
+        .object({
+          command: z.array(z.string().min(1).max(8192)).min(1).max(64),
+          namespace: namespaceName.optional(),
+          manifest: z
+            .string()
+            .max(256 * 1024)
+            .optional(),
+          timeoutMs: z.number().int().min(1000).max(60000).default(30000),
+        })
+        .strict()
+        .parse(body);
+      if (res.destroyed) abort.abort();
+      abort.signal.throwIfAborted();
+      return await withKubernetesSlot(p.organizationId, async () => {
+        const { cluster, route, plan, execution } = await db.$transaction(
+          async (tx) => {
+            const cluster = await tx.kubernetesCluster.findFirst({
+              where: {
+                id: z.uuid().parse(id),
+                organizationId: p.organizationId,
+              },
+            });
+            if (!cluster)
+              throw new NotFoundException("Kubernetes cluster unavailable.");
+            let plan;
+            try {
+              plan = prepareConsoleCommand(
+                { ...args, namespace: undefined },
+                args.namespace || cluster.namespace,
+              );
+            } catch (error) {
+              throw new BadRequestException(
+                error instanceof Error
+                  ? error.message
+                  : "Unsupported kubectl command.",
+              );
+            }
+            const { network: route } = await kubernetesRoute(
+              p.organizationId,
+              cluster,
+              tx,
+            );
+            abort.signal.throwIfAborted();
+            const execution = await tx.kubernetesExecution.create({
+              data: {
+                organizationId: p.organizationId,
+                principalId: p.id,
+                clusterId: cluster.id,
+                operation: "kubernetes_console",
+                status: "running",
+                expiresAt: new Date(Date.now() + 3600000),
+              },
+            });
+            return { cluster, route, plan, execution };
+          },
+        );
+        let status = "interrupted";
+        try {
+          const connection = unseal(
+            cluster.encryptedConfig,
+            config.ENCRYPTION_KEY,
+            `${p.organizationId}:kubernetes:${cluster.id}`,
+          ) as ClusterConnection;
+          const verb =
+            args.command[0] === "kubectl" ? args.command[1] : args.command[0];
+          const explicitOutput = args.command.some((part) =>
+            /^(?:-o|--output)(?:=|$)/.test(part),
+          );
+          const result = await runConsoleCommand(
+            connection,
+            plan,
+            config.KUBERNETES_ALLOWED_CIDRS.split(",")
+              .map((cidr) => cidr.trim())
+              .filter(Boolean),
+            {
+              route,
+              signal: abort.signal,
+              timeoutMs: args.timeoutMs,
+              ...(verb === "get" && !explicitOutput
+                ? {
+                    accept:
+                      "application/json;as=Table;g=meta.k8s.io;v=v1,application/json",
+                  }
+                : {}),
+            },
+          );
+          await this.principal(req);
+          status = "completed";
+          return formatConsoleResult(result, args.command, plan.text);
+        } catch (error) {
+          if (error instanceof KubernetesError)
+            throw new HttpException(error.message, error.status);
+          if (error instanceof HttpException) throw error;
+          throw new HttpException(
+            "Command interrupted. The remote outcome may be unknown; inspect the cluster before retrying.",
+            502,
+          );
+        } finally {
+          await db.kubernetesExecution.update({
+            where: { id: execution.id },
+            data: { status },
+          });
+          await this.audit(p, "console_command", status, cluster.id);
+        }
+      });
+    } finally {
+      res.off("close", onClose);
     }
   }
 

@@ -61,7 +61,7 @@ export const kubernetesToolDescriptions: Record<string, string> = {
   kubernetes_pod_logs:
     "Read bounded container logs from a granted cluster, up to 1000 lines and 256 KB.",
   kubernetes_execute:
-    "Run an approved kubectl-style command using argv, e.g. ['get','pods','-n','apps'] or ['scale','deployment/api','--replicas=3']. Supports get, describe, logs, scale, rollout restart, delete, patch, and apply -f - with an inline manifest. Uses the saved cluster connection. No local shell, credential overrides, plugins, files, or URLs. Always requires exact single-use human approval, even for reads.",
+    "Execute a kubectl command on a saved Kubernetes cluster using argv, optionally prefixed with kubectl, e.g. ['kubectl','get','pods','-n','apps'] or ['scale','deployment/api','--replicas=3']. Uses the same cluster command runner as the browser console. Supports version, get, describe, logs, scale, rollout restart, delete, patch, and apply -f - with an inline manifest. Use kubernetes_pod_exec for a command inside a container. No local shell, credential overrides, plugins, files, or URLs. Always requires exact single-use human approval, even for reads.",
   kubernetes_pod_exec:
     "Run an approved command argv inside one named pod/container, e.g. ['sh','-lc','id']. Returns bounded stdout, stderr, and exit code. No interactive TTY. Always requires exact single-use human approval. Timeout/cancellation may leave remote processes running; never retry automatically.",
   kubernetes_execution_status:

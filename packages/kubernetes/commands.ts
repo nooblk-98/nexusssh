@@ -74,7 +74,7 @@ export type CommandPlan = {
   text?: boolean;
 };
 const invalid = (
-  message = "Unsupported kubectl command or flags. See the Kubernetes MCP command reference.",
+  message = "Unsupported kubectl command or flags. See the Kubernetes command reference.",
 ): never => {
   throw new Error(message);
 };

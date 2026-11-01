@@ -12,9 +12,9 @@ local `kubectl`. Saved WireGuard VPN and SSH bastion routes are also supported.
    Files are limited to 256 KB.
 3. Choose the context to save. File imports read available contexts automatically;
    after pasting, use **Read contexts**. Each saved profile represents one context.
-4. Save the profile and use **Test connection** to verify the API endpoint and
-   read its Kubernetes version. Resource permissions are checked by Kubernetes
-   when each resource is requested.
+4. Save the profile and choose **Open console**, or click its entry in the main
+   sidebar. The console verifies the API connection and shows its Kubernetes
+   version. Resource permissions are checked by Kubernetes for each command.
 
 Choose an optional **WireGuard VPN** and/or **SSH bastion** in the cluster form.
 These selections can be changed later without uploading the kubeconfig again.
@@ -100,9 +100,42 @@ a bastion, private hostnames need working DNS servers in the VPN profile, with
 those servers reachable through the VPN. Namespace discovery errors only suggest
 an identity permission issue when the API returns HTTP 403.
 
-## Resource browsing and logs
+## Cluster command console
 
-The resource selector includes pods, deployments, StatefulSets, DaemonSets,
+**Open console** opens a workspace terminal tab alongside SSH terminals. Type
+`kubectl get nodes`, `kubectl get pods -A`, or `help`. Each tab remembers its
+selected namespace; `-n` overrides that default for one command. Up/Down recalls
+commands during the current visit. Reloading restores the tab and namespace,
+but command history/output are not stored in browser storage or replayed.
+
+Supported commands are `version`, `get`, `describe`, `logs`, `scale`,
+`rollout restart`, `delete`, `patch`, and `apply -f -`, using the same bounded
+command vocabulary as MCP below. `get` displays Kubernetes table output when
+available; use `-o json` or `-o yaml` for structured output. Lists have up to
+100 results; use the returned continuation cursor with `--continue` to page.
+Logs are bounded snapshots. Streaming/watch, interactive pod shells, shell
+pipelines, local files/plugins and credential overrides are not supported.
+This is a cluster command console, not a shell on the NexusSSH host.
+
+For `kubectl apply -f -`, paste one manifest and press Ctrl+D. Ctrl+C cancels
+manifest input or stops waiting for a running command. Cancelling a request
+does not prove a remote change was undone; inspect the cluster before retrying.
+Each command runs at most 60 seconds and returns at most 256 KB of console
+output. Closing the tab aborts its request; commands never retry automatically.
+
+Only signed-in workspace owners/administrators can use the browser console.
+Commands use the saved encrypted connection and its WireGuard/bastion route,
+with the same destination and TLS checks. Running commands prevent connection
+or credential changes. Command outcomes are audited without storing the
+entered command or its output. MCP agents use `kubernetes_execute` and
+`kubernetes_pod_exec` with explicit grants or Administrator access and the
+existing single-use human approval flow; they cannot use the browser endpoint
+to bypass approvals or retrieve saved credentials.
+
+## Optional resource browsing and logs
+
+Choose **Browse resources** on a cluster profile to open the optional resource
+view. The selector includes pods, deployments, StatefulSets, DaemonSets,
 services, nodes, and namespaces. Apply a namespace or `*` for all namespaces.
 Nodes and namespaces are cluster-scoped. Namespace discovery is optional: if
 the supplied identity cannot list namespaces, enter an allowed namespace manually.
@@ -235,6 +268,7 @@ local shell or install a kubectl executable.
 
 | Command argv | Behavior |
 | --- | --- |
+| `["kubectl", "version"]` | Kubernetes server version through the saved cluster route. |
 | `["get", "pods", "-n", "apps"]` | JSON resource list, up to 100 objects with Kubernetes continuation metadata. |
 | `["get", "deploy/api", "-o", "json"]` | One raw resource. `json` and `yaml` flags are accepted; output is always JSON. |
 | `["describe", "pod/api-1", "-n", "apps"]` | Raw JSON inspection of that resource; no kubectl events/text rendering. |

@@ -57,13 +57,14 @@ export async function savePrefs(patch: Partial<Prefs>) {
   await api("preferences", patch, "PATCH").catch(notify.error);
 }
 
-export type TabKind = "terminal" | "sftp" | "editor";
+export type TabKind = "terminal" | "sftp" | "editor" | "kubernetes";
 export type Tab = {
   id: string;
   kind: TabKind;
   serverId: string;
   title: string;
   path?: string;
+  namespace?: string;
   status?: "connecting" | "connected" | "error" | "closed";
   // Terminal resume token, so a reload reattaches to the same shell.
   resume?: string;

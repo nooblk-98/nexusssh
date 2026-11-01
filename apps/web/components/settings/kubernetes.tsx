@@ -34,7 +34,10 @@ import {
   confirmDialog,
 } from "../ui";
 import { PageHead } from "./page-head";
-import { useKubernetesImport } from "../../lib/kubernetes-navigation";
+import {
+  connectCluster,
+  useKubernetesImport,
+} from "../../lib/kubernetes-navigation";
 
 type Cluster = {
   id: string;
@@ -549,7 +552,7 @@ export function KubernetesClusters() {
     <div className="page kube-page">
       <PageHead
         title="Kubernetes"
-        sub="Connect cluster APIs, browse resources, and read pod logs."
+        sub="Manage saved clusters and open a kubectl console."
       >
         <Button variant="outline" onClick={() => setForm({})}>
           <Plus size={16} /> Add cluster
@@ -861,12 +864,11 @@ export function KubernetesClusters() {
                       : "Not checked"}
                 </span>
                 <span className="grow" />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => open(cluster)}
-                >
-                  Open cluster
+                <Button size="sm" onClick={() => connectCluster(cluster)}>
+                  Open console
+                </Button>
+                <Button variant="text" size="sm" onClick={() => open(cluster)}>
+                  Browse resources
                 </Button>
               </div>
             </section>
@@ -890,7 +892,7 @@ export function KubernetesClusters() {
           onClose={() => setForm(null)}
           onSaved={(cluster) => {
             setForm(null);
-            open(cluster);
+            if (selected) open(cluster);
           }}
         />
       )}

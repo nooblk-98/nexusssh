@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ForbiddenException, NotFoundException } from "@nestjs/common";
 import type { Request } from "express";
+import type { Response } from "express";
+import { EventEmitter } from "node:events";
 import { unseal } from "../../packages/shared/crypto.js";
 
 const fixture = vi.hoisted(() => ({
@@ -15,6 +17,7 @@ const fixture = vi.hoisted(() => ({
   remote: vi.fn(),
   encryptionKey: "ab".repeat(32),
   running: 0,
+  executions: new Map<string, any>(),
 }));
 
 vi.mock("../../packages/shared/config.js", () => ({
@@ -43,7 +46,21 @@ vi.mock("../../packages/database/index.js", () => {
       $transaction: vi.fn(async (work) =>
         work((await import("../../packages/database/index.js")).db),
       ),
-      kubernetesExecution: { count: vi.fn(async () => fixture.running) },
+      kubernetesExecution: {
+        count: vi.fn(async () => fixture.running),
+        create: vi.fn(async ({ data }) => {
+          const row = { id: String(fixture.executions.size), ...data };
+          fixture.executions.set(row.id, row);
+          fixture.running++;
+          return row;
+        }),
+        update: vi.fn(async ({ where, data }) => {
+          fixture.running--;
+          const row = { ...fixture.executions.get(where.id), ...data };
+          fixture.executions.set(where.id, row);
+          return row;
+        }),
+      },
       webSession: {
         findUnique: vi.fn(async () => ({
           userId: fixture.actor.id,
@@ -169,6 +186,128 @@ beforeEach(() => {
   fixture.audit.length = 0;
   fixture.remote.mockReset();
   fixture.running = 0;
+  fixture.executions.clear();
+});
+
+describe("Kubernetes browser console", () => {
+  const response = () =>
+    Object.assign(new EventEmitter(), {
+      writableEnded: false,
+    }) as unknown as Response;
+  it("executes kubectl on the saved connection with namespace flags overriding the console default and returns table output", async () => {
+    const controller = new KubernetesController();
+    const cluster = await controller.create(request, {
+      name: "Development",
+      kubeconfig: source(),
+    });
+    fixture.remote.mockResolvedValue({
+      kind: "Table",
+      columnDefinitions: [{ name: "Name" }, { name: "Status" }],
+      rows: [{ cells: ["api-1", "Running"] }],
+    });
+    const result = await controller.consoleCommand(
+      request,
+      cluster.id,
+      {
+        command: ["kubectl", "get", "pods", "-n", "production"],
+        namespace: "default",
+      },
+      response(),
+    );
+    expect(result.output).toMatch(/NAME\s+STATUS\napi-1\s+Running/);
+    expect(result.output).not.toContain("fixture-token");
+    expect(fixture.remote.mock.calls[0][1]).toBe(
+      "/api/v1/namespaces/production/pods?limit=100",
+    );
+    expect(fixture.remote.mock.calls[0][4]).toMatchObject({
+      method: "GET",
+      accept: expect.stringContaining("as=Table"),
+    });
+    expect([...fixture.executions.values()][0]).toMatchObject({
+      operation: "kubernetes_console",
+      status: "completed",
+    });
+    expect(fixture.running).toBe(0);
+  });
+  it("blocks agents, other workspaces and credential export without opening a connection", async () => {
+    const controller = new KubernetesController();
+    const cluster = await controller.create(request, {
+      name: "Development",
+      kubeconfig: source(),
+    });
+    const args = { command: ["get", "pods"] };
+    await expect(
+      controller.consoleCommand(
+        {
+          ...request,
+          cookies: {},
+          headers: { authorization: "Bearer fixture-agent" },
+        } as Request,
+        cluster.id,
+        args,
+        response(),
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(
+      controller.consoleCommand(
+        request,
+        "1d797b1a-8cd8-4a4e-bdc7-bb7a233be45c",
+        args,
+        response(),
+      ),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    await expect(
+      controller.consoleCommand(
+        request,
+        cluster.id,
+        { command: ["config", "view", "--raw"] },
+        response(),
+      ),
+    ).rejects.toThrow();
+    expect(fixture.remote).not.toHaveBeenCalled();
+    expect(fixture.executions.size).toBe(0);
+  });
+  it("cancels a disconnected console request and protects credentials while it is running", async () => {
+    const controller = new KubernetesController();
+    const cluster = await controller.create(request, {
+      name: "Development",
+      kubeconfig: source(),
+    });
+    fixture.remote.mockImplementationOnce(
+      (_connection, _path, _cidrs, _text, options) =>
+        new Promise((_resolve, reject) => {
+          options.signal.addEventListener(
+            "abort",
+            () =>
+              reject(
+                new KubernetesError(
+                  "Request cancelled; remote outcome unknown.",
+                ),
+              ),
+            { once: true },
+          );
+        }),
+    );
+    const res = response();
+    const pending = controller.consoleCommand(
+      request,
+      cluster.id,
+      { command: ["scale", "deploy/api", "--replicas=2"] },
+      res,
+    );
+    const rejected = expect(pending).rejects.toThrow(/remote outcome unknown/);
+    await vi.waitFor(() => expect(fixture.remote).toHaveBeenCalledTimes(1));
+    await expect(
+      controller.update(request, cluster.id, {
+        kubeconfig: source("new-token"),
+      }),
+    ).rejects.toThrow(/Wait for active Kubernetes/);
+    res.emit("close");
+    await rejected;
+    expect([...fixture.executions.values()][0].status).toBe("interrupted");
+    expect(res.listenerCount("close")).toBe(0);
+    expect(fixture.running).toBe(0);
+  });
 });
 
 describe("Kubernetes profile and access controls", () => {

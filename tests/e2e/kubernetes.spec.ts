@@ -165,6 +165,9 @@ test("import a direct cluster, browse paginated resources, read logs, edit metad
   });
   await page.getByLabel("Kubernetes context").selectOption("production");
   await page.getByRole("button", { name: "Save cluster", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Browse resources", exact: true })
+    .click();
   await expect(
     page.getByRole("cell", { name: "api-first", exact: true }),
   ).toBeVisible();
@@ -320,6 +323,9 @@ test("handles unsupported contexts and cluster RBAC failures without showing cre
   ).toBeDisabled();
   await page.getByLabel("Kubeconfig contents").fill(kubeconfig);
   await page.getByRole("button", { name: "Save cluster", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Browse resources", exact: true })
+    .click();
   await expect(page.locator(".kube-page").getByRole("alert")).toContainText(
     "does not have permission",
   );

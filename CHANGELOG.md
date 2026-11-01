@@ -31,6 +31,11 @@
 
 ### Added
 
+- Kubernetes command consoles in workspace tabs, with sidebar cluster entries,
+  a namespace selector, history, cancellation, table/JSON/YAML output and inline
+  `apply -f -` manifest input. Saved VPN/bastion routes and encrypted credentials
+  are reused. MCP executes the same supported kubectl commands with its existing
+  exact-command approval and access controls.
 - Optional saved WireGuard and SSH bastion routes for Kubernetes profiles,
   including WireGuard → bastion → API connections and tunneled pod WebSockets.
   Destination allowlists, bastion host-key checks, TLS identity and route-bound
