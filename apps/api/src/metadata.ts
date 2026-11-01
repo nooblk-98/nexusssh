@@ -2,6 +2,7 @@ import { BadRequestException } from "@nestjs/common";
 import { z } from "zod";
 import { db } from "../../../packages/database/index.js";
 import type { Prisma } from "@prisma/client";
+import { sshHealthState, SSH_HEALTH_STALE_MS } from "../../../packages/shared/ssh-health.js";
 
 export const settingsSchema = z.object({
   identityId: z.uuid().optional(),
@@ -114,6 +115,6 @@ export function numericMetadata<T extends { ramBytes: { toString(): string } | n
     if (!Number.isSafeInteger(parsed) || parsed < 0) throw new BadRequestException("Stored byte count exceeds the supported range");
     return parsed;
   };
-  const healthStale = !row.lastCheckedAt || Date.now() - row.lastCheckedAt.getTime() > 30 * 60_000;
-  return { ...row, ramBytes: number(row.ramBytes), diskBytes: number(row.diskBytes), status: healthStale ? "unknown" : row.status, healthFailureCategory: healthStale ? null : row.healthFailureCategory, healthStale };
+  const healthStale = !row.lastCheckedAt || Date.now() - row.lastCheckedAt.getTime() > SSH_HEALTH_STALE_MS;
+  return { ...row, ramBytes: number(row.ramBytes), diskBytes: number(row.diskBytes), status: sshHealthState(row), healthFailureCategory: healthStale ? null : row.healthFailureCategory, healthStale };
 }

@@ -101,6 +101,17 @@ Back up and verify restore before upgrading. Review migrations and dependency ch
 
 `SSH_CONNECT_TIMEOUT`, `SSH_IDLE_TIMEOUT`, `SSH_MAX_SESSIONS`, and `SSH_OUTPUT_LIMIT` bound resources. `SSH_WORKER_CONCURRENCY` (default 4) sets how many interactive SSH operations run at once, and `SSH_HEALTH_CONCURRENCY` (default 4) how many reachability checks run at once. `AUDIT_RETENTION_DAYS` controls audit cleanup. Terminal transcripts are not recorded.
 
+Server status is evidence of reachability through its saved route. Green means
+a recent successful check or authenticated connection; an active SSH terminal
+also shows green. Red means a network/handshake check failed twice. Gray means
+the result is stale or a VPN, DNS, policy, permission or configuration problem
+prevented the check; hover the dot for its reason and timestamp. Successful
+terminal, SFTP and completed MCP operations refresh this evidence without
+changing host-key trust. Older queued probes cannot overwrite newer successful
+connections. Unsuccessful checks become eligible for another scan after one
+minute; successful evidence expires after 30 minutes. The scheduler runs every
+minute and the server list refreshes every 30 seconds while the app is visible.
+
 Job output is transient. Restarting Redis loses queued work/results; task metadata may remain queued or running until reconciled. Inspect and explicitly reissue safe operations rather than automatically replaying side effects.
 
 Direct Kubernetes API connections use a separate `KUBERNETES_ALLOWED_CIDRS`

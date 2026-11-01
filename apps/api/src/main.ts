@@ -128,7 +128,7 @@ const spec = SwaggerModule.createDocument(
 SwaggerModule.setup("api/docs", app, spec);
 await app.listen(config.API_PORT, "0.0.0.0");
 const healthWorker = startHealthWorker();
-const healthRefresh = setInterval(() => { void enqueuePeriodicHealth().catch((error) => console.error("Health refresh failed:", error instanceof Error ? error.name : "unknown")); }, 5 * 60_000);
+const healthRefresh = setInterval(() => { void enqueuePeriodicHealth().catch((error) => console.error("Health refresh failed:", error instanceof Error ? error.name : "unknown")); }, 60_000);
 void enqueuePeriodicHealth().catch((error) => console.error("Initial health refresh failed:", error instanceof Error ? error.name : "unknown"));
 const wss = terminals(app.getHttpServer());
 const retention = setInterval(() => {

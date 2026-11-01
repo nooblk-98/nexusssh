@@ -2,17 +2,19 @@
 import { useState } from "react";
 import { api, notify, refresh, type Row } from "../lib/api";
 import { Button, Drawer, confirmDialog } from "./ui";
+import { useWorkspace } from "../lib/store";
+import { sshHealthState } from "../../../packages/shared/ssh-health";
 
 type Check = { serverId: string; checkId: string; status: string; checkedAt?: string; failureCategory?: string | null; observedFingerprint?: string | null; fingerprintComparison?: string | null };
 type Batch = { batchId: string; status: string; authenticationVerified: boolean; checks: Check[] };
 export function healthState(server: Row, now = Date.now()): "reachable" | "unreachable" | "unknown" {
-  const checked = server.lastCheckedAt && new Date(server.lastCheckedAt).getTime();
-  if (!checked || !Number.isFinite(checked) || now - checked > 30 * 60_000) return "unknown";
-  return server.status === "reachable" || server.status === "unreachable" ? server.status : "unknown";
+  return sshHealthState(server, now);
 }
 export function HealthIndicator({ server, now }: { server: Row; now?: number }) {
-  const state = healthState(server, now);
-  return <span role="img" aria-label={`Connection ${state}`} title={`${state === "unknown" ? "Not checked recently" : state}${server.lastCheckedAt ? ` · checked ${new Date(server.lastCheckedAt).toLocaleString()}` : ""}`} style={{ color: state === "reachable" ? "var(--success)" : state === "unreachable" ? "var(--danger)" : "var(--text-muted)", fontWeight: 700 }}>●</span>;
+  const connected = useWorkspace((workspace) => workspace.tabs.some((tab) => tab.kind === "terminal" && tab.serverId === server.id && tab.status === "connected"));
+  const state = connected ? "reachable" : healthState(server, now);
+  const reason = connected ? "Connected SSH session" : state === "unknown" && server.healthFailureCategory ? `Check unavailable: ${server.healthFailureCategory.replaceAll("_", " ")}` : state === "unknown" ? "Not checked recently" : state;
+  return <span role="img" aria-label={`Connection ${state}`} title={`${reason}${!connected && server.lastCheckedAt ? ` · checked ${new Date(server.lastCheckedAt).toLocaleString()}` : ""}`} style={{ color: state === "reachable" ? "var(--success)" : state === "unreachable" ? "var(--danger)" : "var(--muted)", fontWeight: 700 }}>●</span>;
 }
 export function ServerHealth({ servers, title, groupId, canManage, onClose }: { servers: Row[]; title: string; groupId?: string; canManage: boolean; onClose: () => void }) {
   const [batch, setBatch] = useState<Batch | null>(null);

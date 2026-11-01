@@ -30,6 +30,7 @@ import {
   sftp as openSftp,
 } from "../../../packages/ssh-core/index.js";
 import type { Principal } from "../../../packages/policy-engine/index.js";
+import { markSshReachable } from "./connection-health.js";
 
 // Interactive SFTP for signed-in people, alongside the interactive terminal:
 // the same per-operation permissions and audit, but no approval step (that
@@ -55,6 +56,7 @@ async function session(p: Principal, serverId: string): Promise<Session> {
       const client = await connect(c, await sshLimits(p.organizationId));
       client.on("close", () => pool.delete(key));
       client.on("error", () => pool.delete(key));
+      await markSshReachable(p.organizationId, serverId, c).catch(() => {});
       return { client, sftp: await openSftp(client), root: c.fileRoot };
     })();
     pool.set(key, pending);

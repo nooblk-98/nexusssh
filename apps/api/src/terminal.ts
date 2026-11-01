@@ -9,6 +9,7 @@ import { authorize, connection, audit, sshLimits } from "./domain.js";
 import { connect } from "../../../packages/ssh-core/index.js";
 import { config, sameOrigin } from "../../../packages/shared/config.js";
 import { db } from "../../../packages/database/index.js";
+import { markSshReachable } from "./connection-health.js";
 import type { Principal } from "../../../packages/policy-engine/index.js";
 
 // A shell outlives its WebSocket for a short grace period so a page reload or
@@ -315,12 +316,14 @@ export function terminals(server: Server) {
       );
       let gone = false;
       void socketClosed.then(() => (gone = true));
+      const target = await connection(id, p.organizationId);
       const client = await connect(
-        await connection(id, p.organizationId),
+        target,
         await sshLimits(p.organizationId),
       );
       starting.client = client;
       if (gone) return void client.end();
+      await markSshReachable(p.organizationId, id, target).catch(() => {});
       const stream = await new Promise<ClientChannel>((resolve, reject) =>
         client.shell({ term: "xterm-256color", cols: 100, rows: 30 }, (e, s) =>
           e ? reject(e) : resolve(s),

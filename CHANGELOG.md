@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- Successful SSH terminal, SFTP and MCP connections now refresh host status.
+  Older queued probes cannot overwrite newer connection evidence. Route,
+  policy and configuration failures show an unavailable check instead of a
+  red offline host; transient network scans retry once, and failed hosts are
+  checked again promptly. Sidebar status refreshes automatically.
 - Aligned SSH and Kubernetes sidebar rows and replaced generic cluster icons
   with the Kubernetes logo. The console prompt now shows only `kubectl >`.
 - Kubernetes routes can resolve private API hostnames through the saved SSH

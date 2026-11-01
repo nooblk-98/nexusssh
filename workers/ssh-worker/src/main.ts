@@ -118,7 +118,7 @@ async function runBatch(batchId: string, taskIds: string[], serverIds: string[])
         }, claim.operation, claim.args, abort.signal);
         const state = await api(`tasks/${taskId}/status`);
         if (state.cancelled || abort.signal.aborted) throw new Error("Batch command was cancelled");
-        await api(`tasks/${taskId}/finish`, { lease: claim.lease, status: "completed", exitCode: result.exitCode, durationMs: result.durationMs });
+        await api(`tasks/${taskId}/finish`, { lease: claim.lease, status: "completed", exitCode: result.exitCode, durationMs: result.durationMs, connectedHost: claim.connection.host, connectedPort: claim.connection.port });
         results[index] = { serverId: claim.args.serverId, taskId, status: "success", result: boundedResult({ serverId: claim.args.serverId, executionId: taskId, status: "completed", ...redact(result, claim.connection) }, outputBudget) };
       } catch (error) {
         await api(`tasks/${taskId}/finish`, { lease: claim.lease, status: abort.signal.aborted ? "cancelled" : "failed" }).catch(() => {});
@@ -168,6 +168,8 @@ const worker = new Worker(
         status: "completed",
         exitCode: result.exitCode,
         durationMs: result.durationMs,
+        connectedHost: claim.connection.host,
+        connectedPort: claim.connection.port,
       });
       return {
         serverId: claim.args.serverId,

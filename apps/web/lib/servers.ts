@@ -6,7 +6,7 @@ import type { Folder } from "./folders";
 const EMPTY_SERVERS: Row[] = [];
 const EMPTY_GROUPS: Folder[] = [];
 export function useServers() {
-  const servers = useApi<Row[]>("servers");
+  const servers = useApi<Row[]>("servers", { interval: 30000 });
   const groups = useApi<Folder[]>("groups");
   const serverData = servers.data || EMPTY_SERVERS;
   const groupData = groups.data || EMPTY_GROUPS;

@@ -17,7 +17,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { copyText, useApi, type Row } from "../lib/api";
+import { copyText, refresh, useApi, type Row } from "../lib/api";
 import {
   loadHistory,
   remember,
@@ -192,6 +192,7 @@ export default function TerminalView({
         ready = true;
         updateTab(tab.id, { resume: m.resume });
         status("connected");
+        void refresh("servers");
         resize();
         t.focus();
       } else if (m.type === "metrics") {

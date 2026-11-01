@@ -86,6 +86,7 @@ async function preflightDefaults(tx: Prisma.TransactionClient, org: string, type
 }
 import { finishTask } from "./task-finish.js";
 import { saveFolder, deleteFolder } from "./folders.js";
+import { markSshReachable } from "./connection-health.js";
 import { enqueueHealthBatch } from "./health.js";
 import {
   WORKSPACE_MANAGE,
@@ -2079,12 +2080,16 @@ export class AppController {
         status: z.enum(["completed", "failed", "cancelled"]),
         exitCode: z.number().int().nullable().optional(),
         durationMs: z.number().int().optional(),
+        connectedHost: z.string().min(1).max(253).optional(),
+        connectedPort: z.number().int().min(1).max(65535).optional(),
       })
       .parse(body);
     const t = await db.backgroundTask.findUniqueOrThrow({ where: { id } });
     if (!t.leaseHash || !equal(t.leaseHash, hash(a.lease)))
       throw new ForbiddenException();
     const status = await finishTask(id, t.leaseHash, a);
+    if (status === "completed" && a.connectedHost && a.connectedPort)
+      await markSshReachable(t.organizationId, t.serverId, { host: a.connectedHost, port: a.connectedPort }).catch(() => {});
     await audit(
       {
         id: t.principalId,
