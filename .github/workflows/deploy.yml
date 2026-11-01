@@ -1,0 +1,31 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Trigger deployment webhook
+        env:
+          DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+        run: |
+          if [ -z "$DEPLOY_WEBHOOK_URL" ]; then
+            echo "::error::The DEPLOY_WEBHOOK_URL repository secret is not configured."
+            exit 1
+          fi
+
+          status=$(curl --fail --silent --show-error \
+            --connect-timeout 10 --max-time 60 \
+            --request POST --output /dev/null --write-out '%{http_code}' \
+            "$DEPLOY_WEBHOOK_URL")
+
+          case "$status" in
+            2??) echo "Deployment webhook accepted (HTTP $status)." ;;
+            *) echo "::error::Deployment webhook returned HTTP $status."; exit 1 ;;
+          esac

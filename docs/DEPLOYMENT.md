@@ -12,6 +12,18 @@ Use a Linux host with Docker Engine and Compose 2.24.4+. Ubuntu/Debian are strai
 
 Containers run as the Node user where practical. Redis has no published port. Never run `docker compose down -v` for a deployment containing data you need.
 
+## Automatic deployment from GitHub
+
+The `Deploy` workflow sends a POST to the URL in the `DEPLOY_WEBHOOK_URL`
+repository secret on every push to `main`. Configure the secret under
+Settings > Secrets and variables > Actions. The webhook URL stays out of the
+repository and workflow logs.
+
+Deployment runs independently of the `Verification` workflow. A successful
+run means the webhook accepted the request; check the stack in Portainer for
+deployment completion. Missing secrets, connection errors, timeouts, and
+non-2xx responses fail the workflow.
+
 ## Backup
 
 For a paired local recovery bundle, mount an operator-controlled directory at

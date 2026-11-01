@@ -365,6 +365,7 @@ export function Sidebar({ me }: { me: Row }) {
       className={"tree-server" + (selected === s.id ? " selected" : "")}
       style={{ paddingLeft: 10 + depth * 20 }}
       data-server-id={s.id}
+      title={`${s.name}\n${s.host}`}
       {...dragProps("server", s.id)}
       {...dropProps(s.groupId || "root", s.groupId || null)}
       onClick={() => select(s.id)}
@@ -380,7 +381,7 @@ export function Sidebar({ me }: { me: Row }) {
         <ServerIcon name={s.icon} />
       </span>
       <span className="grow">
-        <div className="srv-name ellipsis">{s.name}</div>
+        <div className="srv-name">{s.name}</div>
         <div className="srv-sub ellipsis">{s.host}&nbsp; | &nbsp;SSH2</div>
       </span>
     </button>

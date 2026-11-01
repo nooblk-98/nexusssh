@@ -776,6 +776,10 @@ p {
   color: var(--text-strong);
   line-height: 1.35;
 }
+.tree-server .srv-name {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .srv-sub {
   font-size: 11px;
   color: var(--s600);
