@@ -15,7 +15,7 @@ Containers run as the Node user where practical. Redis has no published port. Ne
 ## Automatic deployment from GitHub
 
 The `Deploy` workflow sends a POST to the URL in the `DEPLOY_WEBHOOK_URL`
-repository secret on every push to `main`. Configure the secret under
+repository secret on every push to `development`. Configure the secret under
 Settings > Secrets and variables > Actions. The webhook URL stays out of the
 repository and workflow logs.
 
