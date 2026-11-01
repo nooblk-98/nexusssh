@@ -115,7 +115,7 @@ const spec = SwaggerModule.createDocument(
   app,
   new DocumentBuilder()
     .setTitle("NexusSSH API")
-    .setVersion("0.1.0")
+    .setVersion("0.2.0")
     .addCookieAuth("nexus_session")
     .addBearerAuth()
     .build(),
