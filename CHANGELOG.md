@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- Kubernetes routes can resolve private API hostnames through the saved SSH
+  bastion when host/VPN DNS cannot provide an allowed address. All resolved
+  destinations remain allowlisted and TLS identity is preserved.
+- Kubernetes connection errors now identify DNS, allowlist, WireGuard gateway,
+  and bastion failures. Namespace discovery no longer labels connection errors
+  as missing identity permissions.
 - Rancher kubeconfigs with colon-separated bearer tokens now import correctly.
   Invalid context previews show the specific reason in the main error message;
   credential values remain hidden and header control characters are rejected.

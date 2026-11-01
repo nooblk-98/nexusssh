@@ -366,7 +366,7 @@ describe("direct Kubernetes HTTPS transport", () => {
         "/version",
         ["0.0.0.0/0"],
       ),
-    ).rejects.toThrow(/KUBERNETES_ALLOWED_CIDRS/);
+    ).rejects.toThrow(/metadata/);
   });
   it("does not follow redirects or return remote error bodies", async () => {
     const before = seen.length;

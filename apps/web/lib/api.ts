@@ -2,6 +2,14 @@
 import { QueryClient, useQuery } from "@tanstack/react-query";
 import { create } from "zustand";
 export type Row = Record<string, any>;
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message);
+  }
+}
 // crypto.randomUUID exists only on HTTPS and localhost; workspaces are often
 // opened over plain HTTP on a LAN address, where getRandomValues still works.
 export const uid = () =>
@@ -23,12 +31,13 @@ export async function api<T = Row>(
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok)
-    throw new Error(
+    throw new ApiError(
       typeof data.message === "string"
         ? data.message
         : Array.isArray(data.message)
           ? data.message.join(", ")
           : JSON.stringify(data.message || data),
+      response.status,
     );
   return data;
 }

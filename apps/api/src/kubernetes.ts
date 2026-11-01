@@ -143,6 +143,7 @@ export class KubernetesController {
         await this.audit(p, action, "failed", cluster.id);
         if (error instanceof KubernetesError)
           throw new HttpException(error.message, error.status);
+        if (error instanceof HttpException) throw error;
         throw new HttpException("Kubernetes request failed.", 502);
       }
     });

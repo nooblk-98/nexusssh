@@ -29,6 +29,7 @@ describe("verified Kubernetes REST mutations and pod WebSocket transport", () =>
     jumpFingerprint = "";
   const forwards: string[] = [],
     connects: string[] = [];
+  const lookups: string[] = [];
   const openSockets = new Set<Socket>();
   const sshClients = new Set<ssh2.Connection>();
   const track = (socket: Socket) => {
@@ -219,6 +220,28 @@ describe("verified Kubernetes REST mutations and pod WebSocket transport", () =>
           ? ctx.accept()
           : ctx.reject(),
       );
+      client.on("session", (accept) => {
+        const session = accept();
+        session.on("exec", (accept, _reject, info) => {
+          lookups.push(info.command);
+          const stream = accept();
+          const addresses: Record<string, string> = {
+            "getent ahosts 'bastion-private.invalid'": "10.77.0.5",
+            "getent ahosts 'bastion-metadata.invalid'": "169.254.169.254",
+            "getent ahosts 'bastion-outside.invalid'": "203.0.113.9",
+          };
+          const address = addresses[info.command];
+          if (!address) {
+            stream.stderr.write("fixture-private-error-never-return");
+            stream.exit(2);
+            stream.end();
+            return;
+          }
+          stream.write(`${address} STREAM fixture\n${address} DGRAM fixture\n`);
+          stream.exit(0);
+          stream.end();
+        });
+      });
       client.on("ready", () =>
         client.on("tcpip", (accept, reject, info) => {
           forwards.push(`${info.destIP}:${info.destPort}`);
@@ -260,14 +283,18 @@ describe("verified Kubernetes REST mutations and pod WebSocket transport", () =>
       const host = new URL(req.url!, "http://fixture.test").searchParams.get(
         "host",
       );
+      if (host === "vpn-dns-failure.invalid")
+        return void res.writeHead(502).end("fixture-private-gateway-error");
       res.setHeader("Content-Type", "application/json");
       res.end(
         JSON.stringify([
           host === "cluster.internal.test"
             ? "10.77.0.5"
-            : host === "metadata.internal.test"
-              ? "169.254.169.254"
-              : host,
+            : host === "vpn-outside.invalid"
+              ? "10.77.0.7"
+              : host === "metadata.internal.test"
+                ? "169.254.169.254"
+                : host,
         ]),
       );
     });
@@ -388,6 +415,123 @@ describe("verified Kubernetes REST mutations and pod WebSocket transport", () =>
       ),
     ).toMatchObject({ exitCode: 0 });
   });
+  it("uses bastion DNS for private API hostnames while preserving Host, TLS and WebSockets", async () => {
+    const connectionThroughBastion = {
+      ...privateConnection(),
+      server: privateConnection().server.replace(
+        "cluster.internal.test",
+        "bastion-private.invalid",
+      ),
+    };
+    await kubernetesRequest(
+      connectionThroughBastion,
+      "/version",
+      ["10.77.0.5/32"],
+      false,
+      { route: network(false, true) },
+    );
+    expect(lookups.at(-1)).toBe("getent ahosts 'bastion-private.invalid'");
+    expect(forwards.at(-1)).toBe(
+      `10.77.0.5:${(server.address() as AddressInfo).port}`,
+    );
+    expect(seen.at(-1)?.host).toContain("bastion-private.invalid");
+    expect(
+      await kubernetesExec(
+        connectionThroughBastion,
+        { ...args(), timeoutMs: 10000 },
+        ["10.77.0.5/32"],
+        undefined,
+        network(false, true),
+      ),
+    ).toMatchObject({ exitCode: 0 });
+  });
+  it("blocks metadata and disallowed IPs returned by bastion DNS without returning remote stderr", async () => {
+    const count = forwards.length;
+    for (const [host, pattern, cidrs] of [
+      ["bastion-metadata.invalid", /metadata/, ["0.0.0.0/0"]],
+      [
+        "bastion-outside.invalid",
+        /203\.0\.113\.9.*KUBERNETES_ALLOWED_CIDRS/,
+        ["10.77.0.5/32"],
+      ],
+      [
+        "bastion-missing.invalid",
+        /bastion could not resolve/,
+        ["10.77.0.5/32"],
+      ],
+    ] as const) {
+      await expect(
+        kubernetesRequest(
+          {
+            ...privateConnection(),
+            server: privateConnection().server.replace(
+              "cluster.internal.test",
+              host,
+            ),
+          },
+          "/version",
+          [...cidrs],
+          false,
+          { route: network(false, true) },
+        ),
+      ).rejects.toThrow(pattern);
+    }
+    expect(forwards).toHaveLength(count);
+  });
+  it("distinguishes WireGuard AllowedIPs and DNS failures without exposing gateway responses", async () => {
+    const reads = seen.length;
+    await expect(
+      kubernetesRequest(
+        {
+          ...privateConnection(),
+          server: privateConnection().server.replace(
+            "cluster.internal.test",
+            "vpn-outside.invalid",
+          ),
+        },
+        "/version",
+        ["10.77.0.7/32"],
+        false,
+        { route: network() },
+      ),
+    ).rejects.toThrow(/WireGuard profile's AllowedIPs/);
+    const error = await kubernetesRequest(
+      {
+        ...privateConnection(),
+        server: privateConnection().server.replace(
+          "cluster.internal.test",
+          "vpn-dns-failure.invalid",
+        ),
+      },
+      "/version",
+      ["10.77.0.5/32"],
+      false,
+      { route: network() },
+    ).catch((error: unknown) => error);
+    expect(String(error)).toMatch(/DNS lookup through WireGuard failed/);
+    expect(String(error)).not.toContain("fixture-private-gateway-error");
+    expect(seen).toHaveLength(reads);
+  });
+  it("identifies SSH authentication and forwarding failures separately", async () => {
+    const route = network(false, true);
+    route.bastion!.credential.password = "wrong-fixture-password";
+    await expect(
+      kubernetesRequest(connection(), "/version", ["127.0.0.1/32"], false, {
+        route,
+      }),
+    ).rejects.toThrow(/Bastion SSH authentication failed/);
+    const target = new URL(connection().server);
+    target.port = String((server.address() as AddressInfo).port + 1);
+    await expect(
+      kubernetesRequest(
+        { ...connection(), server: target.toString().replace(/\/$/, "") },
+        "/version",
+        ["127.0.0.1/32"],
+        false,
+        { route: network(false, true) },
+      ),
+    ).rejects.toThrow(/bastion connected but could not forward/);
+  });
   it("enforces target and bastion allowlists, host keys and TLS without direct fallback", async () => {
     const before = connects.length;
     await expect(
@@ -404,7 +548,7 @@ describe("verified Kubernetes REST mutations and pod WebSocket transport", () =>
         false,
         { route: network() },
       ),
-    ).rejects.toThrow(/ALLOWED_CIDRS/);
+    ).rejects.toThrow(/metadata/);
     expect(connects).toHaveLength(before);
     const denied = network(true, true);
     denied.sshLimits.cidrs = ["127.0.0.1/32"];
@@ -416,7 +560,7 @@ describe("verified Kubernetes REST mutations and pod WebSocket transport", () =>
         false,
         { route: denied },
       ),
-    ).rejects.toThrow(/route failed/);
+    ).rejects.toThrow(/SSH destination allowlist/);
     expect(connects).toHaveLength(before);
     const wrongKey = network(false, true);
     wrongKey.bastion!.fingerprint = "SHA256:wrong";
@@ -424,7 +568,7 @@ describe("verified Kubernetes REST mutations and pod WebSocket transport", () =>
       kubernetesRequest(connection(), "/version", ["127.0.0.1/32"], false, {
         route: wrongKey,
       }),
-    ).rejects.toThrow(/route failed/);
+    ).rejects.toThrow(/host key/);
     const reads = seen.length;
     await expect(
       kubernetesRequest(

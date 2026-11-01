@@ -1,7 +1,11 @@
 import https from "node:https";
 import { isIP } from "node:net";
 import { checkServerIdentity, connect as tlsConnect } from "node:tls";
-import { openKubernetesNetwork, type KubernetesNetwork } from "./network.js";
+import {
+  openKubernetesNetwork,
+  KubernetesRouteError,
+  type KubernetesNetwork,
+} from "./network.js";
 import type { ClusterConnection } from "./kubeconfig.js";
 
 export class KubernetesError extends Error {
@@ -158,7 +162,9 @@ export async function kubernetesTarget(
       signal,
       route,
     );
-  } catch {
+  } catch (error) {
+    if (error instanceof KubernetesRouteError)
+      throw new KubernetesError(error.message);
     throw new KubernetesError(
       route
         ? "Kubernetes route failed. Check the VPN gateway, bastion SSH host key/credentials, SSH allowlist and KUBERNETES_ALLOWED_CIDRS."

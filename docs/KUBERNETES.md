@@ -80,13 +80,25 @@ effective username are reused internally; no SSH credentials are returned.
 The API destination must pass `KUBERNETES_ALLOWED_CIDRS` on every route. Bastion
 SSH connections separately obey the deployment/workspace SSH allowlist. When a
 VPN has DNS servers, hostnames are resolved through its gateway; otherwise
-NexusSSH's DNS is used. Every result is checked before an IP is pinned. API
-hostnames must resolve through one of these resolvers; bastion-side DNS is not
-used. The original API Host/SNI, CA trust and client certificates are preserved
-inside the tunnel. Failed routes never fall back to a direct connection.
+NexusSSH's DNS is used. If that lookup fails or returns addresses outside the
+Kubernetes allowlist, a selected bastion can resolve the hostname instead. This
+uses a fixed, bounded `getent ahosts` lookup on the authenticated jump host;
+`getent` must be available there. Every address from the selected resolver must
+pass the allowlist before a numeric IP is forwarded. Metadata destinations are
+always blocked. The original API Host/SNI, CA trust and client certificates are
+preserved inside the tunnel. Failed routes never fall back to a direct connection.
 
 All profile checks, UI resource/log reads, MCP commands and pod WebSockets share
 this routing. VPN profile deletion is blocked while a cluster references it.
+
+Connection errors identify the failing stage: gateway setup/authentication,
+hostname lookup, destination allowlist, bastion authentication/forwarding, or
+WireGuard reachability. A working SSH connection does not establish that the
+Kubernetes API address is allowed or reachable. Check both
+`KUBERNETES_ALLOWED_CIDRS` and the VPN peer's `AllowedIPs`. For WireGuard without
+a bastion, private hostnames need working DNS servers in the VPN profile, with
+those servers reachable through the VPN. Namespace discovery errors only suggest
+an identity permission issue when the API returns HTTP 403.
 
 ## Resource browsing and logs
 

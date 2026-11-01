@@ -16,6 +16,7 @@ import {
   timeAgo,
   useApi,
   type Row,
+  ApiError,
 } from "../../lib/api";
 import { useServers } from "../../lib/servers";
 import {
@@ -694,8 +695,12 @@ export function KubernetesClusters() {
           </div>
           {namespaces.error && resources[resource].namespaced && (
             <p className="small muted">
-              Namespace discovery is unavailable for this identity. Enter a
-              namespace above.
+              {namespaces.error instanceof ApiError &&
+              namespaces.error.status === 403
+                ? "Namespace discovery is unavailable for this identity. Enter a namespace above."
+                : data.error
+                  ? "Namespace discovery is unavailable until the cluster connection succeeds."
+                  : `Namespace discovery failed: ${namespaces.error.message} You can enter a namespace manually.`}
             </p>
           )}
           {data.error && (
