@@ -1,3 +1,5 @@
+import { kubernetesOperation, kubernetesApprovalStatus } from "./kubernetes-operations.js";
+import { kubernetesOperations } from "../../../packages/kubernetes/policy.js";
 import {
   ForbiddenException,
   NotFoundException,
@@ -363,6 +365,7 @@ export async function operation(
   input: unknown,
   signal?: AbortSignal,
 ): Promise<any> {
+  if (kubernetesOperations.includes(op)) return kubernetesOperation(p, op, input, signal);
   if (op === "ssh_execute_many") return executeMany(p, input, signal);
   return singleOperation(p, op, input, signal);
 }
@@ -491,7 +494,7 @@ async function singleOperation(
       },
       select: { id: true, status: true, expiresAt: true, consumedAt: true },
     });
-    if (!row) throw new NotFoundException();
+    if (!row) return kubernetesApprovalStatus(p, a.approvalId);
     return row;
   }
   if (op === "task_status" || op === "task_cancel") {

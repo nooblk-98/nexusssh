@@ -1,3 +1,4 @@
+import { withKubernetesSlot } from "./kubernetes-slots.js";
 import {
   BadRequestException,
   Body,
@@ -69,8 +70,6 @@ const selection = {
 
 @Controller("api/kubernetes")
 export class KubernetesController {
-  private active = new Map<string, number>();
-
   private async principal(req: Request) {
     const p = await authenticate(req);
     human(p);
@@ -108,39 +107,30 @@ export class KubernetesController {
     action: string,
     text = false,
   ) {
-    const active = this.active.get(p.organizationId) || 0;
-    if (active >= 4)
-      throw new HttpException(
-        "Too many active Kubernetes requests. Try again shortly.",
-        429,
-      );
-    this.active.set(p.organizationId, active + 1);
-    try {
-      const connection = unseal(
-        cluster.encryptedConfig,
-        config.ENCRYPTION_KEY,
-        `${p.organizationId}:kubernetes:${cluster.id}`,
-      ) as ClusterConnection;
-      const data = await kubernetesRequest(
-        connection,
-        path,
-        config.KUBERNETES_ALLOWED_CIDRS.split(",")
-          .map((cidr) => cidr.trim())
-          .filter(Boolean),
-        text,
-      );
-      await this.audit(p, action, "success", cluster.id);
-      return data;
-    } catch (error) {
-      await this.audit(p, action, "failed", cluster.id);
-      if (error instanceof KubernetesError)
-        throw new HttpException(error.message, error.status);
-      throw new HttpException("Kubernetes request failed.", 502);
-    } finally {
-      const remaining = (this.active.get(p.organizationId) || 1) - 1;
-      if (remaining) this.active.set(p.organizationId, remaining);
-      else this.active.delete(p.organizationId);
-    }
+    return withKubernetesSlot(p.organizationId, async () => {
+      try {
+        const connection = unseal(
+          cluster.encryptedConfig,
+          config.ENCRYPTION_KEY,
+          `${p.organizationId}:kubernetes:${cluster.id}`,
+        ) as ClusterConnection;
+        const data = await kubernetesRequest(
+          connection,
+          path,
+          config.KUBERNETES_ALLOWED_CIDRS.split(",")
+            .map((cidr) => cidr.trim())
+            .filter(Boolean),
+          text,
+        );
+        await this.audit(p, action, "success", cluster.id);
+        return data;
+      } catch (error) {
+        await this.audit(p, action, "failed", cluster.id);
+        if (error instanceof KubernetesError)
+          throw new HttpException(error.message, error.status);
+        throw new HttpException("Kubernetes request failed.", 502);
+      }
+    });
   }
 
   @Get("clusters") async list(@Req() req: Request) {
@@ -229,22 +219,33 @@ export class KubernetesController {
     let row;
     try {
       row = existing
-        ? await db.kubernetesCluster.update({
-            where: { id: profileId },
-            data: {
-              name: value.name,
-              description: value.description,
-              ...secret,
-              ...(secret
-                ? {
-                    status: "unknown",
-                    version: null,
-                    lastCheckedAt: null,
-                    lastError: null,
-                  }
-                : {}),
-            },
-            select: selection,
+        ? await db.$transaction(async (tx) => {
+            if (
+              secret &&
+              (await tx.kubernetesExecution.count({
+                where: { clusterId: profileId, status: "running" },
+              }))
+            )
+              throw new ConflictException(
+                "Wait for active Kubernetes commands to finish before replacing credentials.",
+              );
+            return tx.kubernetesCluster.update({
+              where: { id: profileId },
+              data: {
+                name: value.name,
+                description: value.description,
+                ...secret,
+                ...(secret
+                  ? {
+                      status: "unknown",
+                      version: null,
+                      lastCheckedAt: null,
+                      lastError: null,
+                    }
+                  : {}),
+              },
+              select: selection,
+            });
           })
         : await db.kubernetesCluster.create({
             data: {
@@ -287,7 +288,17 @@ export class KubernetesController {
   ) {
     const p = await this.principal(req);
     await this.profile(p, id);
-    await db.kubernetesCluster.delete({ where: { id } });
+    await db.$transaction(async (tx) => {
+      if (
+        await tx.kubernetesExecution.count({
+          where: { clusterId: id, status: "running" },
+        })
+      )
+        throw new ConflictException(
+          "Wait for active Kubernetes commands to finish before deleting this cluster.",
+        );
+      await tx.kubernetesCluster.delete({ where: { id } });
+    });
     await this.audit(p, "profile_deleted", "success", id);
     return { deleted: true };
   }

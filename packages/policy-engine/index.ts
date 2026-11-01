@@ -1,3 +1,4 @@
+import { kubernetesWriteOperations } from "../kubernetes/policy.js";
 export type Principal = {
   id: string;
   organizationId: string;
@@ -42,7 +43,7 @@ export const allOperations = [
   "terminal",
 ];
 export function needsApproval(op: string) {
-  return writeOperations.includes(op);
+  return writeOperations.includes(op) || kubernetesWriteOperations.includes(op);
 }
 export function permitted(
   p: Principal,

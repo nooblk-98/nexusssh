@@ -75,9 +75,10 @@ variables are not returned.
 For a pod, open its log action and choose a regular or init container. Logs are
 snapshots rather than a continuous stream: select 100-1,000 lines, optionally
 select the previous container instance, and refresh. Output is limited to
-256 KB. Secret objects, workload writes, pod exec, and port forwarding are not
-exposed by this first version. The existing SSH-based `kubernetes_get` MCP tool
-remains separate; direct profiles are limited to human workspace administrators.
+256 KB. The browsing screen shows resource summaries and logs. Direct MCP
+commands and container execution are available through explicitly granted agent
+tools below. The existing SSH-based `kubernetes_get` tool remains separate.
+Port forwarding and interactive container terminals are not supported.
 
 ## Permissions, storage, and limits
 
@@ -109,8 +110,131 @@ Profiles and encrypted credentials are part of the SQLite backup. Preserve the
 matching application secrets volume as described in [deployment and recovery](DEPLOYMENT.md).
 The schema migration adds a cluster-profile table and preserves existing records.
 
-The API allows four concurrent outbound Kubernetes reads per workspace and
+The API allows four concurrent outbound Kubernetes requests per workspace, shared
+by the administration screen and MCP, and
 120 requests per minute per client IP on the Kubernetes routes. Outbound reads
 have a 15-second deadline, and JSON responses are limited to 2 MB. Import,
 update, removal, connection checks, resource reads, and log reads are audited
 without recording credential contents or log output.
+
+## Direct Kubernetes MCP tools
+
+1. Import the cluster in **Kubernetes**.
+2. Open **AI Agents**, register an agent or edit **Access**, and select its
+   **Kubernetes clusters** and **Kubernetes tools**. These grants are separate
+   from SSH servers. Existing tokens receive the updated scopes immediately;
+   existing agents start with no cluster access. Only human administrators can
+   assign cluster access. Workspace management does not imply cluster access.
+3. Connect the agent token to the existing MCP endpoint. Refresh your client's
+   tool list if it was connected before the deployment.
+
+| Tool | Purpose |
+| --- | --- |
+| `kubernetes_clusters_list` | List explicitly granted cluster IDs and non-secret metadata. |
+| `kubernetes_cluster_check` | Check the saved cluster's Kubernetes version. |
+| `kubernetes_resources_list` | Read a summarized resource page; pass `nextCursor` as `cursor` to continue. Omit namespace to use the saved default or use `*` for all namespaces. |
+| `kubernetes_pod_logs` | Read bounded current/previous logs for one namespace, pod and container. |
+| `kubernetes_execute` | Request an approved kubectl-style command using an argv array. |
+| `kubernetes_pod_exec` | Request an approved command inside one named pod and container. |
+| `kubernetes_execution_status` | Retrieve your command execution's status and encrypted saved result. |
+
+Viewer agents can receive only read tools. Each tool requires both its token
+scope and a grant on the selected cluster. Grant `kubernetes_clusters_list` for
+discovery and `kubernetes_execution_status` for later result retrieval, alongside
+the desired command tools. Kubernetes RBAC on the uploaded identity still applies.
+
+### Approval and results
+
+Both command tools always require a human approval, including `get` commands.
+Call the tool without `approvalId` first. It returns `approval_required`, an
+`approvalId`, and an expiry. An administrator reviews the exact cluster,
+namespace, argv, container, timeout and optional inline manifest in **Approvals**
+and approves or rejects the request. Poll `approval_get_status` with that ID,
+then repeat the original tool call with identical arguments plus `approvalId`.
+The requester resumes execution; the approval screen does not run the command
+under another user's identity.
+
+Approvals last 10 minutes, are single use, and are bound to the original token,
+workspace, cluster credentials, operation and exact arguments. A changed command,
+rotated kubeconfig, revoked token/grant, expired approval or consumed approval
+cannot be used. The app never automatically retries a command.
+
+Executions return an `executionId`, status and result. Results are encrypted at
+rest and available to the requesting principal/token for one hour while its
+grants remain valid. Arguments are encrypted in approval records; audit events
+and agent activity contain metadata rather than output or credentials. Expired
+output is removed by hourly maintenance; metadata uses `AUDIT_RETENTION_DAYS`.
+Pending executions after an API restart become `interrupted` and are not replayed.
+
+### kubectl-style command reference
+
+`kubernetes_execute` accepts `clusterId`, a `command` argv array, optional
+`namespace`, optional inline `manifest`, and `timeoutMs` (1–60 seconds, default
+30 seconds). A leading `kubectl` is optional. The implementation translates a
+bounded command vocabulary into verified HTTPS API requests; it does not start a
+local shell or install a kubectl executable.
+
+| Command argv | Behavior |
+| --- | --- |
+| `["get", "pods", "-n", "apps"]` | JSON resource list, up to 100 objects with Kubernetes continuation metadata. |
+| `["get", "deploy/api", "-o", "json"]` | One raw resource. `json` and `yaml` flags are accepted; output is always JSON. |
+| `["describe", "pod/api-1", "-n", "apps"]` | Raw JSON inspection of that resource; no kubectl events/text rendering. |
+| `["logs", "api-1", "-c", "api", "--tail=200", "--previous"]` | Bounded log snapshot, at most 1,000 lines and 256 KB. |
+| `["scale", "deploy/api", "--replicas=3"]` | Patch a deployment or StatefulSet scale subresource. |
+| `["rollout", "restart", "deploy/api"]` | Restart a deployment, StatefulSet or DaemonSet through its pod template annotation. |
+| `["delete", "pod/api-1"]` | Delete one named resource with background propagation. |
+| `["patch", "deploy/api", "--type=merge", "-p", "{\"spec\":{\"replicas\":2}}"]` | Inline JSON patch; types `merge`, `json` and `strategic` are supported. |
+| `["apply", "-f", "-"]` | Server-side apply of one inline YAML/JSON `manifest`, with `metadata.name` and a supported `apiVersion`/`kind`. |
+
+Supported resource types are pods, deployments, StatefulSets, DaemonSets,
+services, nodes, namespaces, ConfigMaps, Secrets, PVCs, Jobs, CronJobs and
+Ingresses, with common singular names and short aliases. Read list flags include
+`-A`/`--all-namespaces`, `-l`/`--selector`, `--field-selector`, and `--continue`.
+Choose a namespace with `-n`/`--namespace` or the separate `namespace` field;
+conflicting selections are rejected. JSON responses have a 2 MB bound.
+
+This subset does not accept plugins, kubeconfig/server/token/context overrides,
+local files, remote manifest URLs, arbitrary API paths, kustomize, watch/follow,
+multi-document manifests, CRDs, bulk deletes, port forwarding or interactive
+terminal flags. Granting the command tool can expose raw resource content,
+including Secrets when the cluster identity permits them; each exact command
+still requires human approval. Use the summarized read tools for routine browsing.
+
+### Commands inside pods
+
+Example `kubernetes_pod_exec` arguments:
+
+```json
+{
+  "clusterId": "<saved-cluster-id>",
+  "namespace": "apps",
+  "pod": "api-1",
+  "container": "api",
+  "command": ["sh", "-lc", "id && uname -a"],
+  "timeoutMs": 30000
+}
+```
+
+The command runs inside the selected container. Shell operators are interpreted
+only when you explicitly call an installed shell, as in that example. There is
+no stdin or TTY. Results include `stdout`, `stderr`, `exitCode` and `truncated`;
+combined output is limited to 256 KB. A nonzero exit code is a completed remote
+command; `interrupted` means the remote outcome may be unknown. Timeout or client
+disconnect closes the connection but may leave remote processes running. Inspect
+the pod before retrying.
+
+Pod exec needs a Kubernetes API/gateway that supports WebSocket remote commands
+(`v5.channel.k8s.io` or `v4.channel.k8s.io`). There is no legacy SPDY fallback.
+The gateway must pass through WebSocket upgrades on the API base path. Grant
+`get` and `create` on `pods/exec` in the required namespaces; authorization varies
+with Kubernetes version and feature gates. See the official
+[streaming protocol transition](https://kubernetes.io/blog/2024/08/20/websockets-transition/)
+and [WebSocket authorization design](https://www.kubernetes.dev/resources/keps/4006/).
+Workload commands also need their corresponding `patch`/`delete` permissions,
+including `deployments/scale` or `statefulsets/scale` for scaling and `patch` plus
+`create` for server-side apply. Scope these grants to the namespaces and resources
+the agent should operate on.
+
+Replacing cluster credentials or removing a profile is blocked while a command
+is running. Wait for its bounded execution to finish. The four-request workspace
+concurrency limit also applies to commands.

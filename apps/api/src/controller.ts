@@ -1,3 +1,5 @@
+import { kubernetesApprovals } from "./kubernetes-operations.js";
+import { kubernetesOperations, kubernetesReadOperations } from "../../../packages/kubernetes/policy.js";
 import {
   Controller,
   Get,
@@ -578,7 +580,7 @@ export class AppController {
         agents: await db.agent.count({
           where: { organizationId: p.organizationId, revoked: false },
         }),
-        approvals: await db.approvalRequest.count({
+        approvals: (await db.kubernetesApproval.count({ where: { organizationId: p.organizationId, status: "pending", expiresAt: { gt: new Date() } } })) + await db.approvalRequest.count({
           where: {
             organizationId: p.organizationId,
             status: "pending",
@@ -1218,6 +1220,7 @@ export class AppController {
       where: { organizationId: p.organizationId },
       include: {
         permissions: true,
+        clusterPermissions: true,
         tokens: {
           select: { id: true, expiresAt: true, revoked: true, scopes: true },
         },
@@ -1236,6 +1239,8 @@ export class AppController {
         level: z
           .enum(["viewer", "operator", "administrator", "custom"])
           .default("viewer"),
+        clusterIds: z.array(z.uuid()).max(50).default([]),
+        clusterOperations: z.array(z.enum(kubernetesOperations as [string, ...string[]])).max(20).default([]),
         serverIds: z.array(z.uuid()).max(100),
         operations: z
           .array(z.enum(allOperations as [string, ...string[]]))
@@ -1266,6 +1271,12 @@ export class AppController {
       throw new BadRequestException(
         "Workspace management requires administrator level",
       );
+    if (a.clusterIds.length || a.clusterOperations.length) {
+      human(p);
+      if (a.level === "viewer" && a.clusterOperations.some((op) => !kubernetesReadOperations.includes(op))) throw new BadRequestException("Viewer agents may only receive Kubernetes read tools");
+      if (a.clusterIds.length && !a.clusterOperations.length) throw new BadRequestException("Choose Kubernetes tools for the selected clusters");
+      if (await db.kubernetesCluster.count({ where: { organizationId: p.organizationId, id: { in: a.clusterIds } } }) !== new Set(a.clusterIds).size) throw new BadRequestException("Cluster unavailable");
+    }
     const token = secret();
     const agent = await db.agent.create({
       data: {
@@ -1281,6 +1292,7 @@ export class AppController {
             operations: JSON.stringify(a.operations),
           })),
         },
+        clusterPermissions: { create: [...new Set(a.clusterIds)].map((clusterId) => ({ clusterId, operations: JSON.stringify(a.clusterOperations) })) },
         tokens: {
           create: {
             tokenHash: hash(token),
@@ -1289,6 +1301,7 @@ export class AppController {
             scopes: JSON.stringify([
               ...new Set([
                 ...a.operations,
+                ...a.clusterOperations,
                 ...(a.workspaceManagement ? [WORKSPACE_MANAGE] : []),
               ]),
             ]),
@@ -1308,6 +1321,10 @@ export class AppController {
     const p = await authenticate(req);
     admin(p);
     const a = agentAccessSchema.parse(body);
+    if ((a.clusterIds === undefined) !== (a.clusterOperations === undefined)) throw new BadRequestException("Supply both clusterIds and clusterOperations");
+    if (a.clusterIds !== undefined) human(p);
+    if (a.level === "viewer" && a.clusterOperations?.some((op) => !kubernetesReadOperations.includes(op))) throw new BadRequestException("Viewer agents may only receive Kubernetes read tools");
+    if (a.clusterIds?.length && !a.clusterOperations?.length) throw new BadRequestException("Choose Kubernetes tools for the selected clusters");
     if (
       (a.workspaceManagement && a.level !== "administrator") ||
       (a.level === "viewer" &&
@@ -1342,17 +1359,17 @@ export class AppController {
           },
         },
       });
-      await tx.agentToken.updateMany({
-        where: { agentId: id, revoked: false },
-        data: {
-          scopes: JSON.stringify([
-            ...new Set([
-              ...a.operations,
-              ...(a.workspaceManagement ? [WORKSPACE_MANAGE] : []),
-            ]),
-          ]),
-        },
-      });
+      if (a.clusterIds !== undefined) {
+        if (await tx.kubernetesCluster.count({ where: { organizationId: p.organizationId, id: { in: a.clusterIds } } }) !== new Set(a.clusterIds).size) throw new BadRequestException("Cluster unavailable");
+        await tx.kubernetesAgentPermission.deleteMany({ where: { agentId: id } });
+        await tx.kubernetesAgentPermission.createMany({ data: [...new Set(a.clusterIds)].map((clusterId) => ({ agentId: id, clusterId, operations: JSON.stringify(a.clusterOperations) })) });
+      }
+      const tokens = await tx.agentToken.findMany({ where: { agentId: id, revoked: false } });
+      for (const token of tokens) {
+        const old: string[] = JSON.parse(token.scopes);
+        const clusterScopes = a.clusterOperations ?? old.filter((op) => kubernetesOperations.includes(op));
+        await tx.agentToken.update({ where: { id: token.id }, data: { scopes: JSON.stringify([...new Set([...a.operations, ...clusterScopes.filter((op) => a.level !== "viewer" || kubernetesReadOperations.includes(op)), ...(a.workspaceManagement ? [WORKSPACE_MANAGE] : [])])]) } });
+      }
     });
     await audit(p, "agent_access_updated", "success", undefined, id);
     return { updated: true };
@@ -1421,7 +1438,7 @@ export class AppController {
       }))
     )
       throw new NotFoundException();
-    const [executions, management] = await Promise.all([
+    const [executions, management, clusterExecutions] = await Promise.all([
       db.commandExecution.findMany({
         where: { principalId: id, organizationId: p.organizationId },
         include: { server: { select: { name: true } } },
@@ -1437,13 +1454,18 @@ export class AppController {
         orderBy: { createdAt: "desc" },
         take: 200,
       }),
+      db.kubernetesExecution.findMany({ where: { organizationId: p.organizationId, principalId: id }, select: { id: true, createdAt: true, operation: true, status: true, clusterId: true, cluster: { select: { name: true } } }, orderBy: { createdAt: "desc" }, take: 200 }),
     ]);
+    const clusters = await db.kubernetesCluster.findMany({ where: { organizationId: p.organizationId }, select: { id: true, name: true } });
+    const names = new Map(clusters.map((cluster) => [cluster.id, cluster.name]));
     return [
+      ...clusterExecutions.map(({ cluster, ...entry }) => ({ ...entry, serverId: entry.clusterId, server: { name: cluster.name + " (Kubernetes)" } })),
       ...executions,
       ...management.map((event) => ({
         ...event,
-        operation: event.action.slice(4),
-        server: { name: "Workspace" },
+        operation: event.action.split(":")[1],
+        serverId: event.action.split(":")[2] || "workspace",
+        server: { name: names.has(event.action.split(":")[2]) ? names.get(event.action.split(":")[2]) + " (Kubernetes)" : "Workspace" },
       })),
     ]
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
@@ -1488,10 +1510,11 @@ export class AppController {
     const batchIds = [...new Set(decoded.flatMap((item) => item.operation === "ssh_execute_many" && Array.isArray(item.args.serverIds) ? item.args.serverIds.filter((id): id is string => typeof id === "string") : []))];
     const targets = batchIds.length ? await db.server.findMany({ where: { id: { in: batchIds }, organizationId: p.organizationId }, select: { id: true, name: true } }) : [];
     const names = new Map(targets.map((server) => [server.id, server.name]));
-    return decoded.map((item) => ({
+    const ssh = decoded.map((item) => ({
       ...item,
       ...(item.operation === "ssh_execute_many" && Array.isArray(item.args.serverIds) ? { targetNames: item.args.serverIds.map((id) => names.get(String(id)) ?? "Unavailable server"), targetCount: item.args.serverIds.length } : {}),
     }));
+    return [...ssh, ...await kubernetesApprovals(p)].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 100);
   }
   @Post("approvals/:id") async decide(
     @Req() req: Request,
@@ -1512,8 +1535,11 @@ export class AppController {
       },
       data: { status: a.decision, decidedBy: p.id },
     });
-    if (result.count !== 1)
-      throw new BadRequestException("Approval unavailable or expired");
+    if (result.count !== 1) {
+      human(p);
+      const kube = await db.kubernetesApproval.updateMany({ where: { id, organizationId: p.organizationId, status: "pending", expiresAt: { gt: new Date() } }, data: { status: a.decision, decidedBy: p.id } });
+      if (kube.count !== 1) throw new BadRequestException("Approval unavailable or expired");
+    }
     await audit(p, "approval_" + a.decision, "success", undefined, id);
     return { id, status: a.decision };
   }
@@ -1645,6 +1671,8 @@ export class AppController {
       recording: false,
       operations: allOperations,
       readOperations,
+      kubernetesOperations,
+      kubernetesReadOperations,
       managementTools: Object.entries(managementTools).map(([name, tool]) => ({
         name,
         description: tool.description,

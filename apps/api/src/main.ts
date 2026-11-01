@@ -1,3 +1,4 @@
+import { recoverKubernetesExecutions, expireKubernetesResults } from "./kubernetes-operations.js";
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
 import {
@@ -58,6 +59,8 @@ class Errors implements ExceptionFilter {
   }
 }
 await initializeDatabase();
+await recoverKubernetesExecutions();
+await expireKubernetesResults();
 const interruptedTasks = await reconcileRunningTasks();
 if (interruptedTasks) console.warn(`Interrupted ${interruptedTasks} running SSH tasks after restart`);
 if (generatedSecrets.includes("SETUP_TOKEN") && (await db.user.count()) === 0)
@@ -129,6 +132,7 @@ const healthRefresh = setInterval(() => { void enqueuePeriodicHealth().catch((er
 void enqueuePeriodicHealth().catch((error) => console.error("Initial health refresh failed:", error instanceof Error ? error.name : "unknown"));
 const wss = terminals(app.getHttpServer());
 const retention = setInterval(() => {
+  void expireKubernetesResults().catch(() => {});
   void db.auditEvent
     .deleteMany({
       where: {

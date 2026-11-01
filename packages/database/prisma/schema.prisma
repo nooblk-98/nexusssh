@@ -169,6 +169,9 @@ model KubernetesCluster {
   version String?
   lastCheckedAt DateTime?
   lastError String?
+  agentPermissions KubernetesAgentPermission[]
+  approvals KubernetesApproval[]
+  executions KubernetesExecution[]
   @@unique([organizationId, name])
   @@index([organizationId])
 }
@@ -291,6 +294,7 @@ model Agent {
   maxCallsPerMinute Int?
   maxCallsPerDay Int?
   permissions AgentPermission[]
+  clusterPermissions KubernetesAgentPermission[]
   tokens AgentToken[]
   @@index([organizationId])
 }
@@ -305,6 +309,54 @@ model AgentPermission {
   server Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
   operations String
   @@unique([agentId, serverId])
+}
+
+model KubernetesAgentPermission {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  agentId String
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  clusterId String
+  cluster KubernetesCluster @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  operations String
+  @@unique([agentId, clusterId])
+}
+
+model KubernetesApproval {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  clusterId String
+  cluster KubernetesCluster @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  organizationId String
+  principalId String
+  tokenId String?
+  operation String
+  argumentDigest String
+  configDigest String
+  encryptedArguments String
+  status String @default("pending")
+  decidedBy String?
+  expiresAt DateTime
+  consumedAt DateTime?
+  @@index([organizationId, createdAt])
+}
+
+model KubernetesExecution {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organizationId String
+  principalId String
+  tokenId String?
+  clusterId String
+  cluster KubernetesCluster @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  operation String
+  status String
+  encryptedResult String?
+  expiresAt DateTime
+  @@index([organizationId, principalId, createdAt])
 }
 
 model AgentToken {

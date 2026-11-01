@@ -14,6 +14,7 @@ const fixture = vi.hoisted(() => ({
   audit: [] as any[],
   remote: vi.fn(),
   encryptionKey: "ab".repeat(32),
+  running: 0,
 }));
 
 vi.mock("../../packages/shared/config.js", () => ({
@@ -39,6 +40,10 @@ vi.mock("../../packages/database/index.js", () => {
       : row;
   return {
     db: {
+      $transaction: vi.fn(async (work) =>
+        work((await import("../../packages/database/index.js")).db),
+      ),
+      kubernetesExecution: { count: vi.fn(async () => fixture.running) },
       webSession: {
         findUnique: vi.fn(async () => ({
           userId: fixture.actor.id,
@@ -163,9 +168,30 @@ beforeEach(() => {
   fixture.rows.clear();
   fixture.audit.length = 0;
   fixture.remote.mockReset();
+  fixture.running = 0;
 });
 
 describe("Kubernetes profile and access controls", () => {
+  it("blocks credential rotation and profile deletion while a command runs but permits metadata edits", async () => {
+    const controller = new KubernetesController();
+    const created = await controller.create(request, {
+      name: "Active",
+      kubeconfig: source(),
+    });
+    fixture.running = 1;
+    await expect(
+      controller.update(request, created.id, {
+        kubeconfig: source("rotated-token"),
+      }),
+    ).rejects.toThrow(/Wait for active Kubernetes/);
+    await expect(controller.remove(request, created.id)).rejects.toThrow(
+      /Wait for active Kubernetes/,
+    );
+    await expect(
+      controller.update(request, created.id, { name: "Renamed" }),
+    ).resolves.toMatchObject({ name: "Renamed" });
+    expect(fixture.rows.has(created.id)).toBe(true);
+  });
   it("encrypts imported credentials, returns summaries only, and binds ciphertext to its workspace and cluster", async () => {
     const controller = new KubernetesController();
     const created = await controller.create(request, {

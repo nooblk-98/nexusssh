@@ -2,19 +2,11 @@ import { parseDocument } from "yaml";
 import { z } from "zod";
 import { createSecureContext } from "node:tls";
 import { X509Certificate } from "node:crypto";
+import { namespaceName } from "./names.js";
+export { namespaceName, resourceName } from "./names.js";
 
 export const MAX_KUBECONFIG_BYTES = 256 * 1024;
 const entryName = z.string().min(1).max(256);
-export const namespaceName = z
-  .string()
-  .min(1)
-  .max(63)
-  .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/);
-export const resourceName = z
-  .string()
-  .min(1)
-  .max(253)
-  .regex(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/);
 const fields = z.record(z.string(), z.unknown());
 const documentSchema = z.object({
   apiVersion: z.literal("v1").optional(),

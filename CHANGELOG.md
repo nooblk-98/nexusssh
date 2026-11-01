@@ -12,6 +12,12 @@
   isolation, credential rotation, audit events, bounded responses, and request
   limits for direct cluster access.
 
+- Direct Kubernetes MCP tools for granted cluster discovery, resource pages,
+  version checks, container logs, approved kubectl-style commands, and
+  non-interactive pod/container execution with stdout, stderr, and exit codes.
+- Separate per-agent cluster/tool grants, exact token-bound single-use approvals,
+  encrypted expiring command results, shared call budgets and audit activity.
+
 ### Changed
 
 - Server names use compact single-line rows again. Drag the sidebar's right

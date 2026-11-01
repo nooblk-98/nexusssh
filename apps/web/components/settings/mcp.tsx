@@ -56,7 +56,7 @@ export function McpServer() {
     <div className="page" style={{ maxWidth: 860 }}>
       <PageHead
         title="MCP Server"
-        sub="Give AI assistants scoped, audited access to your servers over the Model Context Protocol"
+        sub="Give AI assistants scoped, audited access to your servers and Kubernetes clusters over MCP"
       />
       <div className="card card-pad">
         <Field
@@ -89,9 +89,9 @@ export function McpServer() {
           }}
         >
           <li>
-            Register an agent under AI Agents and choose its servers and tools.
-            Enable Workspace management for keys, VPN profiles, folders and
-            other app administration.
+            Register an agent under AI Agents and choose its servers, Kubernetes
+            clusters and tools. Enable Workspace management for keys, VPN
+            profiles, folders and other app administration.
           </li>
           <li>
             Copy the token shown once after creation into your client’s secret
@@ -120,6 +120,7 @@ export function McpServer() {
         <div className="check-grid">
           {[
             ...(q.data?.operations || []),
+            ...(q.data?.kubernetesOperations || []),
             ...(q.data?.managementTools || []).map((t: Row) => t.name),
           ]
             .filter((o: string) => o !== "terminal")
@@ -136,6 +137,7 @@ export function McpServer() {
 
 export function Agents() {
   const maxServerGrants = 100;
+  const clusters = useApi<Row[]>("kubernetes/clusters");
   const q = useApi<Row[]>("agents");
   const settings = useApi<Row>("settings");
   const { servers } = useServers();
@@ -148,6 +150,8 @@ export function Agents() {
     days: number;
     serverIds: string[];
     operations: string[];
+    clusterIds: string[];
+    clusterOperations: string[];
     perMinute: string;
     perDay: string;
   } | null>(null);
@@ -170,7 +174,7 @@ export function Agents() {
     <div className="page">
       <PageHead
         title="AI Agents"
-        sub="Machine identities for MCP clients, each limited to the servers and tools you assign"
+        sub="Machine identities for MCP clients, limited to the servers, clusters and tools you assign"
       >
         <Button
           variant="outline"
@@ -182,6 +186,8 @@ export function Agents() {
               days: 30,
               serverIds: [],
               operations: [],
+              clusterIds: [],
+              clusterOperations: [],
               perMinute: "",
               perDay: "",
             })
@@ -240,6 +246,12 @@ export function Agents() {
                   <td>
                     {a.level} · {a.permissions.length} server
                     {a.permissions.length === 1 ? "" : "s"}
+                    {!!a.clusterPermissions?.length && (
+                      <div>
+                        {a.clusterPermissions.length} Kubernetes cluster
+                        {a.clusterPermissions.length === 1 ? "" : "s"}
+                      </div>
+                    )}
                     {a.tokens.some(
                       (t: Row) =>
                         !t.revoked &&
@@ -290,8 +302,12 @@ export function Agents() {
                           level: a.level,
                           days: 30,
                           serverIds: a.permissions.map((p: Row) => p.serverId),
-                          operations: scopes.filter(
-                            (op) => op !== "workspace_manage",
+                          operations: scopes.filter((op) => ops.includes(op)),
+                          clusterIds: (a.clusterPermissions || []).map(
+                            (p: Row) => p.clusterId,
+                          ),
+                          clusterOperations: scopes.filter((op) =>
+                            settings.data?.kubernetesOperations?.includes(op),
                           ),
                           workspaceManagement:
                             scopes.includes("workspace_manage"),
@@ -369,7 +385,13 @@ export function Agents() {
                 disabled={
                   !form.name.trim() ||
                   form.serverIds.length > maxServerGrants ||
-                  (!form.serverIds.length && !form.workspaceManagement)
+                  (!form.serverIds.length &&
+                    !form.clusterIds.length &&
+                    !form.workspaceManagement) ||
+                  (!!form.clusterIds.length &&
+                    !form.clusterOperations.length) ||
+                  form.clusterIds.length > 50 ||
+                  (!!form.clusterIds.length && !!clusters.error)
                 }
                 onClick={() =>
                   void api<Row>(
@@ -378,6 +400,8 @@ export function Agents() {
                       level: form.level,
                       serverIds: form.serverIds,
                       operations: form.operations,
+                      clusterIds: form.clusterIds,
+                      clusterOperations: form.clusterOperations,
                       workspaceManagement: form.workspaceManagement,
                       ...(!form.id
                         ? {
@@ -429,6 +453,14 @@ export function Agents() {
                     workspaceManagement:
                       e.target.value === "administrator" &&
                       form.workspaceManagement,
+                    clusterOperations:
+                      e.target.value === "viewer"
+                        ? form.clusterOperations.filter((op) =>
+                            settings.data?.kubernetesReadOperations?.includes(
+                              op,
+                            ),
+                          )
+                        : form.clusterOperations,
                     operations:
                       e.target.value === "viewer"
                         ? form.operations.filter((op) =>
@@ -482,7 +514,7 @@ export function Agents() {
               </Field>
               <Field
                 label="Max calls per day"
-                hint="Counts SSH and workspace management calls."
+                hint="Counts SSH, Kubernetes and workspace management calls."
               >
                 <input
                   className="input"
@@ -515,8 +547,9 @@ export function Agents() {
           </p>
           <div className="drawer-section">Servers</div>
           <p className="hint">
-            Selected tools apply to every selected server. Up to {maxServerGrants} servers
-            per agent ({form.serverIds.length} selected).
+            Selected tools apply to every selected server. Up to{" "}
+            {maxServerGrants} servers per agent ({form.serverIds.length}{" "}
+            selected).
             {servers.length > maxServerGrants &&
               " Select all is unavailable because this workspace has more than 100 servers."}
           </p>
@@ -529,7 +562,9 @@ export function Agents() {
                 servers.length > maxServerGrants ||
                 servers.every((s) => form.serverIds.includes(s.id))
               }
-              onClick={() => setForm({ ...form, serverIds: servers.map((s) => s.id) })}
+              onClick={() =>
+                setForm({ ...form, serverIds: servers.map((s) => s.id) })
+              }
             >
               Select all servers
             </Button>
@@ -577,7 +612,10 @@ export function Agents() {
             <Button
               variant="text"
               size="sm"
-              disabled={!availableOps.length || availableOps.every((o) => form.operations.includes(o))}
+              disabled={
+                !availableOps.length ||
+                availableOps.every((o) => form.operations.includes(o))
+              }
               onClick={() => setForm({ ...form, operations: availableOps })}
             >
               Select all {form.level === "viewer" ? "read-only " : ""}SSH tools
@@ -608,6 +646,74 @@ export function Agents() {
               />
             ))}
           </div>
+          <div className="drawer-section" style={{ marginTop: 14 }}>
+            Kubernetes clusters
+          </div>
+          <p className="hint">
+            Choose saved clusters and tools separately from SSH grants. Existing
+            agents have no cluster access until assigned here. Commands always
+            require a human approval.
+          </p>
+          {clusters.error ? (
+            <p role="alert" className="hint">
+              Could not load cluster profiles. Retry before editing cluster
+              grants.
+            </p>
+          ) : null}
+          {!clusters.data?.length && !clusters.error && (
+            <p className="hint">
+              Import a kubeconfig in Kubernetes settings to add a cluster.
+            </p>
+          )}
+          <div className="check-grid">
+            {(clusters.data || []).map((cluster) => (
+              <Check
+                key={cluster.id}
+                label={cluster.name}
+                checked={form.clusterIds.includes(cluster.id)}
+                onChange={(value) =>
+                  setForm({
+                    ...form,
+                    clusterIds: value
+                      ? [...form.clusterIds, cluster.id]
+                      : form.clusterIds.filter((id) => id !== cluster.id),
+                  })
+                }
+              />
+            ))}
+          </div>
+          <div className="drawer-section" style={{ marginTop: 14 }}>
+            Kubernetes tools
+          </div>
+          <div className="check-grid">
+            {(settings.data?.kubernetesOperations || [])
+              .filter(
+                (op: string) =>
+                  form.level !== "viewer" ||
+                  settings.data?.kubernetesReadOperations?.includes(op),
+              )
+              .map((op: string) => (
+                <Check
+                  key={op}
+                  label={<span className="mono small">{op}</span>}
+                  checked={form.clusterOperations.includes(op)}
+                  onChange={(value) =>
+                    setForm({
+                      ...form,
+                      clusterOperations: value
+                        ? [...form.clusterOperations, op]
+                        : form.clusterOperations.filter((item) => item !== op),
+                    })
+                  }
+                />
+              ))}
+          </div>
+          <p className="hint">
+            For command tools, also select kubernetes_execution_status to
+            retrieve saved results. kubernetes_execute accepts a supported
+            kubectl-style command; kubernetes_pod_exec runs argv inside a named
+            container.
+          </p>
         </Drawer>
       )}
       {limits && (
@@ -700,13 +806,13 @@ function AgentActivity({ agent, close }: { agent: Row; close: () => void }) {
         </Button>
       }
     >
-      <Field label="Server">
+      <Field label="Target">
         <select
           className="select"
           value={server}
           onChange={(e) => setServer(e.target.value)}
         >
-          <option value="">All servers</option>
+          <option value="">All targets</option>
           {names.map(([id, name]) => (
             <option key={id} value={id}>
               {name}
@@ -719,7 +825,7 @@ function AgentActivity({ agent, close }: { agent: Row; close: () => void }) {
           <thead>
             <tr>
               <th>Operation</th>
-              <th>Server</th>
+              <th>Target</th>
               <th>Status</th>
               <th>When</th>
             </tr>
@@ -783,7 +889,7 @@ export function Approvals() {
             <thead>
               <tr>
                 <th>Operation</th>
-                <th>Server</th>
+                <th>Target</th>
                 <th>Arguments</th>
                 <th>Requested</th>
                 <th>Status</th>
@@ -793,19 +899,46 @@ export function Approvals() {
             <tbody>
               {list.map((a) => {
                 const expired =
-                  a.status === "pending" && new Date(a.expiresAt) < new Date();
+                  ["pending", "approved"].includes(a.status) &&
+                  new Date(a.expiresAt) < new Date();
                 return (
                   <tr key={a.id}>
                     <td className="mono small">{a.operation}</td>
-                    <td title={a.operation === "ssh_execute_many" ? (a.targetNames || []).join(", ") : undefined}>
-                      {a.operation === "ssh_execute_many" ? `${a.targetCount || 0} servers: ${(a.targetNames || []).join(", ")}` : a.server?.name}
+                    <td
+                      title={
+                        a.operation === "ssh_execute_many"
+                          ? (a.targetNames || []).join(", ")
+                          : undefined
+                      }
+                    >
+                      {a.operation === "ssh_execute_many"
+                        ? `${a.targetCount || 0} servers: ${(a.targetNames || []).join(", ")}`
+                        : a.cluster?.name || a.server?.name}
                     </td>
                     <td
-                      className="mono small ellipsis"
+                      className={
+                        "mono small" + (a.clusterId ? "" : " ellipsis")
+                      }
                       style={{ maxWidth: 320 }}
                       title={JSON.stringify(a.args, null, 2)}
                     >
-                      {JSON.stringify(a.args)}
+                      {a.clusterId ? (
+                        <details>
+                          <summary>Review command and arguments</summary>
+                          <pre
+                            style={{
+                              whiteSpace: "pre-wrap",
+                              overflowWrap: "anywhere",
+                              maxHeight: 320,
+                              overflow: "auto",
+                            }}
+                          >
+                            {JSON.stringify(a.args, null, 2)}
+                          </pre>
+                        </details>
+                      ) : (
+                        JSON.stringify(a.args)
+                      )}
                     </td>
                     <td>{timeAgo(a.createdAt)}</td>
                     <td>
@@ -842,38 +975,70 @@ export function Approvals() {
                           </Button>
                         </span>
                       )}
-                      {a.status === "approved" && !a.consumedAt && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          title="Run the approved operation now with your own permissions"
-                          onClick={() =>
-                            void operation(a.operation, {
-                              ...a.args,
-                              approvalId: a.id,
-                            })
-                              .then((result) => {
-                                if (a.operation === "ssh_execute_many" && Array.isArray(result.results)) {
-                                  setBatchResults((previous) => ({ ...previous, [a.id]: result.results }));
-                                  const succeeded = result.results.filter((entry: Row) => entry.status === "success").length;
-                                  notify.info(`${succeeded} succeeded, ${result.results.length - succeeded} failed.`);
-                                } else notify.success("Operation completed.");
-                                void refresh("approvals");
-                              })
-                              .catch(notify.error)
-                          }
-                        >
-                          Execute
-                        </Button>
+                      {a.clusterId && a.status === "approved" && !expired && (
+                        <span className="hint">
+                          Requester can resume with this approval.
+                        </span>
                       )}
+                      {!a.clusterId &&
+                        a.status === "approved" &&
+                        !expired &&
+                        !a.consumedAt && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            title="Run the approved operation now with your own permissions"
+                            onClick={() =>
+                              void operation(a.operation, {
+                                ...a.args,
+                                approvalId: a.id,
+                              })
+                                .then((result) => {
+                                  if (
+                                    a.operation === "ssh_execute_many" &&
+                                    Array.isArray(result.results)
+                                  ) {
+                                    setBatchResults((previous) => ({
+                                      ...previous,
+                                      [a.id]: result.results,
+                                    }));
+                                    const succeeded = result.results.filter(
+                                      (entry: Row) =>
+                                        entry.status === "success",
+                                    ).length;
+                                    notify.info(
+                                      `${succeeded} succeeded, ${result.results.length - succeeded} failed.`,
+                                    );
+                                  } else notify.success("Operation completed.");
+                                  void refresh("approvals");
+                                })
+                                .catch(notify.error)
+                            }
+                          >
+                            Execute
+                          </Button>
+                        )}
                       {batchResults[a.id] && (
                         <details className="small">
                           <summary>Batch results</summary>
                           {batchResults[a.id].map((entry: Row) => (
-                            <div key={entry.serverId} className="mono small" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                              {entry.serverId}: {entry.status}{entry.error ? ` — ${entry.error}` : ""}{entry.taskId ? ` (task ${entry.taskId})` : ""}
-                              {entry.result?.stdout ? `\n${entry.result.stdout}` : ""}
-                              {entry.result?.stderr ? `\n${entry.result.stderr}` : ""}
+                            <div
+                              key={entry.serverId}
+                              className="mono small"
+                              style={{
+                                whiteSpace: "pre-wrap",
+                                wordBreak: "break-word",
+                              }}
+                            >
+                              {entry.serverId}: {entry.status}
+                              {entry.error ? ` — ${entry.error}` : ""}
+                              {entry.taskId ? ` (task ${entry.taskId})` : ""}
+                              {entry.result?.stdout
+                                ? `\n${entry.result.stdout}`
+                                : ""}
+                              {entry.result?.stderr
+                                ? `\n${entry.result.stderr}`
+                                : ""}
                             </div>
                           ))}
                         </details>

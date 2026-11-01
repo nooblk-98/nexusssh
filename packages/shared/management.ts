@@ -1,3 +1,4 @@
+import { kubernetesOperations } from "../kubernetes/policy.js";
 import { z } from "zod";
 import { allOperations } from "../policy-engine/index.js";
 
@@ -63,6 +64,8 @@ export const agentAccessSchema = z
     level: z.enum(["viewer", "operator", "administrator", "custom"]),
     serverIds: z.array(id).max(100),
     operations,
+    clusterIds: z.array(id).max(50).optional(),
+    clusterOperations: z.array(z.enum(kubernetesOperations as [string, ...string[]])).max(20).optional(),
     workspaceManagement: z.boolean().default(false),
   })
   .strict();
@@ -360,7 +363,7 @@ export const managementTools: Record<string, Tool> = {
     "agents",
   ),
   agent_create: tool(
-    "Register an agent and return its bearer token once. Store that token securely. Workspace management requires administrator level.",
+    "Register an agent and return its bearer token once. Store that token securely. Workspace management requires administrator level. Cluster grants are assigned by human administrators in the app; omit cluster fields here.",
     "POST",
     "agents",
     agentAccessSchema.extend({
@@ -370,7 +373,7 @@ export const managementTools: Record<string, Tool> = {
     }),
   ),
   agent_update_access: tool(
-    "Replace an agent's level, SSH server/tool grants and workspace-management access. Updates existing tokens immediately without extending expiry.",
+    "Replace an agent's level, SSH server/tool grants and workspace-management access. Updates existing tokens immediately without extending expiry. Omit clusterIds and clusterOperations to preserve existing per-token cluster scopes; cluster grants can only be changed by a human administrator in the app.",
     "PATCH",
     "agents/:id/access",
     agentAccessSchema.extend({ id }),
