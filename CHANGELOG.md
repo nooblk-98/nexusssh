@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Server names use compact single-line rows again. Drag the sidebar's right
+  edge to reveal longer names; its width is remembered between visits.
+  Double-click the divider to reset it, or resize it with the keyboard.
+
 ## [0.2.0](https://github.com/nooblk-98/nexusssh/compare/v0.1.0...v0.2.0) - 2026-11-01
 
 ### Breaking changes

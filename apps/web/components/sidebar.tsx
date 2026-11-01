@@ -38,6 +38,7 @@ import { DefaultsEditor, MetadataEditor } from "./metadata-editor";
 import { HealthIndicator, ServerHealth } from "./server-health";
 import { CommandPalette } from "./command-palette";
 import { ExecuteMany } from "./execute-many";
+import { ResizableSidebar } from "./resizable-sidebar";
 import {
   Button,
   Drawer,
@@ -449,7 +450,7 @@ export function Sidebar({ me }: { me: Row }) {
       </span>
       <HealthIndicator server={s} now={healthNow} />
       <span className="grow">
-        <div className="srv-name">{s.name}</div>
+        <div className="srv-name ellipsis">{s.name}</div>
         <div className="srv-sub ellipsis">{s.host}&nbsp; | &nbsp;SSH2</div>
       </span>
     </button>
@@ -510,7 +511,7 @@ export function Sidebar({ me }: { me: Row }) {
     );
   };
   return (
-    <aside className="sidebar">
+    <ResizableSidebar>
       <div className="sidebar-head">
         <Logo />
         <span className="grow" />
@@ -775,7 +776,7 @@ export function Sidebar({ me }: { me: Row }) {
           </Field>
         </Drawer>
       )}
-    </aside>
+    </ResizableSidebar>
   );
 }
 // Pending approval requests, polled for administrators. A desktop notification

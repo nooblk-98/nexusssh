@@ -641,13 +641,37 @@ p {
   position: relative;
   display: flex;
   flex-direction: column;
-  width: 305px;
+  width: var(--sidebar-width, 305px);
   flex: none;
   background: var(--sidebar);
   border-right: 3px solid var(--border);
 }
 .shell.collapsed .sidebar {
   display: none;
+}
+.sidebar-resize {
+  position: absolute;
+  inset: 0 -5px 0 auto;
+  z-index: 4;
+  width: 10px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.sidebar-resize::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 4px;
+  width: 2px;
+}
+.sidebar-resize:hover::after,
+.sidebar-resize:focus-visible::after,
+.sidebar.resizing .sidebar-resize::after {
+  background: var(--primary);
+}
+.sidebar-resizing,
+.sidebar-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 .sidebar-head {
   display: flex;
@@ -952,10 +976,6 @@ p {
   font-size: 14px;
   color: var(--text-strong);
   line-height: 1.35;
-}
-.tree-server .srv-name {
-  white-space: normal;
-  overflow-wrap: anywhere;
 }
 .srv-sub {
   font-size: 11px;
@@ -1946,6 +1966,9 @@ p {
     z-index: 1000;
     width: min(305px, 86vw);
     box-shadow: var(--shadow-lg);
+  }
+  .sidebar-resize {
+    display: none;
   }
   .collapse-btn {
     right: 8px;
