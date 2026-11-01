@@ -121,10 +121,20 @@ function ClusterForm({
           (entry) => entry.name === data.currentContext && !entry.error,
         ) || data.contexts.find((entry) => !entry.error);
       setContext(selected?.name || "");
-      if (!selected)
+      if (!selected) {
+        const reasons = [
+          ...new Set(
+            data.contexts.flatMap((entry) =>
+              entry.error ? [entry.error] : [],
+            ),
+          ),
+        ];
         setError(
-          "No supported contexts were found. Review the context errors below.",
+          reasons.length === 1
+            ? `No supported contexts were found: ${reasons[0]}`
+            : "No supported contexts were found. Review the context errors below.",
         );
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {

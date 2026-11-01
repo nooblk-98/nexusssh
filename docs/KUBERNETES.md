@@ -25,6 +25,11 @@ Supported credentials are an embedded bearer `token` or embedded
 standard trusted certificate authorities apply. `tls-server-name` and API base
 paths, such as a cluster gateway's HTTPS path, are supported.
 
+Rancher-exported kubeconfigs with `access-key:secret-key` bearer tokens and
+`/k8s/clusters/...` gateway paths are supported. Import the token unchanged;
+do not remove its colon. Tokens cannot contain spaces, line breaks or header
+control characters.
+
 TLS verification is always enabled. External login commands (`exec`), auth
 providers, local credential/CA paths, proxy URLs, basic authentication, and
 impersonation are rejected. These features can run programs, read files, or

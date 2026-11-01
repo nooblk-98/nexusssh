@@ -311,6 +311,11 @@ test("handles unsupported contexts and cluster RBAC failures without showing cre
       .getByRole("alert"),
   ).toContainText("No supported contexts");
   await expect(
+    page
+      .getByRole("dialog", { name: "Add Kubernetes cluster" })
+      .getByRole("alert"),
+  ).toContainText("Login plugins are not supported.");
+  await expect(
     page.getByRole("button", { name: "Save cluster", exact: true }),
   ).toBeDisabled();
   await page.getByLabel("Kubeconfig contents").fill(kubeconfig);

@@ -162,10 +162,16 @@ function connection(
     .string()
     .min(1)
     .max(16384)
-    .regex(/^[A-Za-z0-9._~+/-]+=*$/)
+    // Rancher uses access-key:secret-key bearer tokens in exported kubeconfigs.
+    // Preserve that separator while rejecting whitespace and header controls.
+    .regex(/^[A-Za-z0-9._~+/:-]+=*$/)
     .optional()
     .safeParse(user.token);
-  if (!token.success || (!token.data && !(cert && key)) || !!cert !== !!key)
+  if (!token.success)
+    throw new KubeconfigError(
+      "The bearer token is empty or contains unsupported characters. Use the supplied token without spaces, line breaks, or control characters.",
+    );
+  if ((!token.data && !(cert && key)) || !!cert !== !!key)
     throw new KubeconfigError(
       "Provide a bearer token or an embedded client certificate and matching key.",
     );

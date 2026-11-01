@@ -38,6 +38,39 @@ const config = () => ({
 });
 
 describe("kubeconfig import", () => {
+  it("imports Rancher colon-delimited tokens and cluster gateway paths without exposing credentials in previews", () => {
+    const data = config();
+    const token = "kubeconfig-u-fixture:disposable-secret";
+    data.users[0].user.token = token;
+    data.clusters[0].cluster.server =
+      "https://rancher.example.test/k8s/clusters/c-m-fixture";
+    const source = JSON.stringify(data);
+    expect(parseKubeconfig(source)).toMatchObject({
+      authentication: "token",
+      token,
+      server: data.clusters[0].cluster.server,
+    });
+    const preview = kubeconfigContexts(source);
+    expect(preview.contexts.every((context) => !("error" in context))).toBe(
+      true,
+    );
+    expect(JSON.stringify(preview)).not.toContain(token);
+  });
+  it.each([
+    "fixture secret",
+    "fixture\tsecret",
+    "fixture\r\nInjected: secret",
+    "fixture\0secret",
+    "fixture\x7fsecret",
+    "fixture\u0085secret",
+  ])("rejects unsafe token %j without echoing it", (token) => {
+    const data = config();
+    data.users[0].user.token = token;
+    expect(() => parseKubeconfig(JSON.stringify(data))).toThrow(/bearer token/);
+    expect(
+      JSON.stringify(kubeconfigContexts(JSON.stringify(data))),
+    ).not.toContain(token);
+  });
   it("selects the requested context and previews only non-secret metadata", () => {
     const source = JSON.stringify(config());
     expect(parseKubeconfig(source)).toMatchObject({
@@ -279,6 +312,21 @@ describe("direct Kubernetes HTTPS transport", () => {
       ["127.0.0.1/32"],
     );
     expect(seen.at(-1)?.url).toBe("/proxy/clusters/local/version");
+  });
+  it("preserves a Rancher bearer token and gateway prefix on verified HTTPS requests", async () => {
+    const data = config();
+    data.users[0].user.token = "kubeconfig-u-fixture:disposable-secret";
+    data.clusters[0].cluster.server = endpoint + "/k8s/clusters/c-m-fixture";
+    Object.assign(data.clusters[0].cluster, {
+      "certificate-authority-data": Buffer.from(cert).toString("base64"),
+    });
+    await kubernetesRequest(parseKubeconfig(JSON.stringify(data)), "/version", [
+      "127.0.0.1/32",
+    ]);
+    expect(seen.at(-1)).toEqual({
+      url: "/k8s/clusters/c-m-fixture/version",
+      authorization: "Bearer kubeconfig-u-fixture:disposable-secret",
+    });
   });
   it("authenticates with an embedded client certificate and key", async () => {
     const data = config();

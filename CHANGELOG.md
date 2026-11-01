@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+
+- Rancher kubeconfigs with colon-separated bearer tokens now import correctly.
+  Invalid context previews show the specific reason in the main error message;
+  credential values remain hidden and header control characters are rejected.
+
 ### Changed
 
 - MCP agents now use only Administrator and Custom roles. Administrator enables
