@@ -1,3 +1,4 @@
+import { administratorAgentScopes, effectiveAgentScopes, isAgentAdministrator, administratorToken } from "../../../packages/policy-engine/index.js";
 import { kubernetesApprovals } from "./kubernetes-operations.js";
 import { kubernetesOperations, kubernetesReadOperations } from "../../../packages/kubernetes/policy.js";
 import {
@@ -90,6 +91,7 @@ import {
   WORKSPACE_MANAGE,
   managementTools,
   agentAccessSchema,
+  administratorAgentAccess,
 } from "../../../packages/shared/management.js";
 // Keep in sync with the icon picker in apps/web/components/icons.tsx.
 const serverIcons = [
@@ -1233,47 +1235,12 @@ export class AppController {
   ) {
     const p = await authenticate(req);
     admin(p);
-    const a = z
-      .object({
-        name: z.string().min(1).max(100),
-        level: z
-          .enum(["viewer", "operator", "administrator", "custom"])
-          .default("viewer"),
-        clusterIds: z.array(z.uuid()).max(50).default([]),
-        clusterOperations: z.array(z.enum(kubernetesOperations as [string, ...string[]])).max(20).default([]),
-        serverIds: z.array(z.uuid()).max(100),
-        operations: z
-          .array(z.enum(allOperations as [string, ...string[]]))
-          .max(60),
-        workspaceManagement: z.boolean().default(false),
-        expiresInDays: z.number().int().min(1).max(90).default(30),
-        ...agentLimits,
-      })
-      .strict()
-      .parse(body);
-    if (
-      a.operations.includes("terminal") ||
-      (a.level === "viewer" &&
-        a.operations.some((o) => !readOperations.includes(o)))
-    )
-      throw new BadRequestException("Invalid agent operations");
-    if (
-      (await db.server.count({
-        where: {
-          id: { in: a.serverIds },
-          organizationId: p.organizationId,
-          archived: false,
-        },
-      })) !== new Set(a.serverIds).size
-    )
-      throw new BadRequestException("Server unavailable");
-    if (a.workspaceManagement && a.level !== "administrator")
-      throw new BadRequestException(
-        "Workspace management requires administrator level",
-      );
-    if (a.clusterIds.length || a.clusterOperations.length) {
-      human(p);
-      if (a.level === "viewer" && a.clusterOperations.some((op) => !kubernetesReadOperations.includes(op))) throw new BadRequestException("Viewer agents may only receive Kubernetes read tools");
+    const parsed = agentAccessSchema.extend({ name: z.string().trim().min(1).max(100), level: z.enum(["administrator", "custom"]).default("custom"), clusterIds: z.array(z.uuid()).max(50).default([]), clusterOperations: z.array(z.enum(kubernetesOperations as [string, ...string[]])).max(20).default([]), expiresInDays: z.number().int().min(1).max(90).default(30), ...agentLimits }).parse(body);
+    const a = parsed.level === "administrator" ? { ...parsed, ...administratorAgentAccess } : parsed;
+    if (a.level === "administrator" && p.kind === "agent" && !isAgentAdministrator(p)) human(p);
+    if ((await db.server.count({ where: { id: { in: a.serverIds }, organizationId: p.organizationId, archived: false } })) !== new Set(a.serverIds).size) throw new BadRequestException("Server unavailable");
+    if (a.level === "custom" && (a.clusterIds.length || a.clusterOperations.length)) {
+      if (!isAgentAdministrator(p)) human(p);
       if (a.clusterIds.length && !a.clusterOperations.length) throw new BadRequestException("Choose Kubernetes tools for the selected clusters");
       if (await db.kubernetesCluster.count({ where: { organizationId: p.organizationId, id: { in: a.clusterIds } } }) !== new Set(a.clusterIds).size) throw new BadRequestException("Cluster unavailable");
     }
@@ -1302,6 +1269,7 @@ export class AppController {
               ...new Set([
                 ...a.operations,
                 ...a.clusterOperations,
+                ...(a.level === "administrator" ? administratorAgentScopes : []),
                 ...(a.workspaceManagement ? [WORKSPACE_MANAGE] : []),
               ]),
             ]),
@@ -1320,17 +1288,11 @@ export class AppController {
   ) {
     const p = await authenticate(req);
     admin(p);
-    const a = agentAccessSchema.parse(body);
+    const parsed = agentAccessSchema.parse(body);
+    const a = parsed.level === "administrator" ? { ...parsed, ...administratorAgentAccess } : parsed;
     if ((a.clusterIds === undefined) !== (a.clusterOperations === undefined)) throw new BadRequestException("Supply both clusterIds and clusterOperations");
-    if (a.clusterIds !== undefined) human(p);
-    if (a.level === "viewer" && a.clusterOperations?.some((op) => !kubernetesReadOperations.includes(op))) throw new BadRequestException("Viewer agents may only receive Kubernetes read tools");
+    if ((a.level === "administrator" || a.clusterIds !== undefined) && !isAgentAdministrator(p)) human(p);
     if (a.clusterIds?.length && !a.clusterOperations?.length) throw new BadRequestException("Choose Kubernetes tools for the selected clusters");
-    if (
-      (a.workspaceManagement && a.level !== "administrator") ||
-      (a.level === "viewer" &&
-        a.operations.some((op) => !readOperations.includes(op)))
-    )
-      throw new BadRequestException("Invalid agent access");
     await db.$transaction(async (tx) => {
       const agent = await tx.agent.findFirst({
         where: { id, organizationId: p.organizationId, revoked: false },
@@ -1368,7 +1330,7 @@ export class AppController {
       for (const token of tokens) {
         const old: string[] = JSON.parse(token.scopes);
         const clusterScopes = a.clusterOperations ?? old.filter((op) => kubernetesOperations.includes(op));
-        await tx.agentToken.update({ where: { id: token.id }, data: { scopes: JSON.stringify([...new Set([...a.operations, ...clusterScopes.filter((op) => a.level !== "viewer" || kubernetesReadOperations.includes(op)), ...(a.workspaceManagement ? [WORKSPACE_MANAGE] : [])])]) } });
+        await tx.agentToken.update({ where: { id: token.id }, data: { scopes: JSON.stringify([...new Set(a.level === "administrator" ? administratorAgentScopes : [...a.operations, ...clusterScopes, ...(a.workspaceManagement ? [WORKSPACE_MANAGE] : [])])]) } });
       }
     });
     await audit(p, "agent_access_updated", "success", undefined, id);
@@ -1383,8 +1345,7 @@ export class AppController {
       if (!agent) throw new NotFoundException("Agent unavailable");
       const server = await tx.server.findFirst({ where: { id: input.serverId, organizationId: p.organizationId, archived: false } });
       if (!server) throw new NotFoundException("Server unavailable");
-      if (agent.level === "viewer" && input.operations.some((op) => !readOperations.includes(op)))
-        throw new BadRequestException("Viewer agents may only receive read operations");
+      if (agent.level === "administrator") throw new BadRequestException("Administrator access is automatic. Choose Custom to edit grants.");
       const operations = JSON.stringify([...new Set(input.operations)]);
       await tx.agentPermission.upsert({ where: { agentId_serverId: { agentId: id, serverId: input.serverId } }, create: { agentId: id, serverId: input.serverId, operations }, update: { operations } });
       await tx.auditEvent.create({ data: { organizationId: p.organizationId, principalId: p.id, action: "agent_grant_updated", status: "success", serverId: input.serverId, correlationId: randomUUID() } });
@@ -1400,6 +1361,7 @@ export class AppController {
       if (!agent) throw new NotFoundException("Agent unavailable");
       const server = await tx.server.findFirst({ where: { id: serverId, organizationId: p.organizationId, archived: false } });
       if (!server) throw new NotFoundException("Server unavailable");
+      if (agent.level === "administrator") throw new BadRequestException("Administrator access is automatic. Choose Custom to edit grants.");
       const result = await tx.agentPermission.deleteMany({ where: { agentId: id, serverId } });
       await tx.auditEvent.create({ data: { organizationId: p.organizationId, principalId: p.id, action: "agent_grant_revoked", status: "success", serverId, correlationId: randomUUID() } });
       return result.count > 0;
@@ -2039,10 +2001,10 @@ export class AppController {
       const tasks = await tx.backgroundTask.findMany({ where: { batchId }, select: { principalId: true, organizationId: true, tokenId: true, serverId: true, status: true } });
       if (!tasks.length || tasks.some((task) => task.principalId !== batch.principalId || task.organizationId !== batch.organizationId || task.status !== "running"))
         throw new ForbiddenException("Batch preflight is incomplete");
-      const agent = await tx.agent.findFirst({ where: { id: batch.principalId, organizationId: batch.organizationId, revoked: false, owner: { disabled: false } }, include: { tokens: { where: { id: tasks[0].tokenId ?? "", revoked: false, expiresAt: { gt: new Date() } } } } });
+      const agent = await tx.agent.findFirst({ where: { id: batch.principalId, organizationId: batch.organizationId, revoked: false, owner: { disabled: false } }, include: { owner: true, tokens: { where: { id: tasks[0].tokenId ?? "", revoked: false, expiresAt: { gt: new Date() } } } } });
       if (agent) {
         const token = agent.tokens[0];
-        const scopes: string[] = token ? JSON.parse(token.scopes) : [];
+        const scopes: string[] = token ? effectiveAgentScopes(agent.level, JSON.parse(token.scopes), agent.owner.role) : [];
         if (tasks.some((task) => task.tokenId !== tasks[0].tokenId) || !batchTokenAllowed(tasks[0].tokenId, token ? { id: token.id, scopes } : null))
           throw new ForbiddenException("Original agent token no longer permits this batch");
       } else {
@@ -2064,7 +2026,8 @@ export class AppController {
       if (agent) for (const task of tasks) {
         const server = await tx.server.findFirst({ where: { id: task.serverId, organizationId: batch.organizationId, archived: false } });
         const grant = await tx.agentPermission.findUnique({ where: { agentId_serverId: { agentId: agent.id, serverId: task.serverId } } });
-        if (!server || !grant || !JSON.parse(grant.operations).includes("ssh_execute"))
+        const full = agent.tokens[0] && administratorToken(agent.level, effectiveAgentScopes(agent.level, JSON.parse(agent.tokens[0].scopes), agent.owner.role));
+        if (!server || (!full && (!grant || !JSON.parse(grant.operations).includes("ssh_execute"))))
           throw new ForbiddenException("Batch server execution grant was removed");
       }
       await tx.batchDispatch.update({ where: { id: batchId }, data: { status: "executing" } });
@@ -2090,7 +2053,7 @@ export class AppController {
       ? null
       : await db.user.findUnique({ where: { id: t.principalId } });
     const batchToken = t.batchId && agent && t.tokenId ? await db.agentToken.findFirst({ where: { id: t.tokenId, agentId: agent.id, revoked: false, expiresAt: { gt: new Date() } } }) : null;
-    const batchScopes: string[] = batchToken ? JSON.parse(batchToken.scopes) : [];
+    const batchScopes: string[] = batchToken && agent ? effectiveAgentScopes(agent.level, JSON.parse(batchToken.scopes), agent.owner.role) : [];
     return {
       cancelled:
         t.status === "cancelled" ||
@@ -2098,6 +2061,7 @@ export class AppController {
         !!(t.batchId && (await db.batchDispatch.findUnique({ where: { id: t.batchId }, select: { status: true } }))?.status === "aborted") ||
         !!agent?.revoked ||
         !!agent?.owner.disabled ||
+        !!(agent?.level === "administrator" && !["owner", "administrator"].includes(agent.owner.role)) ||
         !!(t.batchId && agent && !batchTokenAllowed(t.tokenId, batchToken ? { id: batchToken.id, scopes: batchScopes } : null)) ||
         !!user?.disabled ||
         t.expiresAt < new Date(),

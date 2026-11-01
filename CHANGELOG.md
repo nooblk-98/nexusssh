@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Changed
+
+- MCP agents now use only Administrator and Custom roles. Administrator enables
+  all current/future workspace servers, clusters, tools and management access
+  automatically; Custom provides selectable grants and workspace management.
+- Existing Viewer and Operator agents migrate to Custom with their effective
+  access preserved. Existing Administrator agents receive full workspace access.
+  Tokens, expiry, call limits and grants are retained; human command approvals
+  and credential export restrictions continue to apply. New API role values are
+  `administrator` and `custom`.
+
+- Server names use compact single-line rows again. Drag the sidebar's right
+  edge to reveal longer names; its width is remembered between visits.
+  Double-click the divider to reset it, or resize it with the keyboard.
+
 ### Added
 
 - Optional saved WireGuard and SSH bastion routes for Kubernetes profiles,
@@ -24,12 +39,6 @@
   non-interactive pod/container execution with stdout, stderr, and exit codes.
 - Separate per-agent cluster/tool grants, exact token-bound single-use approvals,
   encrypted expiring command results, shared call budgets and audit activity.
-
-### Changed
-
-- Server names use compact single-line rows again. Drag the sidebar's right
-  edge to reveal longer names; its width is remembered between visits.
-  Double-click the divider to reset it, or resize it with the keyboard.
 
 ## [0.2.0](https://github.com/nooblk-98/nexusssh/compare/v0.1.0...v0.2.0) - 2026-11-01
 

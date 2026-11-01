@@ -1,6 +1,6 @@
 import { kubernetesOperations } from "../kubernetes/policy.js";
 import { z } from "zod";
-import { allOperations } from "../policy-engine/index.js";
+import { allOperations, agentSshOperations } from "../policy-engine/index.js";
 
 export const WORKSPACE_MANAGE = "workspace_manage";
 const id = z.uuid();
@@ -61,14 +61,15 @@ const vpn = {
 };
 export const agentAccessSchema = z
   .object({
-    level: z.enum(["viewer", "operator", "administrator", "custom"]),
-    serverIds: z.array(id).max(100),
-    operations,
+    level: z.enum(["administrator", "custom"]),
+    serverIds: z.array(id).max(100).default([]),
+    operations: operations.default([]),
     clusterIds: z.array(id).max(50).optional(),
     clusterOperations: z.array(z.enum(kubernetesOperations as [string, ...string[]])).max(20).optional(),
     workspaceManagement: z.boolean().default(false),
   })
   .strict();
+export const administratorAgentAccess = { serverIds: [] as string[], operations: agentSshOperations, clusterIds: [] as string[], clusterOperations: kubernetesOperations, workspaceManagement: true };
 const limits = {
   maxCallsPerMinute: z.number().int().min(1).max(10000).nullable().optional(),
   maxCallsPerDay: z.number().int().min(1).max(1000000).nullable().optional(),
@@ -223,7 +224,7 @@ export const managementTools: Record<string, Tool> = {
     resource,
   ),
   kubernetes_cluster_create: tool(
-    "Add a saved Kubernetes cluster from YAML/JSON kubeconfig text and an optional context. Embedded tokens or client certificates are encrypted. Returns profile metadata only; never returns the kubeconfig, token, certificates, private keys or encrypted credentials. Does not grant cluster access automatically; a human administrator assigns agent cluster/tool grants in the app.",
+    "Add a saved Kubernetes cluster from YAML/JSON kubeconfig text and an optional context. Embedded tokens or client certificates are encrypted. Returns profile metadata only; never returns the kubeconfig, token, certificates, private keys or encrypted credentials. Custom agents need separate cluster/tool grants; Administrator agents automatically have workspace-wide access. Never returns saved connection credentials.",
     "POST",
     "kubernetes/clusters",
     z.object({
@@ -376,7 +377,7 @@ export const managementTools: Record<string, Tool> = {
     "agents",
   ),
   agent_create: tool(
-    "Register an agent and return its bearer token once. Store that token securely. Workspace management requires administrator level. Cluster grants are assigned by human administrators in the app; omit cluster fields here.",
+    "Register an agent and return its bearer token once. Store that token securely. Choose administrator for all current/future servers, clusters and tools, or custom for selected grants and optional workspace management. Promoting agents or assigning cluster grants requires a human administrator or a full Administrator agent.",
     "POST",
     "agents",
     agentAccessSchema.extend({
@@ -386,7 +387,7 @@ export const managementTools: Record<string, Tool> = {
     }),
   ),
   agent_update_access: tool(
-    "Replace an agent's level, SSH server/tool grants and workspace-management access. Updates existing tokens immediately without extending expiry. Omit clusterIds and clusterOperations to preserve existing per-token cluster scopes; cluster grants can only be changed by a human administrator in the app.",
+    "Replace an agent's level, SSH server/tool grants and workspace-management access. Updates existing tokens immediately without extending expiry. Administrator automatically enables every tool and resource; supplied custom selections are ignored. For Custom, omit clusterIds and clusterOperations to preserve existing per-token cluster scopes. Cluster grants require a human administrator or full Administrator agent.",
     "PATCH",
     "agents/:id/access",
     agentAccessSchema.extend({ id }),

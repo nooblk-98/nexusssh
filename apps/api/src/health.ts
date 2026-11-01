@@ -5,7 +5,7 @@ import { db } from "../../../packages/database/index.js";
 import { config, redisConnection } from "../../../packages/shared/config.js";
 import { scanHostKey } from "../../../packages/ssh-core/index.js";
 import { authorize, connection, sshLimits } from "./domain.js";
-import type { Principal } from "../../../packages/policy-engine/index.js";
+import { effectiveAgentScopes, type Principal } from "../../../packages/policy-engine/index.js";
 
 const HEALTH_STALE_MS = 30 * 60_000;
 const MAX_ACTIVE_BATCHES = 2;
@@ -63,11 +63,11 @@ export function startHealthWorker() {
     if (!server || check.batch.expiresAt < new Date()) return finishCheck(check.id, "unknown", "unavailable", null, null);
     try {
       if (check.batch.principalId !== "system") {
-        const agent = await db.agent.findFirst({ where: { id: check.batch.principalId, organizationId: check.organizationId, revoked: false, owner: { disabled: false } }, include: { tokens: { where: { revoked: false, expiresAt: { gt: new Date() } } } } });
+        const agent = await db.agent.findFirst({ where: { id: check.batch.principalId, organizationId: check.organizationId, revoked: false, owner: { disabled: false } }, include: { owner: true, tokens: { where: { revoked: false, expiresAt: { gt: new Date() } } } } });
         const user = agent ? null : await db.user.findFirst({ where: { id: check.batch.principalId, organizationId: check.organizationId, disabled: false } });
         if (!agent && !user) return finishCheck(check.id, "unknown", "permission_changed", null, null);
         const principal: Principal = agent
-          ? { id: agent.id, organizationId: check.organizationId, kind: "agent", role: agent.level, scopes: [...new Set(agent.tokens.flatMap((token) => JSON.parse(token.scopes) as string[]))] }
+          ? { id: agent.id, organizationId: check.organizationId, kind: "agent", role: agent.level, scopes: [...new Set(agent.tokens.flatMap((token) => effectiveAgentScopes(agent.level, JSON.parse(token.scopes), agent.owner.role)))] }
           : { id: user!.id, organizationId: check.organizationId, kind: "user", role: user!.role, scopes: [] };
         try { await authorize(principal, check.serverId, "server_test_connection"); }
         catch { return finishCheck(check.id, "unknown", "permission_changed", null, null); }

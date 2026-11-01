@@ -13,6 +13,7 @@ A self-hosted infrastructure console with real browser SSH, SFTP, and a remote M
 - Owner setup, password login, opaque HttpOnly sessions, TOTP MFA, role and server permissions.
 - Encrypted password/key identities, pinned host keys, destination CIDR allowlists, one-hop bastions.
 - Encrypted [WireGuard VPN profiles](docs/VPN.md), selected per server and optionally combined with an SSH bastion; terminals, SFTP and MCP use the same route.
+- MCP agent roles: Administrator automatically enables every tool and all current/future servers and clusters; Custom provides selected grants.
 - Direct [Kubernetes cluster connections](docs/KUBERNETES.md) using encrypted kubeconfigs: context selection, saved WireGuard/SSH bastion routes, namespace-scoped resource browsing, connection checks, bounded pod logs, and explicitly granted MCP kubectl-style commands and pod execution with human approvals.
 - Interactive xterm.js shells over authenticated WebSockets, multiple sessions, split panes, resizing, search and reconnect.
 - SFTP browsing, bounded uploads/downloads, Monaco editing, atomic saves, mkdir, rename/move and deletion.

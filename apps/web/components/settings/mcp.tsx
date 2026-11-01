@@ -166,15 +166,12 @@ export function Agents() {
   const ops: string[] = (settings.data?.operations || []).filter(
     (o: string) => o !== "terminal",
   );
-  const availableOps =
-    form?.level === "viewer"
-      ? ops.filter((o) => settings.data?.readOperations?.includes(o))
-      : ops;
+  const availableOps = ops;
   return (
     <div className="page">
       <PageHead
         title="AI Agents"
-        sub="Machine identities for MCP clients, limited to the servers, clusters and tools you assign"
+        sub="Administrator access for your workspace, or custom server, cluster and tool grants"
       >
         <Button
           variant="outline"
@@ -182,7 +179,7 @@ export function Agents() {
             setForm({
               name: "",
               workspaceManagement: false,
-              level: "viewer",
+              level: "administrator",
               days: 30,
               serverIds: [],
               operations: [],
@@ -244,14 +241,16 @@ export function Agents() {
                     <b style={{ fontWeight: 600 }}>{a.name}</b>
                   </td>
                   <td>
-                    {a.level} · {a.permissions.length} server
-                    {a.permissions.length === 1 ? "" : "s"}
-                    {!!a.clusterPermissions?.length && (
-                      <div>
-                        {a.clusterPermissions.length} Kubernetes cluster
-                        {a.clusterPermissions.length === 1 ? "" : "s"}
-                      </div>
-                    )}
+                    {a.level === "administrator"
+                      ? "Administrator · All servers and clusters"
+                      : `Custom · ${a.permissions.length} server${a.permissions.length === 1 ? "" : "s"}`}
+                    {a.level !== "administrator" &&
+                      !!a.clusterPermissions?.length && (
+                        <div>
+                          {a.clusterPermissions.length} Kubernetes cluster
+                          {a.clusterPermissions.length === 1 ? "" : "s"}
+                        </div>
+                      )}
                     {a.tokens.some(
                       (t: Row) =>
                         !t.revoked &&
@@ -299,7 +298,10 @@ export function Agents() {
                         setForm({
                           id: a.id,
                           name: a.name,
-                          level: a.level,
+                          level:
+                            a.level === "administrator"
+                              ? "administrator"
+                              : "custom",
                           days: 30,
                           serverIds: a.permissions.map((p: Row) => p.serverId),
                           operations: scopes.filter((op) => ops.includes(op)),
@@ -384,25 +386,30 @@ export function Agents() {
               <Button
                 disabled={
                   !form.name.trim() ||
-                  form.serverIds.length > maxServerGrants ||
-                  (!form.serverIds.length &&
-                    !form.clusterIds.length &&
-                    !form.workspaceManagement) ||
-                  (!!form.clusterIds.length &&
-                    !form.clusterOperations.length) ||
-                  form.clusterIds.length > 50 ||
-                  (!!form.clusterIds.length && !!clusters.error)
+                  (form.level === "custom" &&
+                    (form.serverIds.length > maxServerGrants ||
+                      (!form.serverIds.length &&
+                        !form.clusterIds.length &&
+                        !form.workspaceManagement) ||
+                      (!!form.clusterIds.length &&
+                        !form.clusterOperations.length) ||
+                      form.clusterIds.length > 50 ||
+                      (!!form.clusterIds.length && !!clusters.error)))
                 }
                 onClick={() =>
                   void api<Row>(
                     form.id ? "agents/" + form.id + "/access" : "agents",
                     {
                       level: form.level,
-                      serverIds: form.serverIds,
-                      operations: form.operations,
-                      clusterIds: form.clusterIds,
-                      clusterOperations: form.clusterOperations,
-                      workspaceManagement: form.workspaceManagement,
+                      ...(form.level === "custom"
+                        ? {
+                            serverIds: form.serverIds,
+                            operations: form.operations,
+                            clusterIds: form.clusterIds,
+                            clusterOperations: form.clusterOperations,
+                            workspaceManagement: form.workspaceManagement,
+                          }
+                        : {}),
                       ...(!form.id
                         ? {
                             name: form.name.trim(),
@@ -441,37 +448,13 @@ export function Agents() {
           <div className="grid-2">
             <Field
               label="Permission level"
-              hint="Custom uses only the tools selected below."
+              hint="Administrator enables all access. Custom uses your selections below."
             >
               <select
                 className="select"
                 value={form.level}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    level: e.target.value,
-                    workspaceManagement:
-                      e.target.value === "administrator" &&
-                      form.workspaceManagement,
-                    clusterOperations:
-                      e.target.value === "viewer"
-                        ? form.clusterOperations.filter((op) =>
-                            settings.data?.kubernetesReadOperations?.includes(
-                              op,
-                            ),
-                          )
-                        : form.clusterOperations,
-                    operations:
-                      e.target.value === "viewer"
-                        ? form.operations.filter((op) =>
-                            settings.data?.readOperations.includes(op),
-                          )
-                        : form.operations,
-                  })
-                }
+                onChange={(e) => setForm({ ...form, level: e.target.value })}
               >
-                <option value="viewer">Viewer</option>
-                <option value="operator">Operator</option>
                 <option value="administrator">Administrator</option>
                 <option value="custom">Custom</option>
               </select>
@@ -530,194 +513,207 @@ export function Agents() {
               </Field>
             </div>
           )}
-          <div className="drawer-section">Workspace management</div>
-          <Check
-            label="Manage this workspace through MCP"
-            checked={form.workspaceManagement}
-            disabled={form.level !== "administrator"}
-            onChange={(workspaceManagement) =>
-              setForm({ ...form, workspaceManagement })
-            }
-          />
-          <p className="hint" style={{ marginBottom: 16 }}>
-            Administrator agents can add encrypted Kubernetes profiles and
-            manage SSH identities, VPNs, folders, servers, users, teams,
-            settings and other agents. Existing tokens receive access
-            immediately. SSH execution still uses the selected tools and server
-            grants; approval decisions stay in the app. Saved SSH credentials
-            and kubeconfigs are never returned through MCP. Kubernetes
-            cluster/tool grants are assigned separately by a human
-            administrator.
-          </p>
-          <div className="drawer-section">Servers</div>
-          <p className="hint">
-            Selected tools apply to every selected server. Up to{" "}
-            {maxServerGrants} servers per agent ({form.serverIds.length}{" "}
-            selected).
-            {servers.length > maxServerGrants &&
-              " Select all is unavailable because this workspace has more than 100 servers."}
-          </p>
-          <div className="row" style={{ gap: 8, marginBottom: 10 }}>
-            <Button
-              variant="text"
-              size="sm"
-              disabled={
-                !servers.length ||
-                servers.length > maxServerGrants ||
-                servers.every((s) => form.serverIds.includes(s.id))
-              }
-              onClick={() =>
-                setForm({ ...form, serverIds: servers.map((s) => s.id) })
-              }
-            >
-              Select all servers
-            </Button>
-            <Button
-              variant="text"
-              size="sm"
-              disabled={!form.serverIds.length}
-              onClick={() => setForm({ ...form, serverIds: [] })}
-            >
-              Clear servers
-            </Button>
-          </div>
-          <div className="check-grid">
-            {servers.map((s) => (
+          {form.level === "administrator" ? (
+            <div className="card card-pad" role="note">
+              <b>All MCP permissions enabled</b>
+              <p className="hint">
+                Administrator agents can use every SSH and Kubernetes tool on
+                all current and future servers and clusters, and manage the
+                workspace. No individual grants are needed.
+              </p>
+              <p className="hint">
+                Command approvals still require a human decision. Saved SSH
+                credentials and kubeconfigs are never returned through MCP.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="drawer-section">Workspace management</div>
               <Check
-                key={s.id}
-                label={s.name}
-                checked={form.serverIds.includes(s.id)}
-                disabled={
-                  !form.serverIds.includes(s.id) &&
-                  form.serverIds.length >= maxServerGrants
-                }
-                onChange={(v) =>
-                  setForm({
-                    ...form,
-                    serverIds: v
-                      ? form.serverIds.length < maxServerGrants
-                        ? [...form.serverIds, s.id]
-                        : form.serverIds
-                      : form.serverIds.filter((x) => x !== s.id),
-                  })
+                label="Manage this workspace through MCP"
+                checked={form.workspaceManagement}
+                onChange={(workspaceManagement) =>
+                  setForm({ ...form, workspaceManagement })
                 }
               />
-            ))}
-          </div>
-          <div className="drawer-section" style={{ marginTop: 14 }}>
-            SSH tools
-          </div>
-          <p className="hint">
-            {form.level === "viewer"
-              ? "Viewer agents can use read-only tools only."
-              : "Select the SSH actions this agent can use on its selected servers."}
-          </p>
-          <div className="row" style={{ gap: 8, marginBottom: 10 }}>
-            <Button
-              variant="text"
-              size="sm"
-              disabled={
-                !availableOps.length ||
-                availableOps.every((o) => form.operations.includes(o))
-              }
-              onClick={() => setForm({ ...form, operations: availableOps })}
-            >
-              Select all {form.level === "viewer" ? "read-only " : ""}SSH tools
-            </Button>
-            <Button
-              variant="text"
-              size="sm"
-              disabled={!form.operations.length}
-              onClick={() => setForm({ ...form, operations: [] })}
-            >
-              Clear SSH tools
-            </Button>
-          </div>
-          <div className="check-grid">
-            {availableOps.map((o) => (
-              <Check
-                key={o}
-                label={<span className="mono small">{o}</span>}
-                checked={form.operations.includes(o)}
-                onChange={(v) =>
-                  setForm({
-                    ...form,
-                    operations: v
-                      ? [...form.operations, o]
-                      : form.operations.filter((x) => x !== o),
-                  })
-                }
-              />
-            ))}
-          </div>
-          <div className="drawer-section" style={{ marginTop: 14 }}>
-            Kubernetes clusters
-          </div>
-          <p className="hint">
-            Choose saved clusters and tools separately from SSH grants. Existing
-            agents have no cluster access until assigned here. Commands always
-            require a human approval.
-          </p>
-          {clusters.error ? (
-            <p role="alert" className="hint">
-              Could not load cluster profiles. Retry before editing cluster
-              grants.
-            </p>
-          ) : null}
-          {!clusters.data?.length && !clusters.error && (
-            <p className="hint">
-              Import a kubeconfig in Kubernetes settings to add a cluster.
-            </p>
-          )}
-          <div className="check-grid">
-            {(clusters.data || []).map((cluster) => (
-              <Check
-                key={cluster.id}
-                label={cluster.name}
-                checked={form.clusterIds.includes(cluster.id)}
-                onChange={(value) =>
-                  setForm({
-                    ...form,
-                    clusterIds: value
-                      ? [...form.clusterIds, cluster.id]
-                      : form.clusterIds.filter((id) => id !== cluster.id),
-                  })
-                }
-              />
-            ))}
-          </div>
-          <div className="drawer-section" style={{ marginTop: 14 }}>
-            Kubernetes tools
-          </div>
-          <div className="check-grid">
-            {(settings.data?.kubernetesOperations || [])
-              .filter(
-                (op: string) =>
-                  form.level !== "viewer" ||
-                  settings.data?.kubernetesReadOperations?.includes(op),
-              )
-              .map((op: string) => (
-                <Check
-                  key={op}
-                  label={<span className="mono small">{op}</span>}
-                  checked={form.clusterOperations.includes(op)}
-                  onChange={(value) =>
-                    setForm({
-                      ...form,
-                      clusterOperations: value
-                        ? [...form.clusterOperations, op]
-                        : form.clusterOperations.filter((item) => item !== op),
-                    })
+              <p className="hint" style={{ marginBottom: 16 }}>
+                Enable this group to add encrypted Kubernetes profiles and
+                manage SSH identities, VPNs, folders, servers, users, teams,
+                settings and other agents. Existing tokens receive access
+                immediately. SSH execution still uses the selected tools and
+                server grants; approval decisions stay in the app. Saved SSH
+                credentials and kubeconfigs are never returned through MCP.
+                Kubernetes cluster/tool grants are assigned separately by a
+                human administrator.
+              </p>
+              <div className="drawer-section">Servers</div>
+              <p className="hint">
+                Selected tools apply to every selected server. Up to{" "}
+                {maxServerGrants} servers per agent ({form.serverIds.length}{" "}
+                selected).
+                {servers.length > maxServerGrants &&
+                  " Select all is unavailable because this workspace has more than 100 servers."}
+              </p>
+              <div className="row" style={{ gap: 8, marginBottom: 10 }}>
+                <Button
+                  variant="text"
+                  size="sm"
+                  disabled={
+                    !servers.length ||
+                    servers.length > maxServerGrants ||
+                    servers.every((s) => form.serverIds.includes(s.id))
                   }
-                />
-              ))}
-          </div>
-          <p className="hint">
-            For command tools, also select kubernetes_execution_status to
-            retrieve saved results. kubernetes_execute accepts a supported
-            kubectl-style command; kubernetes_pod_exec runs argv inside a named
-            container.
-          </p>
+                  onClick={() =>
+                    setForm({ ...form, serverIds: servers.map((s) => s.id) })
+                  }
+                >
+                  Select all servers
+                </Button>
+                <Button
+                  variant="text"
+                  size="sm"
+                  disabled={!form.serverIds.length}
+                  onClick={() => setForm({ ...form, serverIds: [] })}
+                >
+                  Clear servers
+                </Button>
+              </div>
+              <div className="check-grid">
+                {servers.map((s) => (
+                  <Check
+                    key={s.id}
+                    label={s.name}
+                    checked={form.serverIds.includes(s.id)}
+                    disabled={
+                      !form.serverIds.includes(s.id) &&
+                      form.serverIds.length >= maxServerGrants
+                    }
+                    onChange={(v) =>
+                      setForm({
+                        ...form,
+                        serverIds: v
+                          ? form.serverIds.length < maxServerGrants
+                            ? [...form.serverIds, s.id]
+                            : form.serverIds
+                          : form.serverIds.filter((x) => x !== s.id),
+                      })
+                    }
+                  />
+                ))}
+              </div>
+              <div className="drawer-section" style={{ marginTop: 14 }}>
+                SSH tools
+              </div>
+              <p className="hint">
+                Select the SSH actions this agent can use on its selected
+                servers.
+              </p>
+              <div className="row" style={{ gap: 8, marginBottom: 10 }}>
+                <Button
+                  variant="text"
+                  size="sm"
+                  disabled={
+                    !availableOps.length ||
+                    availableOps.every((o) => form.operations.includes(o))
+                  }
+                  onClick={() => setForm({ ...form, operations: availableOps })}
+                >
+                  Select all SSH tools
+                </Button>
+                <Button
+                  variant="text"
+                  size="sm"
+                  disabled={!form.operations.length}
+                  onClick={() => setForm({ ...form, operations: [] })}
+                >
+                  Clear SSH tools
+                </Button>
+              </div>
+              <div className="check-grid">
+                {availableOps.map((o) => (
+                  <Check
+                    key={o}
+                    label={<span className="mono small">{o}</span>}
+                    checked={form.operations.includes(o)}
+                    onChange={(v) =>
+                      setForm({
+                        ...form,
+                        operations: v
+                          ? [...form.operations, o]
+                          : form.operations.filter((x) => x !== o),
+                      })
+                    }
+                  />
+                ))}
+              </div>
+              <div className="drawer-section" style={{ marginTop: 14 }}>
+                Kubernetes clusters
+              </div>
+              <p className="hint">
+                Choose saved clusters and tools separately from SSH grants.
+                Existing agents have no cluster access until assigned here.
+                Commands always require a human approval.
+              </p>
+              {clusters.error ? (
+                <p role="alert" className="hint">
+                  Could not load cluster profiles. Retry before editing cluster
+                  grants.
+                </p>
+              ) : null}
+              {!clusters.data?.length && !clusters.error && (
+                <p className="hint">
+                  Import a kubeconfig in Kubernetes settings to add a cluster.
+                </p>
+              )}
+              <div className="check-grid">
+                {(clusters.data || []).map((cluster) => (
+                  <Check
+                    key={cluster.id}
+                    label={cluster.name}
+                    checked={form.clusterIds.includes(cluster.id)}
+                    onChange={(value) =>
+                      setForm({
+                        ...form,
+                        clusterIds: value
+                          ? [...form.clusterIds, cluster.id]
+                          : form.clusterIds.filter((id) => id !== cluster.id),
+                      })
+                    }
+                  />
+                ))}
+              </div>
+              <div className="drawer-section" style={{ marginTop: 14 }}>
+                Kubernetes tools
+              </div>
+              <div className="check-grid">
+                {(settings.data?.kubernetesOperations || []).map(
+                  (op: string) => (
+                    <Check
+                      key={op}
+                      label={<span className="mono small">{op}</span>}
+                      checked={form.clusterOperations.includes(op)}
+                      onChange={(value) =>
+                        setForm({
+                          ...form,
+                          clusterOperations: value
+                            ? [...form.clusterOperations, op]
+                            : form.clusterOperations.filter(
+                                (item) => item !== op,
+                              ),
+                        })
+                      }
+                    />
+                  ),
+                )}
+              </div>
+              <p className="hint">
+                For command tools, also select kubernetes_execution_status to
+                retrieve saved results. kubernetes_execute accepts a supported
+                kubectl-style command; kubernetes_pod_exec runs argv inside a
+                named container.
+              </p>
+            </>
+          )}
         </Drawer>
       )}
       {limits && (

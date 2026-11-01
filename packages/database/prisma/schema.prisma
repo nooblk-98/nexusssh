@@ -294,7 +294,7 @@ model Agent {
   ownerId String
   owner User @relation(fields: [ownerId], references: [id])
   name String
-  level String @default("viewer")
+  level String @default("custom")
   revoked Boolean @default(false)
   lastActivityAt DateTime?
   maxCallsPerMinute Int?

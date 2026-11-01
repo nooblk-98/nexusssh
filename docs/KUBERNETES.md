@@ -144,11 +144,13 @@ without recording credential contents or log output.
 ## Direct Kubernetes MCP tools
 
 1. Import the cluster in **Kubernetes**.
-2. Open **AI Agents**, register an agent or edit **Access**, and select its
-   **Kubernetes clusters** and **Kubernetes tools**. These grants are separate
-   from SSH servers. Existing tokens receive the updated scopes immediately;
-   existing agents start with no cluster access. Only human administrators can
-   assign cluster access. Workspace management does not imply cluster access.
+2. Open **AI Agents**, register an agent or edit **Access**. Choose
+   **Administrator** for all current/future clusters, servers and MCP tools.
+   Choose **Custom** to select individual **Kubernetes clusters** and
+   **Kubernetes tools**, separately from SSH grants. Existing tokens receive
+   updated access immediately. Custom workspace-management access alone does
+   not grant cluster execution; a human administrator or full Administrator
+   agent assigns Custom cluster/tool grants.
 3. Connect the agent token to the existing MCP endpoint. Refresh your client's
    tool list if it was connected before the deployment.
 
@@ -158,8 +160,9 @@ text, optional `context`/`description`, and optional saved `vpnProfileId` and
 `bastionId`. These IDs must belong to the same workspace. This is a write-only
 credential submission: the result contains profile metadata, never the saved
 kubeconfig, token, certificate, private key or encrypted credential. Creation
-does not automatically grant the agent access to that cluster. Human
-administrators assign cluster/tool grants separately.
+does not automatically grant Custom agents access to that cluster. Full
+Administrator agents have automatic access, including newly imported clusters.
+Human administrators or full Administrator agents assign Custom grants.
 
 SSH `identity_create` similarly accepts a supplied private key/passphrase or
 password and returns only identity metadata. Identity lists contain IDs, names,
@@ -176,8 +179,8 @@ can use granted connections without receiving the saved connection credentials.
 | `kubernetes_pod_exec` | Request an approved command inside one named pod and container. |
 | `kubernetes_execution_status` | Retrieve your command execution's status and encrypted saved result. |
 
-Viewer agents can receive only read tools. Each tool requires both its token
-scope and a grant on the selected cluster. Grant `kubernetes_clusters_list` for
+For Custom agents, each tool requires both its token scope and a grant on the
+selected cluster. Administrator automatically enables all tools and clusters. Grant `kubernetes_clusters_list` for
 discovery and `kubernetes_execution_status` for later result retrieval, alongside
 the desired command tools. Kubernetes RBAC on the uploaded identity still applies.
 

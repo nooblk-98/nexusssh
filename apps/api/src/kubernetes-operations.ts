@@ -18,7 +18,11 @@ import {
   seal,
   unseal,
 } from "../../../packages/shared/crypto.js";
-import type { Principal } from "../../../packages/policy-engine/index.js";
+import {
+  administratorToken,
+  effectiveAgentScopes,
+  type Principal,
+} from "../../../packages/policy-engine/index.js";
 import { kubernetesSchemas } from "../../../packages/kubernetes/tools.js";
 import {
   kubernetesReadOperations,
@@ -51,7 +55,7 @@ const resultAAD = (org: string, id: string) =>
   `${org}:kubernetes-execution:${id}`;
 
 // Re-read live token and grants for every request and again before consumption.
-// workspace_manage and administrator agent level never imply cluster access.
+// Full administrator tokens cover the workspace; Custom tokens need grants.
 export async function kubernetesAccess(
   p: Principal,
   op: string,
@@ -71,7 +75,7 @@ export async function kubernetesAccess(
       throw new ForbiddenException(
         "Kubernetes access requires an administrator.",
       );
-    return;
+    return true;
   }
   if (!p.tokenId || !p.scopes.includes(op))
     throw new ForbiddenException(
@@ -88,18 +92,26 @@ export async function kubernetesAccess(
     },
     include: { agent: { include: { owner: true } } },
   });
+  const scopes = token
+    ? effectiveAgentScopes(
+        token.agent.level,
+        JSON.parse(token.scopes),
+        token.agent.owner.role,
+      )
+    : [];
+  const full = !!token && administratorToken(token.agent.level, scopes);
   if (
     !token ||
     token.agent.revoked ||
     token.agent.organizationId !== p.organizationId ||
     token.agent.owner.disabled ||
-    !JSON.parse(token.scopes).includes(op) ||
+    !scopes.includes(op) ||
     (token.agent.level === "viewer" && !kubernetesReadOperations.includes(op))
   )
     throw new ForbiddenException(
       "Agent credential or Kubernetes tool access is no longer valid.",
     );
-  if (clusterId) {
+  if (clusterId && !full) {
     const grant = await store.kubernetesAgentPermission.findUnique({
       where: { agentId_clusterId: { agentId: p.id, clusterId } },
     });
@@ -108,6 +120,7 @@ export async function kubernetesAccess(
         "Agent has no grant for this cluster and tool.",
       );
   }
+  return full;
 }
 async function clusterFor(
   p: Principal,
@@ -205,10 +218,11 @@ async function perform(
   signal?: AbortSignal,
 ): Promise<any> {
   if (op === "kubernetes_clusters_list") {
+    const full = await kubernetesAccess(p, op);
     const rows = await db.kubernetesCluster.findMany({
       where: {
         organizationId: p.organizationId,
-        ...(p.kind === "agent"
+        ...(p.kind === "agent" && !full
           ? { agentPermissions: { some: { agentId: p.id } } }
           : {}),
       },
@@ -231,6 +245,7 @@ async function perform(
       clusters: rows
         .filter(
           (r) =>
+            full ||
             p.kind !== "agent" ||
             r.agentPermissions.some((g) =>
               JSON.parse(g.operations).includes(op),

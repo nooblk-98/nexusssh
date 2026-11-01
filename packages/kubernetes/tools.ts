@@ -53,7 +53,7 @@ export const kubernetesSchemas: Record<string, z.ZodObject<any>> = {
 
 export const kubernetesToolDescriptions: Record<string, string> = {
   kubernetes_clusters_list:
-    "List only explicitly granted saved Kubernetes clusters. Never returns kubeconfig credentials.",
+    "List accessible saved Kubernetes clusters: all workspace clusters for Administrator, explicitly granted clusters for Custom. Never returns kubeconfig credentials.",
   kubernetes_cluster_check:
     "Check a granted saved cluster's HTTPS API and Kubernetes version.",
   kubernetes_resources_list:

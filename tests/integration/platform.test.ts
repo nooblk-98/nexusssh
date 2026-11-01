@@ -229,7 +229,7 @@ describe.runIf(enabled)(
       serverId = added.data.id;
       const agent = await request("agents", {
         name: "Integration agent",
-        level: "operator",
+        level: "custom",
         serverIds: [serverId],
         operations: [
           "system_info",
@@ -862,7 +862,7 @@ describe.runIf(enabled)(
     it("caps agent calls per minute", async () => {
       const agent = await request("agents", {
         name: "Capped agent",
-        level: "viewer",
+        level: "custom",
         serverIds: [serverId],
         operations: ["server_test_connection"],
         expiresInDays: 1,
@@ -1122,7 +1122,7 @@ describe.runIf(enabled)(
         ).toContain("invite=");
         const childAgent = await call("agent_create", {
           name: "MCP child agent",
-          level: "viewer",
+          level: "custom",
           serverIds: [created.id],
           operations: ["server_get_info"],
           workspaceManagement: false,
@@ -1130,7 +1130,7 @@ describe.runIf(enabled)(
         expect(childAgent.token).toBeTruthy();
         await call("agent_update_access", {
           id: childAgent.agent.id,
-          level: "viewer",
+          level: "custom",
           serverIds: [],
           operations: [],
           workspaceManagement: false,
@@ -1196,7 +1196,7 @@ describe.runIf(enabled)(
     it("requires explicit management access and honors removal, owner roles, workspace isolation and budgets", async () => {
       const registered = await request("agents", {
         name: "Scoped manager",
-        level: "administrator",
+        level: "custom",
         serverIds: [],
         operations: [],
       });
@@ -1206,7 +1206,7 @@ describe.runIf(enabled)(
         403,
       );
       const access = {
-        level: "administrator",
+        level: "custom",
         serverIds: [],
         operations: [],
         workspaceManagement: true,

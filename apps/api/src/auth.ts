@@ -13,7 +13,11 @@ import {
   mcpAudience,
   sameOrigin,
 } from "../../../packages/shared/config.js";
-import type { Principal } from "../../../packages/policy-engine/index.js";
+import {
+  administratorToken,
+  effectiveAgentScopes,
+  type Principal,
+} from "../../../packages/policy-engine/index.js";
 export async function authenticate(req: Request): Promise<Principal> {
   const auth = req.headers.authorization;
   if (auth?.startsWith("Bearer ")) {
@@ -33,7 +37,17 @@ export async function authenticate(req: Request): Promise<Principal> {
       throw new UnauthorizedException(
         "Invalid, expired, or revoked agent credential",
       );
-    const scopes: string[] = JSON.parse(token.scopes);
+    const scopes = effectiveAgentScopes(
+      token.agent.level,
+      JSON.parse(token.scopes),
+    );
+    if (
+      administratorToken(token.agent.level, scopes) &&
+      !["owner", "administrator"].includes(token.agent.owner.role)
+    )
+      throw new ForbiddenException(
+        "Administrator agents require an administrator owner",
+      );
     const managementOperation = managementRoute(
       req.method,
       req.originalUrl.split("?")[0],
@@ -41,11 +55,10 @@ export async function authenticate(req: Request): Promise<Principal> {
     if (managementOperation) {
       if (
         !scopes.includes(WORKSPACE_MANAGE) ||
-        token.agent.level !== "administrator" ||
         !["owner", "administrator"].includes(token.agent.owner.role)
       )
         throw new ForbiddenException(
-          "Enable Workspace management for an administrator agent to use this tool",
+          "Enable Workspace management for this agent to use this tool",
         );
       const entry = await reserveAgentCall(token.agentId, (tx) =>
         tx.auditEvent.create({

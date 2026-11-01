@@ -4,6 +4,131 @@ import {
   kubernetesReadOperations,
 } from "../../packages/kubernetes/policy";
 const clusterId = "208c4b2a-6f69-439a-83f2-ed43ea8947f2";
+
+test("Administrator defaults to all permissions and Custom exposes selectable grants", async ({
+  page,
+}) => {
+  const serverId = "126618dd-b6ed-416c-96c5-2d36f8469e41";
+  let agent: any = null;
+  const writes: any[] = [];
+  await page.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname.slice(5),
+      method = route.request().method();
+    let data: any = [];
+    if (path === "auth/me")
+      data = { id: "owner", name: "Owner", role: "owner" };
+    else if (path === "preferences") data = { uiTheme: "light" };
+    else if (path === "servers")
+      data = [
+        {
+          id: serverId,
+          name: "Example server",
+          host: "10.0.0.2",
+          port: 22,
+          username: "test",
+          tags: [],
+          status: "unknown",
+        },
+      ];
+    else if (path === "kubernetes/clusters")
+      data = [{ id: clusterId, name: "Example cluster" }];
+    else if (path === "settings")
+      data = {
+        operations: ["system_info", "ssh_execute"],
+        kubernetesOperations,
+      };
+    else if (path === "agents" && method === "GET") data = agent ? [agent] : [];
+    else if (path === "agents" && method === "POST") {
+      const body = route.request().postDataJSON();
+      writes.push(body);
+      agent = {
+        id: "full-admin",
+        name: body.name,
+        level: body.level,
+        permissions: [],
+        clusterPermissions: [],
+        tokens: [
+          {
+            revoked: false,
+            scopes: JSON.stringify([
+              "system_info",
+              "ssh_execute",
+              ...kubernetesOperations,
+              "workspace_manage",
+              "workspace_admin",
+            ]),
+          },
+        ],
+      };
+      data = { agent, token: "fixture-token" };
+    } else if (path === "agents/full-admin/access") {
+      writes.push(route.request().postDataJSON());
+      data = { updated: true };
+    }
+    await route.fulfill({ json: data });
+  });
+  await page.goto("/settings/agents");
+  await page
+    .getByRole("button", { name: "Register Agent", exact: true })
+    .click();
+  const drawer = page.getByRole("dialog", {
+    name: "Register Agent",
+    exact: true,
+  });
+  await expect(drawer.getByLabel("Permission level")).toHaveValue(
+    "administrator",
+  );
+  await expect(drawer.getByRole("option")).toHaveText([
+    "Administrator",
+    "Custom",
+  ]);
+  await expect(
+    drawer.getByText("All MCP permissions enabled", { exact: true }),
+  ).toBeVisible();
+  await expect(drawer.getByRole("checkbox")).toHaveCount(0);
+  await drawer.getByLabel("Agent Name").fill("Full Admin");
+  await drawer.getByRole("button", { name: "Create Token" }).click();
+  expect(writes[0]).toMatchObject({
+    level: "administrator",
+    name: "Full Admin",
+  });
+  for (const key of [
+    "serverIds",
+    "operations",
+    "clusterIds",
+    "clusterOperations",
+    "workspaceManagement",
+  ])
+    expect(writes[0]).not.toHaveProperty(key);
+  await expect(
+    page
+      .getByRole("cell")
+      .filter({ hasText: "Administrator · All servers and clusters" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Access", exact: true }).click();
+  const edit = page.getByRole("dialog", { name: "Agent Access · Full Admin" });
+  await expect(edit.getByRole("checkbox")).toHaveCount(0);
+  await edit.getByLabel("Permission level").selectOption("custom");
+  await edit
+    .getByRole("checkbox", {
+      name: "Manage this workspace through MCP",
+      exact: true,
+    })
+    .uncheck();
+  await edit
+    .getByRole("checkbox", { name: "Example server", exact: true })
+    .check();
+  await edit
+    .getByRole("checkbox", { name: "ssh_execute", exact: true })
+    .uncheck();
+  await edit.getByRole("button", { name: "Save Access", exact: true }).click();
+  expect(writes[1]).toMatchObject({
+    level: "custom",
+    serverIds: [serverId],
+    operations: ["system_info"],
+    workspaceManagement: false,
+  });
+});
 test("assign direct cluster tools to an agent without SSH grants and edit its access", async ({
   page,
 }) => {
@@ -63,7 +188,14 @@ test("assign direct cluster tools to an agent without SSH grants and edit its ac
   await expect(
     drawer.getByRole("checkbox", { name: "kubernetes_pod_exec", exact: true }),
   ).toHaveCount(0);
-  await drawer.getByLabel("Permission level").selectOption("operator");
+  await expect(drawer.getByLabel("Permission level")).toHaveValue(
+    "administrator",
+  );
+  await expect(drawer.getByRole("option")).toHaveText([
+    "Administrator",
+    "Custom",
+  ]);
+  await drawer.getByLabel("Permission level").selectOption("custom");
   await drawer
     .getByRole("checkbox", { name: "Production cluster", exact: true })
     .check();
@@ -80,7 +212,7 @@ test("assign direct cluster tools to an agent without SSH grants and edit its ac
   ).toBeVisible();
   expect(writes[0]).toMatchObject({
     name: "Kubernetes assistant",
-    level: "operator",
+    level: "custom",
     serverIds: [],
     operations: [],
     clusterIds: [clusterId],

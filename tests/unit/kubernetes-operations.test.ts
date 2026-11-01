@@ -74,6 +74,15 @@ import { AppController } from "../../apps/api/src/controller.js";
 import { KubernetesController } from "../../apps/api/src/kubernetes.js";
 import { kubernetesRoute } from "../../apps/api/src/kubernetes-route.js";
 import { VpnController } from "../../apps/api/src/vpn.js";
+import { authenticate } from "../../apps/api/src/auth.js";
+import {
+  authorize,
+  serverVisibility,
+} from "../../apps/api/src/server-access.js";
+import {
+  administratorAgentScopes,
+  isAgentAdministrator,
+} from "../../packages/policy-engine/index.js";
 
 describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
   let directory = "",
@@ -96,7 +105,7 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
   async function managementToken() {
     await db().agent.update({
       where: { id: agent },
-      data: { level: "administrator" },
+      data: { level: "custom" },
     });
     await db().agentToken.update({
       where: { id: token },
@@ -249,7 +258,7 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
           organizationId: org,
           ownerId: owner,
           name: "Agent",
-          level: "operator",
+          level: "custom",
         },
       })
     ).id;
@@ -302,7 +311,7 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
       id: agent,
       organizationId: org,
       kind: "agent",
-      role: "operator",
+      role: "custom",
       tokenId: token,
       scopes: [...kubernetesOperations],
     };
@@ -324,7 +333,7 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
       where: { id: agent },
       data: {
         revoked: false,
-        level: "operator",
+        level: "custom",
         maxCallsPerMinute: null,
         maxCallsPerDay: null,
       },
@@ -549,7 +558,7 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
     await expect(call("kubernetes_execute", value)).rejects.toThrow();
     await db().agent.update({
       where: { id: agent },
-      data: { level: "operator" },
+      data: { level: "custom" },
     });
     await db().user.update({ where: { id: owner }, data: { disabled: true } });
     await expect(call("kubernetes_execute", value)).rejects.toThrow();
@@ -1031,10 +1040,10 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
       }),
     ).rejects.toThrow(/VPN profile unavailable/);
   });
-  it("creates explicit cluster-only agents and rejects invalid/foreign/viewer grants", async () => {
+  it("creates explicit cluster-only agents and rejects invalid roles and foreign grants", async () => {
     const value = {
       name: "Cluster agent",
-      level: "operator",
+      level: "custom",
       serverIds: [],
       operations: [],
       clusterIds: [cluster],
@@ -1055,7 +1064,7 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
     ).toHaveLength(1);
     await expect(
       controller.createAgent(req(), { ...value, level: "viewer" }),
-    ).rejects.toThrow(/Viewer/);
+    ).rejects.toThrow(/Invalid option/);
     await expect(
       controller.createAgent(req(), { ...value, clusterIds: [randomUUID()] }),
     ).rejects.toThrow(/Cluster unavailable/);
@@ -1073,6 +1082,262 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
       }),
     ).toBe(0);
   });
+  it("enables every Administrator permission without custom fields, including future resources", async () => {
+    const created = await controller.createAgent(req(), {
+      name: "All access",
+      level: "administrator",
+      workspaceManagement: false,
+      operations: [],
+      clusterIds: [],
+      clusterOperations: [],
+    });
+    const tokenRow = await db().agentToken.findFirstOrThrow({
+      where: { agentId: created.agent.id },
+    });
+    expect(new Set(JSON.parse(tokenRow.scopes))).toEqual(
+      new Set(administratorAgentScopes),
+    );
+    expect(
+      await db().agentPermission.count({
+        where: { agentId: created.agent.id },
+      }),
+    ).toBe(0);
+    expect(
+      await db().kubernetesAgentPermission.count({
+        where: { agentId: created.agent.id },
+      }),
+    ).toBe(0);
+    const authReq = {
+      headers: { authorization: "Bearer " + created.token },
+      method: "POST",
+      originalUrl: "/api/operations/servers_list",
+    } as Request;
+    const principal = await authenticate(authReq);
+    expect(isAgentAdministrator(principal)).toBe(true);
+    const refs = await routeFixtures();
+    const added = await clusterController.create(req(), {
+      name: "Future admin cluster",
+      kubeconfig: importedConfig(),
+    });
+    await expect(
+      authorize(principal, refs.bastionId, "ssh_execute"),
+    ).resolves.toHaveProperty("id", refs.bastionId);
+    expect(
+      await db().server.findMany({
+        where: serverVisibility(principal),
+        select: { id: true },
+      }),
+    ).toContainEqual({ id: refs.bastionId });
+    expect(
+      (await call("kubernetes_clusters_list", {}, principal)).clusters.some(
+        (row: any) => row.id === added.id,
+      ),
+    ).toBe(true);
+    await call("kubernetes_cluster_check", { clusterId: added.id }, principal);
+    expect(
+      (
+        await call(
+          "kubernetes_execute",
+          { clusterId: added.id, command: ["get", "pods"] },
+          principal,
+        )
+      ).status,
+    ).toBe("approval_required");
+    await expect(
+      authorize(
+        { ...principal, organizationId: randomUUID() },
+        refs.bastionId,
+        "ssh_execute",
+      ),
+    ).rejects.toThrow(/unavailable/);
+    await expect(
+      authorize(principal, refs.bastionId, "terminal"),
+    ).rejects.toThrow();
+    const metadata = await controller.identities({
+      ...authReq,
+      method: "GET",
+      originalUrl: "/api/identities",
+    } as Request);
+    expect(metadata.length).toBeGreaterThan(0);
+    expect(JSON.stringify(metadata)).not.toMatch(
+      /encryptedSecret|privateKey|fixture-bastion-password/,
+    );
+    await expect(
+      controller.agentGrant(req(), created.agent.id, {
+        serverId: refs.bastionId,
+        operations: ["system_info"],
+      }),
+    ).rejects.toThrow(/Choose Custom/);
+  });
+  it("keeps Administrator automatic on save and removes implicit access immediately on downgrade", async () => {
+    const created = await controller.createAgent(req(), {
+      name: "Role change",
+      level: "administrator",
+    });
+    const authReq = {
+      headers: { authorization: "Bearer " + created.token },
+      method: "POST",
+      originalUrl: "/api/operations/kubernetes_clusters_list",
+    } as Request;
+    await controller.agentAccess(req(), created.agent.id, {
+      level: "administrator",
+      workspaceManagement: false,
+      operations: [],
+      serverIds: [],
+    });
+    expect(isAgentAdministrator(await authenticate(authReq))).toBe(true);
+    const refs = await routeFixtures();
+    await controller.agentAccess(req(), created.agent.id, {
+      level: "custom",
+      serverIds: [refs.bastionId],
+      operations: ["system_info"],
+      clusterIds: [cluster],
+      clusterOperations: [
+        "kubernetes_clusters_list",
+        "kubernetes_cluster_check",
+      ],
+      workspaceManagement: false,
+    });
+    const principal = await authenticate(authReq);
+    expect(isAgentAdministrator(principal)).toBe(false);
+    await expect(
+      authorize(principal, refs.bastionId, "system_info"),
+    ).resolves.toBeDefined();
+    await expect(
+      authorize(principal, refs.bastionId, "ssh_execute"),
+    ).rejects.toThrow();
+    const list = await call("kubernetes_clusters_list", {}, principal);
+    expect(list.clusters.map((row: any) => row.id)).toEqual([cluster]);
+    await expect(
+      call("kubernetes_cluster_check", { clusterId: otherCluster }, principal),
+    ).rejects.toThrow(/grant/);
+    await expect(
+      controller.identities({
+        ...authReq,
+        method: "GET",
+        originalUrl: "/api/identities",
+      } as Request),
+    ).rejects.toThrow(/Workspace management/);
+    await expect(
+      controller.createAgent(req(), { name: "No operator", level: "operator" }),
+    ).rejects.toThrow(/Invalid option/);
+  });
+  it("lets Custom explicitly enable workspace management without granting all resources or promotion rights", async () => {
+    const created = await controller.createAgent(req(), {
+      name: "Custom manager",
+      level: "custom",
+      workspaceManagement: true,
+    });
+    const authReq = {
+      headers: { authorization: "Bearer " + created.token },
+      method: "GET",
+      originalUrl: "/api/identities",
+    } as Request;
+    expect((await controller.identities(authReq)).length).toBeGreaterThan(0);
+    const principal = await authenticate({
+      ...authReq,
+      originalUrl: "/api/operations/servers_list",
+      method: "POST",
+    } as Request);
+    expect(isAgentAdministrator(principal)).toBe(false);
+    const refs = await routeFixtures();
+    await expect(
+      authorize(principal, refs.bastionId, "ssh_execute"),
+    ).rejects.toThrow(/not granted/);
+    const updateReq = {
+      ...authReq,
+      method: "PATCH",
+      originalUrl: `/api/agents/${created.agent.id}/access`,
+    } as Request;
+    await expect(
+      controller.agentAccess(updateReq, created.agent.id, {
+        level: "administrator",
+      }),
+    ).rejects.toThrow(/Human/);
+    await expect(
+      controller.createAgent(
+        { ...authReq, method: "POST", originalUrl: "/api/agents" } as Request,
+        { name: "Escalation", level: "administrator" },
+      ),
+    ).rejects.toThrow(/Human/);
+  });
+  it("revalidates administrator owners, scopes and revocation for automatic access", async () => {
+    const created = await controller.createAgent(req(), {
+      name: "Revalidated admin",
+      level: "administrator",
+    });
+    const authReq = {
+      headers: { authorization: "Bearer " + created.token },
+      method: "POST",
+      originalUrl: "/api/operations/kubernetes_cluster_check",
+    } as Request;
+    const principal = await authenticate(authReq);
+    await db().user.update({
+      where: { id: owner },
+      data: { role: "operator" },
+    });
+    await expect(authenticate(authReq)).rejects.toThrow(/administrator owner/);
+    await expect(
+      call("kubernetes_cluster_check", { clusterId: cluster }, principal),
+    ).rejects.toThrow();
+    await db().user.update({ where: { id: owner }, data: { role: "owner" } });
+    await controller.revoke(req(), created.agent.id);
+    await expect(authenticate(authReq)).rejects.toThrow(/revoked/);
+  });
+  it("rechecks automatic Administrator access when queued SSH batches start", async () => {
+    const created = await controller.createAgent(req(), {
+      name: "Queued admin",
+      level: "administrator",
+    });
+    const issued = await db().agentToken.findFirstOrThrow({
+      where: { agentId: created.agent.id },
+    });
+    const refs = await routeFixtures();
+    const batch = await db().batchDispatch.create({
+      data: {
+        organizationId: org,
+        principalId: created.agent.id,
+        status: "released",
+      },
+    });
+    await db().backgroundTask.create({
+      data: {
+        organizationId: org,
+        principalId: created.agent.id,
+        serverId: refs.bastionId,
+        operation: "ssh_execute",
+        encryptedArguments: "encrypted-fixture",
+        tokenId: issued.id,
+        batchId: batch.id,
+        status: "running",
+        expiresAt: new Date(Date.now() + 60000),
+      },
+    });
+    const internalReq = {
+      headers: { "x-nexus-internal": "fixture-gateway-secret" },
+    } as unknown as Request;
+    await expect(controller.startBatch(internalReq, batch.id)).resolves.toEqual(
+      { started: true },
+    );
+    await db().batchDispatch.update({
+      where: { id: batch.id },
+      data: { status: "released" },
+    });
+    await controller.agentAccess(req(), created.agent.id, {
+      level: "custom",
+      serverIds: [],
+      operations: ["ssh_execute", "ssh_execute_many"],
+      clusterIds: [],
+      clusterOperations: [],
+    });
+    await expect(controller.startBatch(internalReq, batch.id)).rejects.toThrow(
+      /grant was removed/,
+    );
+    expect(
+      (await db().batchDispatch.findUniqueOrThrow({ where: { id: batch.id } }))
+        .status,
+    ).toBe("released");
+  });
   it("preserves per-token cluster scopes on legacy SSH updates and replaces explicit cluster access", async () => {
     const narrow = await db().agentToken.create({
       data: {
@@ -1085,7 +1350,7 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
       },
     });
     const legacy = {
-      level: "operator",
+      level: "custom",
       serverIds: [],
       operations: ["system_info"],
     };
