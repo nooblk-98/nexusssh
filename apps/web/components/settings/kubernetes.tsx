@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowLeft,
   Boxes,
@@ -25,6 +25,7 @@ import {
   confirmDialog,
 } from "../ui";
 import { PageHead } from "./page-head";
+import { useKubernetesImport } from "../../lib/kubernetes-navigation";
 
 type Cluster = {
   id: string;
@@ -392,6 +393,13 @@ export function KubernetesClusters() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = q.data?.find((cluster) => cluster.id === selectedId);
   const [form, setForm] = useState<{ cluster?: Cluster } | null>(null);
+  const importRequested = useKubernetesImport((state) => state.requested);
+  useEffect(() => {
+    if (importRequested) {
+      setForm({});
+      useKubernetesImport.setState({ requested: false });
+    }
+  }, [importRequested]);
   const [resource, setResource] = useState<Resource>("pods");
   const [namespace, setNamespace] = useState("default");
   const [namespaceDraft, setNamespaceDraft] = useState("default");

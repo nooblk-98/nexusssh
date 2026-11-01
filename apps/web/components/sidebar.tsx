@@ -29,6 +29,7 @@ import {
 } from "../lib/api";
 import { folderPath, folderLabel, folderOptions } from "../lib/folders";
 import { navigate } from "../lib/router";
+import { openKubernetesImport } from "../lib/kubernetes-navigation";
 import { connectServer, updateServer, useServers } from "../lib/servers";
 import { useWorkspace } from "../lib/store";
 import { ServerIcon } from "./icons";
@@ -554,6 +555,7 @@ export function Sidebar({ me }: { me: Row }) {
               openMenuAt(e.currentTarget, [
                 { label: "Server", onClick: () => openServerDrawer({}) },
                 { label: "Folder", onClick: newFolder },
+                { label: "Kubernetes cluster", onClick: openKubernetesImport },
                 "sep",
                 {
                   label: "Import Servers…",

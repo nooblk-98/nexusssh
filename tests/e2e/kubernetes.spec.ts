@@ -137,12 +137,26 @@ test("import a direct cluster, browse paginated resources, read logs, edit metad
     await route.fulfill({ json: data });
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "Menu", exact: true }).click();
-  await page.getByRole("menuitem", { name: "Kubernetes", exact: true }).click();
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await page
+    .getByRole("menuitem", { name: "Kubernetes cluster", exact: true })
+    .click();
   await expect(
-    page.getByRole("heading", { name: "No Kubernetes clusters" }),
+    page.getByRole("dialog", { name: "Add Kubernetes cluster" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Add cluster", exact: true }).click();
+  await expect(page).toHaveURL(/\/settings\/kubernetes$/);
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Settings", exact: true })
+    .getByRole("button", { name: "Back", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await page
+    .getByRole("menuitem", { name: "Kubernetes cluster", exact: true })
+    .click();
+  await expect(
+    page.getByRole("dialog", { name: "Add Kubernetes cluster" }),
+  ).toBeVisible();
   await page.getByLabel("Cluster name").fill("Production Kubernetes");
   await page.getByLabel("Import kubeconfig", { exact: false }).setInputFiles({
     name: "config",
