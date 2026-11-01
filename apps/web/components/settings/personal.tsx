@@ -11,6 +11,7 @@ import {
 } from "../../lib/api";
 import { savePrefs, usePrefs } from "../../lib/store";
 import { editorThemes, terminalFonts, terminalThemes } from "../../lib/themes";
+import { VERSION } from "../../lib/app-info";
 import {
   Button,
   Check,
@@ -24,7 +25,6 @@ import {
 import { PageHead } from "./page-head";
 import { KeyFolderImport } from "./key-folder-import";
 
-export const VERSION = "0.1.0";
 export function Account({ me }: { me: Row }) {
   const prefs = usePrefs();
   const [editName, setEditName] = useState<string | null>(null);

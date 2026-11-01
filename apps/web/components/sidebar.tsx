@@ -98,6 +98,7 @@ export function mainMenu(admin: boolean): MenuItem[] {
         ] as MenuItem[])
       : []),
     "sep",
+    { label: "About", onClick: go("about") },
     { label: "Logout", onClick: signOut },
   ];
 }
