@@ -149,6 +149,7 @@ model VpnProfile {
   encryptedConfig String
   summary String
   servers Server[]
+  clusters KubernetesCluster[]
   @@index([organizationId])
 }
 
@@ -165,6 +166,10 @@ model KubernetesCluster {
   namespace String @default("default")
   authentication String
   encryptedConfig String
+  vpnProfileId String?
+  vpnProfile VpnProfile? @relation(fields: [vpnProfileId], references: [id], onDelete: Restrict)
+  bastionId String?
+  bastion Server? @relation("KubernetesBastion", fields: [bastionId], references: [id], onDelete: Restrict)
   status String @default("unknown")
   version String?
   lastCheckedAt DateTime?
@@ -214,6 +219,7 @@ model Server {
   vpnProfile VpnProfile? @relation(fields: [vpnProfileId], references: [id], onDelete: Restrict)
   bastion Server? @relation("Bastion", fields: [bastionId], references: [id])
   targets Server[] @relation("Bastion")
+  clusterTargets KubernetesCluster[] @relation("KubernetesBastion")
   permissions ServerPermission[]
   teamPermissions TeamPermission[]
   agentPermissions AgentPermission[]

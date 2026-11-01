@@ -1,3 +1,4 @@
+import { kubernetesRoute } from "./kubernetes-route.js";
 import { withKubernetesSlot } from "./kubernetes-slots.js";
 import {
   BadRequestException,
@@ -50,6 +51,8 @@ const input = z
       .max(256 * 1024)
       .optional(),
     context: z.string().min(1).max(256).optional(),
+    vpnProfileId: z.uuid().nullable().default(null),
+    bastionId: z.uuid().nullable().default(null),
   })
   .strict();
 const selection = {
@@ -60,6 +63,8 @@ const selection = {
   context: true,
   namespace: true,
   authentication: true,
+  vpnProfileId: true,
+  bastionId: true,
   status: true,
   version: true,
   lastCheckedAt: true,
@@ -102,7 +107,12 @@ export class KubernetesController {
   }
   private async read(
     p: Principal,
-    cluster: { id: string; encryptedConfig: string },
+    cluster: {
+      id: string;
+      encryptedConfig: string;
+      vpnProfileId?: string | null;
+      bastionId?: string | null;
+    },
     path: string,
     action: string,
     text = false,
@@ -114,6 +124,10 @@ export class KubernetesController {
           config.ENCRYPTION_KEY,
           `${p.organizationId}:kubernetes:${cluster.id}`,
         ) as ClusterConnection;
+        const { network: route } = await kubernetesRoute(
+          p.organizationId,
+          cluster,
+        );
         const data = await kubernetesRequest(
           connection,
           path,
@@ -121,6 +135,7 @@ export class KubernetesController {
             .map((cidr) => cidr.trim())
             .filter(Boolean),
           text,
+          { route },
         );
         await this.audit(p, action, "success", cluster.id);
         return data;
@@ -160,15 +175,28 @@ export class KubernetesController {
   }
 
   private async save(req: Request, body: unknown, id?: string) {
-    const p = await this.principal(req);
+    const p = await authenticate(req);
+    // Workspace-management agents can submit a new credential, but they cannot
+    // inspect, rotate or delete existing profiles, or grant themselves access.
+    if (id || p.managementOperation !== "kubernetes_cluster_create") human(p);
+    admin(p);
     const existing = id ? await this.profile(p, id) : undefined;
     const changes = z.record(z.string(), z.unknown()).parse(body);
     const value = input.parse({
       ...(existing
-        ? { name: existing.name, description: existing.description }
+        ? {
+            name: existing.name,
+            description: existing.description,
+            vpnProfileId: existing.vpnProfileId,
+            bastionId: existing.bastionId,
+          }
         : {}),
       ...changes,
     });
+    await kubernetesRoute(p.organizationId, value);
+    const routeChanged =
+      value.vpnProfileId !== (existing?.vpnProfileId ?? null) ||
+      value.bastionId !== (existing?.bastionId ?? null);
     const profileId = id || randomUUID();
     if (!existing && !value.kubeconfig?.trim())
       throw new BadRequestException("Import a kubeconfig file.");
@@ -221,21 +249,23 @@ export class KubernetesController {
       row = existing
         ? await db.$transaction(async (tx) => {
             if (
-              secret &&
+              (secret || routeChanged) &&
               (await tx.kubernetesExecution.count({
                 where: { clusterId: profileId, status: "running" },
               }))
             )
               throw new ConflictException(
-                "Wait for active Kubernetes commands to finish before replacing credentials.",
+                "Wait for active Kubernetes commands to finish before changing its connection or credentials.",
               );
             return tx.kubernetesCluster.update({
               where: { id: profileId },
               data: {
                 name: value.name,
                 description: value.description,
+                vpnProfileId: value.vpnProfileId,
+                bastionId: value.bastionId,
                 ...secret,
-                ...(secret
+                ...(secret || routeChanged
                   ? {
                       status: "unknown",
                       version: null,
@@ -253,6 +283,8 @@ export class KubernetesController {
               organizationId: p.organizationId,
               name: value.name,
               description: value.description,
+              vpnProfileId: value.vpnProfileId,
+              bastionId: value.bastionId,
               ...secret!,
             },
             select: selection,

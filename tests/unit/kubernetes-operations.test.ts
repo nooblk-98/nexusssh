@@ -11,7 +11,7 @@ import { PrismaClient } from "@prisma/client";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { hash, seal, unseal } from "../../packages/shared/crypto.js";
 import type { Request } from "express";
 import type { Principal } from "../../packages/policy-engine/index.js";
@@ -39,6 +39,11 @@ vi.mock("../../packages/shared/config.js", () => ({
     MCP_AUTH_ISSUER: "issuer",
     KUBERNETES_ALLOWED_CIDRS: "127.0.0.1/32",
     AUDIT_RETENTION_DAYS: 90,
+    SSH_ALLOWED_CIDRS: "127.0.0.1/32",
+    SSH_CONNECT_TIMEOUT: 1000,
+    SSH_OUTPUT_LIMIT: 262144,
+    VPN_GATEWAY_URL: "http://127.0.0.1:3003",
+    INTERNAL_SECRET: "fixture-gateway-secret",
   },
   mcpAudience: "audience",
   mcpEndpoint: () => "https://fixture.test/mcp",
@@ -66,6 +71,9 @@ import {
   expireKubernetesResults,
 } from "../../apps/api/src/kubernetes-operations.js";
 import { AppController } from "../../apps/api/src/controller.js";
+import { KubernetesController } from "../../apps/api/src/kubernetes.js";
+import { kubernetesRoute } from "../../apps/api/src/kubernetes-route.js";
+import { VpnController } from "../../apps/api/src/vpn.js";
 
 describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
   let directory = "",
@@ -77,6 +85,41 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
     otherCluster = "";
   let p: Principal;
   const controller = new AppController();
+  const clusterController = new KubernetesController();
+  const machineReq = (path: string, method = "POST") =>
+    ({
+      headers: { authorization: "Bearer fixture-management-token" },
+      cookies: {},
+      method,
+      originalUrl: "/api/" + path,
+    }) as unknown as Request;
+  async function managementToken() {
+    await db().agent.update({
+      where: { id: agent },
+      data: { level: "administrator" },
+    });
+    await db().agentToken.update({
+      where: { id: token },
+      data: {
+        tokenHash: hash("fixture-management-token"),
+        scopes: JSON.stringify([...kubernetesOperations, "workspace_manage"]),
+      },
+    });
+  }
+  const importedConfig = () =>
+    JSON.stringify({
+      apiVersion: "v1",
+      kind: "Config",
+      "current-context": "uploaded",
+      clusters: [{ name: "api", cluster: { server: "https://fixture.test" } }],
+      users: [{ name: "agent", user: { token: "uploaded-cluster-secret" } }],
+      contexts: [
+        {
+          name: "uploaded",
+          context: { cluster: "api", user: "agent", namespace: "apps" },
+        },
+      ],
+    });
   const req = () =>
     ({
       headers: {},
@@ -85,6 +128,60 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
       originalUrl: "/api/agents",
     }) as unknown as Request;
   const db = () => fixture.db;
+  async function routeFixtures() {
+    const vpnId = randomUUID(),
+      identityId = randomUUID();
+    await db().vpnProfile.create({
+      data: {
+        id: vpnId,
+        organizationId: org,
+        name: "Routing VPN",
+        summary: "{}",
+        encryptedConfig: seal(
+          {
+            privateKey: "fixture-vpn-secret",
+            addresses: ["10.77.0.2/32"],
+            dns: ["10.77.0.1"],
+            mtu: 1420,
+            peers: [],
+          },
+          fixture.key,
+          `${org}:vpn:${vpnId}`,
+        ),
+      },
+    });
+    await db().sSHIdentity.create({
+      data: {
+        id: identityId,
+        organizationId: org,
+        name: "Jump identity",
+        kind: "password",
+        encryptedSecret: seal(
+          { password: "fixture-bastion-password" },
+          fixture.key,
+          `${org}:${identityId}`,
+        ),
+      },
+    });
+    const bastion = await db().server.create({
+      data: {
+        organizationId: org,
+        name: "Jump server",
+        host: "127.0.0.1",
+        port: 2200 + (await db().server.count()),
+        username: "jump",
+        identityId,
+        vpnProfileId: vpnId,
+        fingerprint: "SHA256:fixture",
+        overrides: JSON.stringify({
+          identityId,
+          username: "jump",
+          vpnProfileId: vpnId,
+        }),
+      },
+    });
+    return { vpnId, identityId, bastionId: bastion.id };
+  }
   const call = (
     op: string,
     args: unknown = {},
@@ -240,6 +337,9 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
         scopes: JSON.stringify(kubernetesOperations),
         expiresAt: new Date(Date.now() + 3600000),
       },
+    });
+    await db().kubernetesAgentPermission.deleteMany({
+      where: { agentId: agent, clusterId: { not: cluster } },
     });
     await db().kubernetesAgentPermission.upsert({
       where: { agentId_clusterId: { agentId: agent, clusterId: cluster } },
@@ -569,6 +669,367 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
         organizationId: randomUUID(),
       }),
     ).toEqual([]);
+  });
+  it("lets management agents submit kubeconfigs without exporting credentials or receiving cluster grants", async () => {
+    await managementToken();
+    const created = await clusterController.create(
+      machineReq("kubernetes/clusters"),
+      { name: "MCP imported", kubeconfig: importedConfig() },
+    );
+    expect(created).toMatchObject({
+      name: "MCP imported",
+      context: "uploaded",
+      namespace: "apps",
+      authentication: "token",
+    });
+    expect(JSON.stringify(created)).not.toMatch(
+      /uploaded-cluster-secret|encryptedConfig|kubeconfig|certificate|privateKey/,
+    );
+    const stored = await db().kubernetesCluster.findUniqueOrThrow({
+      where: { id: created.id },
+    });
+    expect(stored.organizationId).toBe(org);
+    expect(stored.encryptedConfig).not.toContain("uploaded-cluster-secret");
+    expect(
+      unseal(
+        stored.encryptedConfig,
+        fixture.key,
+        `${org}:kubernetes:${created.id}`,
+      ),
+    ).toMatchObject({ token: "uploaded-cluster-secret" });
+    expect(
+      await db().kubernetesAgentPermission.count({
+        where: { clusterId: created.id },
+      }),
+    ).toBe(0);
+    await expect(
+      call("kubernetes_cluster_check", { clusterId: created.id }),
+    ).rejects.toThrow(/grant/);
+    await expect(
+      clusterController.list(machineReq("kubernetes/clusters", "GET")),
+    ).rejects.toThrow(/Human/);
+    await expect(
+      clusterController.update(
+        machineReq(`kubernetes/clusters/${created.id}`, "PATCH"),
+        created.id,
+        { kubeconfig: importedConfig() },
+      ),
+    ).rejects.toThrow(/Human/);
+    await expect(
+      clusterController.remove(
+        machineReq(`kubernetes/clusters/${created.id}`, "DELETE"),
+        created.id,
+      ),
+    ).rejects.toThrow(/Human/);
+    const logs = await db().auditEvent.findMany({
+      where: { principalId: agent },
+    });
+    expect(
+      logs.some((event) => event.action === "mcp:kubernetes_cluster_create"),
+    ).toBe(true);
+    expect(JSON.stringify(logs)).not.toMatch(
+      /uploaded-cluster-secret|encryptedConfig/,
+    );
+  });
+  it("requires explicit workspace management for config submission and does not echo rejected configs", async () => {
+    const value = { name: "Denied", kubeconfig: importedConfig() };
+    await expect(
+      clusterController.create(machineReq("kubernetes/clusters"), value),
+    ).rejects.toThrow(/Workspace management/);
+    await managementToken();
+    await db().agentToken.update({
+      where: { id: token },
+      data: { scopes: JSON.stringify(kubernetesOperations) },
+    });
+    await expect(
+      clusterController.create(machineReq("kubernetes/clusters"), value),
+    ).rejects.toThrow(/Workspace management/);
+    await managementToken();
+    const invalid = JSON.parse(importedConfig());
+    invalid.users[0].user.exec = { command: "uploaded-cluster-secret" };
+    let failure: unknown;
+    try {
+      await clusterController.create(machineReq("kubernetes/clusters"), {
+        name: "Bad config",
+        kubeconfig: JSON.stringify(invalid),
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure)).not.toContain("uploaded-cluster-secret");
+    expect(
+      await db().kubernetesCluster.count({ where: { name: "Bad config" } }),
+    ).toBe(0);
+  });
+  it("accepts SSH private keys/passwords through MCP and returns only identity metadata", async () => {
+    await managementToken();
+    const passphrase = "disposable-key-passphrase";
+    const { privateKey } = generateKeyPairSync("rsa", {
+      modulusLength: 2048,
+      publicKeyEncoding: { type: "spki", format: "pem" },
+      privateKeyEncoding: {
+        type: "pkcs1",
+        format: "pem",
+        cipher: "aes-256-cbc",
+        passphrase,
+      },
+    });
+    const key = await controller.identity(machineReq("identities"), {
+      name: "MCP key",
+      kind: "key",
+      privateKey,
+      passphrase,
+    });
+    expect(Object.keys(key).sort()).toEqual(["id", "name"]);
+    const saved = await db().sSHIdentity.findUniqueOrThrow({
+      where: { id: key.id },
+    });
+    expect(
+      unseal(saved.encryptedSecret, fixture.key, `${org}:${key.id}`),
+    ).toEqual({ privateKey, passphrase });
+    const password = await controller.identity(machineReq("identities"), {
+      name: "MCP password",
+      kind: "password",
+      password: "disposable-ssh-password",
+    });
+    const list = await controller.identities(machineReq("identities", "GET"));
+    expect(list.some((identity) => identity.id === key.id)).toBe(true);
+    expect(list.some((identity) => identity.id === password.id)).toBe(true);
+    const output = JSON.stringify({ key, password, list });
+    for (const secret of [
+      privateKey,
+      passphrase,
+      "disposable-ssh-password",
+      "encryptedSecret",
+      "privateKey",
+      "passphrase",
+    ]) {
+      expect(output).not.toContain(secret);
+    }
+    expect(
+      list.every(
+        (identity) =>
+          !("password" in identity) &&
+          !("privateKey" in identity) &&
+          !("encryptedSecret" in identity) &&
+          !("passphrase" in identity),
+      ),
+    ).toBe(true);
+  });
+  it("saves cluster VPN/bastion selections, inherits the bastion VPN, and routes every MCP operation", async () => {
+    const refs = await routeFixtures();
+    const created = await clusterController.create(req(), {
+      name: "Routed cluster",
+      kubeconfig: importedConfig(),
+      bastionId: refs.bastionId,
+    });
+    expect(created).toMatchObject({
+      vpnProfileId: null,
+      bastionId: refs.bastionId,
+    });
+    expect(JSON.stringify(created)).not.toMatch(
+      /fixture-vpn-secret|fixture-bastion-password|encrypted/,
+    );
+    const stored = await db().kubernetesCluster.findUniqueOrThrow({
+      where: { id: created.id },
+    });
+    const route = await kubernetesRoute(org, stored);
+    expect(route.network).toMatchObject({
+      vpn: { id: refs.vpnId },
+      bastion: {
+        host: "127.0.0.1",
+        username: "jump",
+        fingerprint: "SHA256:fixture",
+      },
+      sshLimits: { cidrs: ["127.0.0.1/32"] },
+    });
+    await db().kubernetesAgentPermission.create({
+      data: {
+        agentId: agent,
+        clusterId: created.id,
+        operations: JSON.stringify(kubernetesOperations),
+      },
+    });
+    await call("kubernetes_cluster_check", { clusterId: created.id });
+    expect(fixture.request.mock.calls.at(-1)?.[4].route).toMatchObject({
+      vpn: { id: refs.vpnId },
+      bastion: { host: "127.0.0.1" },
+    });
+    fixture.request.mockResolvedValueOnce({ items: [], metadata: {} });
+    await call("kubernetes_resources_list", {
+      clusterId: created.id,
+      resource: "pods",
+    });
+    expect(fixture.request.mock.calls.at(-1)?.[4].route.vpn.id).toBe(
+      refs.vpnId,
+    );
+    await call("kubernetes_pod_logs", {
+      clusterId: created.id,
+      namespace: "apps",
+      pod: "api",
+      container: "api",
+    });
+    expect(fixture.request.mock.calls.at(-1)?.[4].route.vpn.id).toBe(
+      refs.vpnId,
+    );
+    const command = { clusterId: created.id, command: ["get", "pods"] };
+    await call(
+      "kubernetes_execute",
+      await approved("kubernetes_execute", command),
+    );
+    expect(fixture.request.mock.calls.at(-1)?.[4].route.bastion.host).toBe(
+      "127.0.0.1",
+    );
+    const pod: any = {
+      clusterId: created.id,
+      namespace: "apps",
+      pod: "api",
+      container: "api",
+      command: ["id"],
+    };
+    await call(
+      "kubernetes_pod_exec",
+      await approved("kubernetes_pod_exec", pod),
+    );
+    expect(fixture.exec.mock.calls.at(-1)?.[4]).toMatchObject({
+      vpn: { id: refs.vpnId },
+      bastion: { host: "127.0.0.1" },
+    });
+  });
+  it("invalidates pending approvals when routes, VPN configs or bastion credentials change", async () => {
+    const refs = await routeFixtures();
+    const created = await clusterController.create(req(), {
+      name: "Rotating route",
+      kubeconfig: importedConfig(),
+      bastionId: refs.bastionId,
+      vpnProfileId: refs.vpnId,
+    });
+    await db().kubernetesAgentPermission.create({
+      data: {
+        agentId: agent,
+        clusterId: created.id,
+        operations: JSON.stringify(kubernetesOperations),
+      },
+    });
+    const original = (
+      await db().kubernetesCluster.findUniqueOrThrow({
+        where: { id: created.id },
+      })
+    ).encryptedConfig;
+    const command = { clusterId: created.id, command: ["get", "pods"] };
+    const first = await approved("kubernetes_execute", command);
+    await controller.rotateIdentity(req(), refs.identityId, {
+      name: "Rotated jump identity",
+      kind: "password",
+      password: "rotated-bastion-password",
+    });
+    await expect(call("kubernetes_execute", first)).rejects.toThrow(/Approval/);
+    const second = await approved("kubernetes_execute", command);
+    const vpn = await db().vpnProfile.findUniqueOrThrow({
+      where: { id: refs.vpnId },
+    });
+    const value = unseal<any>(
+      vpn.encryptedConfig,
+      fixture.key,
+      `${org}:vpn:${refs.vpnId}`,
+    );
+    await db().vpnProfile.update({
+      where: { id: refs.vpnId },
+      data: {
+        encryptedConfig: seal(
+          { ...value, mtu: 1400 },
+          fixture.key,
+          `${org}:vpn:${refs.vpnId}`,
+        ),
+      },
+    });
+    await expect(call("kubernetes_execute", second)).rejects.toThrow(
+      /Approval/,
+    );
+    const third = await approved("kubernetes_execute", command);
+    await clusterController.update(req(), created.id, { bastionId: null });
+    expect(
+      (
+        await db().kubernetesCluster.findUniqueOrThrow({
+          where: { id: created.id },
+        })
+      ).encryptedConfig,
+    ).toBe(original);
+    await expect(call("kubernetes_execute", third)).rejects.toThrow(/Approval/);
+    expect(fixture.request).not.toHaveBeenCalled();
+  });
+  it("rejects unavailable, nested, foreign and conflicting routes and protects active profile routes", async () => {
+    const refs = await routeFixtures();
+    const input = { name: "Restricted route", kubeconfig: importedConfig() };
+    await expect(
+      clusterController.create(req(), { ...input, vpnProfileId: randomUUID() }),
+    ).rejects.toThrow(/VPN profile unavailable/);
+    await expect(
+      clusterController.create(req(), { ...input, bastionId: randomUUID() }),
+    ).rejects.toThrow(/Bastion unavailable/);
+    const other = await routeFixtures();
+    await expect(
+      clusterController.create(req(), {
+        ...input,
+        bastionId: refs.bastionId,
+        vpnProfileId: other.vpnId,
+      }),
+    ).rejects.toThrow(/Conflicting VPN/);
+    await db().server.update({
+      where: { id: refs.bastionId },
+      data: { bastionId: other.bastionId },
+    });
+    await expect(
+      clusterController.create(req(), { ...input, bastionId: refs.bastionId }),
+    ).rejects.toThrow(/Bastion unavailable/);
+    await db().server.update({
+      where: { id: refs.bastionId },
+      data: { bastionId: null, archived: true },
+    });
+    await expect(
+      clusterController.create(req(), { ...input, bastionId: refs.bastionId }),
+    ).rejects.toThrow(/Bastion unavailable/);
+    const created = await clusterController.create(req(), {
+      ...input,
+      vpnProfileId: refs.vpnId,
+    });
+    await db().kubernetesExecution.create({
+      data: {
+        organizationId: org,
+        principalId: agent,
+        clusterId: created.id,
+        operation: "kubernetes_execute",
+        status: "running",
+        expiresAt: new Date(Date.now() + 3600000),
+      },
+    });
+    await expect(
+      clusterController.update(req(), created.id, { vpnProfileId: null }),
+    ).rejects.toThrow(/Wait for active Kubernetes/);
+    await expect(new VpnController().remove(req(), refs.vpnId)).rejects.toThrow(
+      /Kubernetes clusters/,
+    );
+    await expect(
+      db().vpnProfile.delete({ where: { id: refs.vpnId } }),
+    ).rejects.toThrow();
+    const foreignOrg = await db().organization.create({
+      data: { name: "Foreign" },
+    });
+    const foreignVpn = await db().vpnProfile.create({
+      data: {
+        organizationId: foreignOrg.id,
+        name: "Foreign",
+        summary: "{}",
+        encryptedConfig: "never-decrypt-foreign",
+      },
+    });
+    await expect(
+      clusterController.create(req(), {
+        ...input,
+        vpnProfileId: foreignVpn.id,
+      }),
+    ).rejects.toThrow(/VPN profile unavailable/);
   });
   it("creates explicit cluster-only agents and rejects invalid/foreign/viewer grants", async () => {
     const value = {

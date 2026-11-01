@@ -540,10 +540,14 @@ export function Agents() {
             }
           />
           <p className="hint" style={{ marginBottom: 16 }}>
-            Administrator agents can manage SSH identities, VPNs, folders,
-            servers, users, teams, settings and other agents. Existing tokens
-            receive access immediately. SSH execution still uses the selected
-            tools and server grants; approval decisions stay in the app.
+            Administrator agents can add encrypted Kubernetes profiles and
+            manage SSH identities, VPNs, folders, servers, users, teams,
+            settings and other agents. Existing tokens receive access
+            immediately. SSH execution still uses the selected tools and server
+            grants; approval decisions stay in the app. Saved SSH credentials
+            and kubeconfigs are never returned through MCP. Kubernetes
+            cluster/tool grants are assigned separately by a human
+            administrator.
           </p>
           <div className="drawer-section">Servers</div>
           <p className="hint">

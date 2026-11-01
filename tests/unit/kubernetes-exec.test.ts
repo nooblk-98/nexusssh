@@ -2,6 +2,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:https";
 import type { AddressInfo } from "node:net";
 import { WebSocketServer } from "ws";
+import { createServer as createGateway } from "node:http";
+import { connect as tcpConnect, type Socket } from "node:net";
+import { generateKeyPairSync } from "node:crypto";
+import ssh2 from "ssh2";
+import { fingerprint } from "../../packages/ssh-core/index.js";
+import type { KubernetesNetwork } from "../../packages/kubernetes/network.js";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,6 +23,57 @@ describe("verified Kubernetes REST mutations and pod WebSocket transport", () =>
     endpoint = "",
     server: Server,
     sockets: WebSocketServer;
+  let gateway: ReturnType<typeof createGateway>, jump: ssh2.Server;
+  let gatewayURL = "",
+    jumpPort = 0,
+    jumpFingerprint = "";
+  const forwards: string[] = [],
+    connects: string[] = [];
+  const openSockets = new Set<Socket>();
+  const sshClients = new Set<ssh2.Connection>();
+  const track = (socket: Socket) => {
+    openSockets.add(socket);
+    socket.once("close", () => openSockets.delete(socket));
+    return socket;
+  };
+  const network = (vpn = true, bastion = false): KubernetesNetwork => ({
+    ...(vpn
+      ? {
+          vpn: {
+            id: "k8s-route-fixture",
+            config: {
+              privateKey: "test-private",
+              addresses: ["10.77.0.2/32"],
+              dns: ["10.77.0.1"],
+              mtu: 1420,
+              peers: [],
+            },
+          },
+        }
+      : {}),
+    ...(bastion
+      ? {
+          bastion: {
+            host: vpn ? "10.77.0.6" : "127.0.0.1",
+            port: jumpPort,
+            username: "jump",
+            fingerprint: jumpFingerprint,
+            fileRoot: "/home",
+            credential: { password: "fixture-jump-password" },
+          },
+        }
+      : {}),
+    sshLimits: {
+      cidrs: ["127.0.0.1/32", "10.77.0.6/32"],
+      connectTimeout: 1500,
+      outputLimit: 262144,
+      vpnGateway: { url: gatewayURL, secret: "fixture-gateway-secret" },
+    },
+  });
+  const privateConnection = (): ClusterConnection => ({
+    ...connection(),
+    server: connection().server.replace("127.0.0.1", "cluster.internal.test"),
+  });
   const seen: {
     path: string;
     host?: string;
@@ -142,8 +199,108 @@ describe("verified Kubernetes REST mutations and pod WebSocket transport", () =>
     });
     await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
     endpoint = `https://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const hostKey = generateKeyPairSync("rsa", {
+      modulusLength: 2048,
+      privateKeyEncoding: { type: "pkcs1", format: "pem" },
+      publicKeyEncoding: { type: "spki", format: "pem" },
+    }).privateKey;
+    const parsed = ssh2.utils.parseKey(hostKey);
+    if (parsed instanceof Error || Array.isArray(parsed))
+      throw new Error("Invalid fixture SSH key");
+    jumpFingerprint = fingerprint(parsed.getPublicSSH());
+    jump = new ssh2.Server({ hostKeys: [hostKey] }, (client) => {
+      sshClients.add(client);
+      client.once("close", () => sshClients.delete(client));
+      client.on("error", () => {});
+      client.on("authentication", (ctx) =>
+        ctx.method === "password" &&
+        ctx.username === "jump" &&
+        ctx.password === "fixture-jump-password"
+          ? ctx.accept()
+          : ctx.reject(),
+      );
+      client.on("ready", () =>
+        client.on("tcpip", (accept, reject, info) => {
+          forwards.push(`${info.destIP}:${info.destPort}`);
+          if (
+            !["127.0.0.1", "10.77.0.5"].includes(info.destIP) ||
+            info.destPort !== (server.address() as AddressInfo).port
+          ) {
+            reject();
+            return;
+          }
+          const outbound = track(
+            tcpConnect({ host: "127.0.0.1", port: info.destPort }),
+          );
+          outbound.on("connect", () => {
+            const channel = accept();
+            if (!channel) return outbound.destroy();
+            channel.pipe(outbound).pipe(channel);
+            channel.on("error", () => outbound.destroy());
+            channel.on("close", () => outbound.destroy());
+            outbound.on("close", () => channel.destroy());
+          });
+          outbound.on("error", () => {
+            reject();
+            outbound.destroy();
+          });
+        }),
+      );
+    });
+    await new Promise<void>((done) => jump.listen(0, "127.0.0.1", done));
+    jumpPort = (jump.address() as AddressInfo).port;
+    gateway = createGateway((req, res) => {
+      if (req.headers["x-nexus-internal"] !== "fixture-gateway-secret")
+        return void res.writeHead(401).end();
+      if (req.method === "PUT" && req.url === "/tunnels") {
+        req.resume();
+        req.on("end", () => res.writeHead(204).end());
+        return;
+      }
+      const host = new URL(req.url!, "http://fixture.test").searchParams.get(
+        "host",
+      );
+      res.setHeader("Content-Type", "application/json");
+      res.end(
+        JSON.stringify([
+          host === "cluster.internal.test"
+            ? "10.77.0.5"
+            : host === "metadata.internal.test"
+              ? "169.254.169.254"
+              : host,
+        ]),
+      );
+    });
+    gateway.on("connect", (req, raw, head) => {
+      const socket = track(raw as Socket);
+      connects.push(req.url!);
+      const [address, port] = req.url!.split(":");
+      if (
+        req.headers["x-nexus-internal"] !== "fixture-gateway-secret" ||
+        !["10.77.0.5", "10.77.0.6"].includes(address)
+      )
+        return void socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
+      const outbound = track(
+        tcpConnect({ host: "127.0.0.1", port: Number(port) }),
+      );
+      outbound.on("connect", () => {
+        socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (head.length) outbound.write(head);
+        socket.pipe(outbound).pipe(socket);
+      });
+      outbound.on("error", () => socket.destroy());
+      socket.on("error", () => outbound.destroy());
+      socket.on("close", () => outbound.destroy());
+      outbound.on("close", () => socket.destroy());
+    });
+    await new Promise<void>((done) => gateway.listen(0, "127.0.0.1", done));
+    gatewayURL = `http://127.0.0.1:${(gateway.address() as AddressInfo).port}`;
   });
   afterAll(async () => {
+    for (const socket of openSockets) socket.destroy();
+    for (const client of sshClients) client.end();
+    await new Promise<void>((done) => gateway?.close(() => done()));
+    await new Promise<void>((done) => jump?.close(() => done()));
     for (const socket of sockets?.clients || []) socket.terminate();
     await new Promise<void>((done) => sockets?.close(() => done()));
     await new Promise<void>((done) => server?.close(() => done()));
@@ -175,6 +332,110 @@ describe("verified Kubernetes REST mutations and pod WebSocket transport", () =>
       body: '{"spec":{"replicas":3}}',
       contentType: "application/merge-patch+json",
     });
+  });
+  it("routes verified HTTPS reads and pod WebSockets through the saved WireGuard gateway", async () => {
+    const route = network();
+    await expect(
+      kubernetesRequest(
+        privateConnection(),
+        "/version",
+        ["10.77.0.5/32"],
+        false,
+        { route },
+      ),
+    ).resolves.toHaveProperty("kind", "Scale");
+    expect(connects.at(-1)).toBe(
+      `10.77.0.5:${(server.address() as AddressInfo).port}`,
+    );
+    expect(seen.at(-1)?.host).toContain("cluster.internal.test");
+    expect(
+      await kubernetesExec(
+        privateConnection(),
+        args(),
+        ["10.77.0.5/32"],
+        undefined,
+        route,
+      ),
+    ).toMatchObject({ exitCode: 0, stdout: "stdout\n" });
+  });
+  it("routes API calls through a verified SSH bastion, including a bastion reached through WireGuard", async () => {
+    await kubernetesRequest(connection(), "/version", ["127.0.0.1/32"], false, {
+      route: network(false, true),
+    });
+    expect(forwards.at(-1)).toBe(
+      `127.0.0.1:${(server.address() as AddressInfo).port}`,
+    );
+    const route = network(true, true),
+      count = connects.length;
+    await kubernetesRequest(
+      privateConnection(),
+      "/version",
+      ["10.77.0.5/32"],
+      false,
+      { route },
+    );
+    expect(connects.slice(count)).toEqual([`10.77.0.6:${jumpPort}`]);
+    expect(forwards.at(-1)).toBe(
+      `10.77.0.5:${(server.address() as AddressInfo).port}`,
+    );
+    expect(
+      await kubernetesExec(
+        privateConnection(),
+        args(),
+        ["10.77.0.5/32"],
+        undefined,
+        route,
+      ),
+    ).toMatchObject({ exitCode: 0 });
+  });
+  it("enforces target and bastion allowlists, host keys and TLS without direct fallback", async () => {
+    const before = connects.length;
+    await expect(
+      kubernetesRequest(
+        {
+          ...privateConnection(),
+          server: privateConnection().server.replace(
+            "cluster.internal.test",
+            "metadata.internal.test",
+          ),
+        },
+        "/version",
+        ["0.0.0.0/0"],
+        false,
+        { route: network() },
+      ),
+    ).rejects.toThrow(/ALLOWED_CIDRS/);
+    expect(connects).toHaveLength(before);
+    const denied = network(true, true);
+    denied.sshLimits.cidrs = ["127.0.0.1/32"];
+    await expect(
+      kubernetesRequest(
+        privateConnection(),
+        "/version",
+        ["10.77.0.5/32"],
+        false,
+        { route: denied },
+      ),
+    ).rejects.toThrow(/route failed/);
+    expect(connects).toHaveLength(before);
+    const wrongKey = network(false, true);
+    wrongKey.bastion!.fingerprint = "SHA256:wrong";
+    await expect(
+      kubernetesRequest(connection(), "/version", ["127.0.0.1/32"], false, {
+        route: wrongKey,
+      }),
+    ).rejects.toThrow(/route failed/);
+    const reads = seen.length;
+    await expect(
+      kubernetesRequest(
+        { ...privateConnection(), tlsServerName: "wrong.invalid" },
+        "/version",
+        ["10.77.0.5/32"],
+        false,
+        { route: network() },
+      ),
+    ).rejects.toThrow(/TLS certificates/);
+    expect(seen).toHaveLength(reads);
   });
   it("preserves argv, original Host/TLS identity, namespace, container and base path", async () => {
     expect(

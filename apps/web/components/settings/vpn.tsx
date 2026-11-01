@@ -46,7 +46,7 @@ export function VpnProfiles() {
     <div className="page">
       <PageHead
         title="VPN"
-        sub="Save WireGuard profiles and choose how your SSH servers connect."
+        sub="Save WireGuard profiles for SSH servers and Kubernetes clusters."
       >
         <Button variant="outline" onClick={() => edit()}>
           <Plus size={17} /> Add VPN Profile
@@ -93,7 +93,7 @@ export function VpnProfiles() {
                         .map((p: Row) => p.endpoint)
                         .join(", ")}
                     </td>
-                    <td>{profile._count.servers} servers</td>
+                    <td>{profile._count.servers} servers · {profile._count.clusters || 0} clusters</td>
                     <td>
                       <span className="actions row">
                         <IconButton

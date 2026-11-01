@@ -1,4 +1,8 @@
 import {
+  kubernetesRoute,
+  kubernetesConnectionDigest,
+} from "./kubernetes-route.js";
+import {
   BadRequestException,
   ForbiddenException,
   HttpException,
@@ -264,6 +268,7 @@ async function perform(
     };
   }
   const cluster = await clusterFor(p, op, a.clusterId);
+  const routing = await kubernetesRoute(p.organizationId, cluster);
   const connection = unseal(
     cluster.encryptedConfig,
     config.ENCRYPTION_KEY,
@@ -282,7 +287,10 @@ async function perform(
     }
     const { approvalId, ...normalized } = a,
       digest = hash(canonical(normalized)),
-      configDigest = hash(cluster.encryptedConfig);
+      configDigest = kubernetesConnectionDigest(
+        cluster.encryptedConfig,
+        routing.digest,
+      );
     if (!approvalId) {
       const id = randomUUID();
       const approval = await db.kubernetesApproval.create({
@@ -328,7 +336,17 @@ async function perform(
       signal?.throwIfAborted();
       const execution = await db.$transaction(async (tx) => {
         const current = await clusterFor(p, op, cluster.id, tx);
-        if (hash(current.encryptedConfig) !== configDigest)
+        const currentRoute = await kubernetesRoute(
+          p.organizationId,
+          current,
+          tx,
+        );
+        if (
+          kubernetesConnectionDigest(
+            current.encryptedConfig,
+            currentRoute.digest,
+          ) !== configDigest
+        )
           throw new ForbiddenException(
             "Cluster credentials changed. Request a new approval.",
           );
@@ -371,13 +389,24 @@ async function perform(
         signal?.throwIfAborted();
         result =
           op === "kubernetes_pod_exec"
-            ? await kubernetesExec(connection, a as any, cidrs(), signal)
+            ? await kubernetesExec(
+                connection,
+                a as any,
+                cidrs(),
+                signal,
+                routing.network,
+              )
             : await kubernetesRequest(
                 connection,
                 plan!.path,
                 cidrs(),
                 plan!.text,
-                { ...plan, signal, timeoutMs: a.timeoutMs },
+                {
+                  ...plan,
+                  signal,
+                  timeoutMs: a.timeoutMs,
+                  route: routing.network,
+                },
               );
       } catch (error) {
         // A lost response never proves that a remote mutation/command failed.
@@ -417,7 +446,7 @@ async function perform(
         "/version",
         cidrs(),
         false,
-        { signal },
+        { signal, route: routing.network },
       );
       return {
         clusterId: cluster.id,
@@ -440,7 +469,7 @@ async function perform(
         ),
         cidrs(),
         false,
-        { signal },
+        { signal, route: routing.network },
       );
       if (!Array.isArray(data?.items) || data.items.length > 100)
         throw new KubernetesError("Invalid Kubernetes resource page.");
@@ -467,7 +496,7 @@ async function perform(
       `/api/v1/namespaces/${a.namespace}/pods/${a.pod}/log?${query}`,
       cidrs(),
       true,
-      { signal },
+      { signal, route: routing.network },
     );
   });
 }

@@ -2,8 +2,8 @@
 
 Workspace owners and administrators can open **Kubernetes** from the main menu
 or Settings. Import a kubeconfig to connect directly from the NexusSSH API
-process to a Kubernetes HTTPS API. No SSH server or local `kubectl` installation
-is required for this connection method.
+process to a Kubernetes HTTPS API. Direct connections require no SSH server or
+local `kubectl`. Saved WireGuard VPN and SSH bastion routes are also supported.
 
 ## Import a cluster
 
@@ -15,6 +15,9 @@ is required for this connection method.
 4. Save the profile and use **Test connection** to verify the API endpoint and
    read its Kubernetes version. Resource permissions are checked by Kubernetes
    when each resource is requested.
+
+Choose an optional **WireGuard VPN** and/or **SSH bastion** in the cluster form.
+These selections can be changed later without uploading the kubeconfig again.
 
 Supported credentials are an embedded bearer `token` or embedded
 `client-certificate-data` plus `client-key-data`. An optional
@@ -55,9 +58,30 @@ setting. The Compose file passes this variable to the application.
 
 Every DNS result is checked, and the selected address is pinned for the HTTPS
 connection. Cloud metadata addresses remain blocked regardless of the allowlist.
-Redirects are rejected. Existing per-server SSH VPN/bastion selections do not
-route these direct API connections; use a network route available to the
-NexusSSH host.
+Redirects are rejected. Set a saved route on each cluster profile:
+
+- No selections: connect directly from the NexusSSH host.
+- WireGuard only: reach the API through the selected saved VPN profile.
+- SSH bastion only: forward the API connection through one saved SSH server.
+- Both: reach the SSH bastion through WireGuard, then forward to the API.
+
+When no cluster VPN is selected, a selected bastion's effective VPN is inherited,
+including folder/tag defaults. Conflicting cluster/bastion VPNs and nested
+bastion hops are rejected. The bastion must be active, in the same workspace,
+and have a verified SSH host fingerprint. Configure and verify it through the
+SSH server screen before using it as a jump host. Its saved SSH identity and
+effective username are reused internally; no SSH credentials are returned.
+
+The API destination must pass `KUBERNETES_ALLOWED_CIDRS` on every route. Bastion
+SSH connections separately obey the deployment/workspace SSH allowlist. When a
+VPN has DNS servers, hostnames are resolved through its gateway; otherwise
+NexusSSH's DNS is used. Every result is checked before an IP is pinned. API
+hostnames must resolve through one of these resolvers; bastion-side DNS is not
+used. The original API Host/SNI, CA trust and client certificates are preserved
+inside the tunnel. Failed routes never fall back to a direct connection.
+
+All profile checks, UI resource/log reads, MCP commands and pod WebSockets share
+this routing. VPN profile deletion is blocked while a cluster references it.
 
 ## Resource browsing and logs
 
@@ -128,6 +152,20 @@ without recording credential contents or log output.
 3. Connect the agent token to the existing MCP endpoint. Refresh your client's
    tool list if it was connected before the deployment.
 
+Agents with explicit **Workspace management** access can also submit a new
+profile using `kubernetes_cluster_create`. Supply `name`, YAML/JSON `kubeconfig`
+text, optional `context`/`description`, and optional saved `vpnProfileId` and
+`bastionId`. These IDs must belong to the same workspace. This is a write-only
+credential submission: the result contains profile metadata, never the saved
+kubeconfig, token, certificate, private key or encrypted credential. Creation
+does not automatically grant the agent access to that cluster. Human
+administrators assign cluster/tool grants separately.
+
+SSH `identity_create` similarly accepts a supplied private key/passphrase or
+password and returns only identity metadata. Identity lists contain IDs, names,
+kinds and usage counts. MCP has no credential-retrieval or export tool. Agents
+can use granted connections without receiving the saved connection credentials.
+
 | Tool | Purpose |
 | --- | --- |
 | `kubernetes_clusters_list` | List explicitly granted cluster IDs and non-secret metadata. |
@@ -155,8 +193,9 @@ The requester resumes execution; the approval screen does not run the command
 under another user's identity.
 
 Approvals last 10 minutes, are single use, and are bound to the original token,
-workspace, cluster credentials, operation and exact arguments. A changed command,
-rotated kubeconfig, revoked token/grant, expired approval or consumed approval
+workspace, cluster credentials, saved route, operation and exact arguments. A changed command,
+rotated kubeconfig, VPN or bastion credentials, changed route or host fingerprint,
+revoked token/grant, expired approval or consumed approval
 cannot be used. The app never automatically retries a command.
 
 Executions return an `executionId`, status and result. Results are encrypted at
@@ -235,6 +274,6 @@ including `deployments/scale` or `statefulsets/scale` for scaling and `patch` pl
 `create` for server-side apply. Scope these grants to the namespaces and resources
 the agent should operate on.
 
-Replacing cluster credentials or removing a profile is blocked while a command
+Changing a cluster's connection route, replacing credentials or removing a profile is blocked while a command
 is running. Wait for its bounded execution to finish. The four-request workspace
 concurrency limit also applies to commands.

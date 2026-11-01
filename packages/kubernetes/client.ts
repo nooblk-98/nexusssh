@@ -1,7 +1,7 @@
 import https from "node:https";
 import { isIP } from "node:net";
-import { checkServerIdentity } from "node:tls";
-import { resolveAllowed } from "../ssh-core/index.js";
+import { checkServerIdentity, connect as tlsConnect } from "node:tls";
+import { openKubernetesNetwork, type KubernetesNetwork } from "./network.js";
 import type { ClusterConnection } from "./kubeconfig.js";
 
 export class KubernetesError extends Error {
@@ -21,6 +21,7 @@ export async function kubernetesRequest(
   cidrs: string[],
   text = false,
   options: {
+    route?: KubernetesNetwork;
     method?: string;
     body?: string;
     contentType?: string;
@@ -34,7 +35,13 @@ export async function kubernetesRequest(
         AbortSignal.timeout(options.timeoutMs || 15000),
       ])
     : AbortSignal.timeout(options.timeoutMs || 15000);
-  const target = await kubernetesTarget(connection, path, cidrs, signal);
+  const target = await kubernetesTarget(
+    connection,
+    path,
+    cidrs,
+    signal,
+    options.route,
+  );
   return new Promise((resolve, reject) => {
     const limit = text ? 256 * 1024 : 2 * 1024 * 1024;
     const chunks: Buffer[] = [];
@@ -125,7 +132,7 @@ export async function kubernetesRequest(
       ),
     );
     request.end(options.body);
-  });
+  }).finally(target.close);
 }
 
 // Shared with WebSocket exec: pin an allowlisted address while verifying the
@@ -135,32 +142,31 @@ export async function kubernetesTarget(
   path: string,
   cidrs: string[],
   signal: AbortSignal,
+  route?: KubernetesNetwork,
 ) {
   if (!path.startsWith("/") || path.startsWith("//"))
     throw new KubernetesError("Invalid Kubernetes API path.");
   signal.throwIfAborted();
   const endpoint = new URL(connection.server + path);
   const host = endpoint.hostname.replace(/^\[|\]$/g, "");
-  let address: string;
+  let network: Awaited<ReturnType<typeof openKubernetesNetwork>>;
   try {
-    address = await new Promise<string>((resolve, reject) => {
-      const aborted = () => reject(new Error("Resolution timed out"));
-      signal.addEventListener("abort", aborted, { once: true });
-      void resolveAllowed(host, cidrs)
-        .then(resolve, reject)
-        .finally(() => signal.removeEventListener("abort", aborted));
-    });
+    network = await openKubernetesNetwork(
+      host,
+      Number(endpoint.port || 443),
+      cidrs,
+      signal,
+      route,
+    );
   } catch {
     throw new KubernetesError(
-      "Kubernetes API endpoint could not be resolved or is outside KUBERNETES_ALLOWED_CIDRS.",
+      route
+        ? "Kubernetes route failed. Check the VPN gateway, bastion SSH host key/credentials, SSH allowlist and KUBERNETES_ALLOWED_CIDRS."
+        : "Kubernetes API endpoint could not be resolved or is outside KUBERNETES_ALLOWED_CIDRS.",
     );
   }
   const identity = connection.tlsServerName || host;
-  return {
-    hostname: address,
-    port: endpoint.port || 443,
-    path: endpoint.pathname + endpoint.search,
-    agent: false as const,
+  const tlsOptions = {
     ca: connection.ca,
     cert: connection.cert,
     key: connection.key,
@@ -171,6 +177,23 @@ export async function kubernetesTarget(
       _host: string,
       certificate: import("node:tls").PeerCertificate,
     ) => checkServerIdentity(identity, certificate),
+  };
+  const agent = network.socket
+    ? new https.Agent({ keepAlive: false, maxCachedSessions: 0 })
+    : false;
+  if (agent)
+    agent.createConnection = () =>
+      tlsConnect({ ...tlsOptions, socket: network.socket });
+  return {
+    hostname: network.address,
+    port: endpoint.port || 443,
+    path: endpoint.pathname + endpoint.search,
+    agent,
+    close: () => {
+      if (agent) agent.destroy();
+      network.close();
+    },
+    ...tlsOptions,
     headers: {
       Host: endpoint.host,
       ...(connection.token

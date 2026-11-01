@@ -12,11 +12,13 @@ Save the server. Its terminal, SFTP, diagnostics, connection tests, and MCP oper
 
 WireGuard `AllowedIPs` must cover the next TCP hop (the server or bastion). The existing SSH destination allowlist still applies to the bastion and destination. Administrators can add private networks under **Settings → Security**. Profile `DNS` addresses are used inside the VPN for hostname resolution; without DNS entries, the application's normal resolver is used. There is no direct-network fallback when a selected VPN fails.
 
+Kubernetes cluster profiles can also select these saved VPNs and SSH jump hosts. Edit a cluster to choose **WireGuard VPN** and **SSH bastion**; checks, resource/log browsing and MCP commands all use that route. A bastion must have a verified SSH host key. Cluster API destinations use `KUBERNETES_ALLOWED_CIDRS`; bastion connections retain the SSH allowlist. See [Kubernetes connections](KUBERNETES.md#network-access).
+
 ## Supported client configuration
 
 The importer accepts one `[Interface]` section with `PrivateKey`, `Address` (one or more CIDRs), optional `DNS` (IP addresses), optional `MTU` (1280–1500, default 1420), and optional `ListenPort` (0–65535). `ListenPort` sets the gateway's local UDP port; omit it or use 0 for an automatically assigned port. Concurrent profiles with fixed ports need distinct available ports. It does not publish a port through Docker or the host firewall. Each `[Peer]` accepts `PublicKey`, optional `PresharedKey`, `Endpoint`, `AllowedIPs`, and optional `PersistentKeepalive` (default 25 seconds). Multiple peers and IPv4/IPv6 addresses are supported. Unsupported directives, including scripts and system routing overrides, are rejected with an explanation; they are never executed. DNS search suffixes are not supported.
 
-When editing, leave the configuration field blank to keep the stored keys. To rotate keys or endpoints, paste a replacement. Close sessions using the old profile before opening sessions with its replacement. A profile cannot be deleted while any server references it, including archived servers. Use distinct WireGuard client identities for separate profiles.
+When editing, leave the configuration field blank to keep the stored keys. To rotate keys or endpoints, paste a replacement. Close sessions using the old profile before opening sessions with its replacement. A profile cannot be deleted while a Kubernetes cluster or any server references it, including archived servers. Use distinct WireGuard client identities for separate profiles.
 
 ## Runtime
 

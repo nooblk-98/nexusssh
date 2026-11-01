@@ -9,7 +9,15 @@ import {
   RotateCw,
   Trash2,
 } from "lucide-react";
-import { api, notify, queryClient, timeAgo, useApi } from "../../lib/api";
+import {
+  api,
+  notify,
+  queryClient,
+  timeAgo,
+  useApi,
+  type Row,
+} from "../../lib/api";
+import { useServers } from "../../lib/servers";
 import {
   resources,
   type Resource,
@@ -35,6 +43,8 @@ type Cluster = {
   context: string;
   namespace: string;
   authentication: string;
+  vpnProfileId: string | null;
+  bastionId: string | null;
   status: string;
   version: string | null;
   lastCheckedAt: string | null;
@@ -86,6 +96,10 @@ function ClusterForm({
 }) {
   const [name, setName] = useState(cluster?.name || "");
   const [description, setDescription] = useState(cluster?.description || "");
+  const vpns = useApi<Row[]>("vpn-profiles");
+  const { servers } = useServers();
+  const [vpnProfileId, setVpnProfileId] = useState(cluster?.vpnProfileId || "");
+  const [bastionId, setBastionId] = useState(cluster?.bastionId || "");
   const [kubeconfig, setKubeconfig] = useState("");
   const [context, setContext] = useState("");
   const [contexts, setContexts] = useState<ContextPreview[]>([]);
@@ -126,6 +140,8 @@ function ClusterForm({
         {
           name,
           description,
+          vpnProfileId: vpnProfileId || null,
+          bastionId: bastionId || null,
           ...(kubeconfig.trim()
             ? { kubeconfig, ...(context ? { context } : {}) }
             : {}),
@@ -186,6 +202,61 @@ function ClusterForm({
           onChange={(event) => setDescription(event.target.value)}
         />
       </Field>
+      <div className="grid-2">
+        <Field
+          label="WireGuard VPN"
+          hint="Use a saved VPN profile, or inherit the bastion's VPN when none is selected."
+        >
+          <select
+            className="select"
+            value={vpnProfileId}
+            onChange={(event) => setVpnProfileId(event.target.value)}
+            disabled={busy || vpns.isPending || !!vpns.error}
+          >
+            <option value="">None / inherit from bastion</option>
+            {(vpns.data || []).map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {profile.name}
+              </option>
+            ))}
+            {vpnProfileId &&
+              !vpns.data?.some((profile) => profile.id === vpnProfileId) && (
+                <option value={vpnProfileId}>Unavailable saved VPN</option>
+              )}
+          </select>
+        </Field>
+        <Field
+          label="SSH bastion"
+          hint="One jump through a saved SSH server. Verify its SSH host key first."
+        >
+          <select
+            className="select"
+            value={bastionId}
+            onChange={(event) => setBastionId(event.target.value)}
+            disabled={busy}
+          >
+            <option value="">None — connect directly or through VPN</option>
+            {servers
+              .filter((server) => !server.bastionId)
+              .map((server) => (
+                <option key={server.id} value={server.id}>
+                  {server.name}
+                  {!server.fingerprint ? " (host key not verified)" : ""}
+                </option>
+              ))}
+            {bastionId &&
+              !servers.some(
+                (server) => server.id === bastionId && !server.bastionId,
+              ) && <option value={bastionId}>Unavailable saved bastion</option>}
+          </select>
+        </Field>
+      </div>
+      {vpns.error && (
+        <p className="error-text">
+          Could not load saved VPN profiles. You can keep the existing selection
+          or retry.
+        </p>
+      )}
       <Field
         label="Import kubeconfig"
         hint={
@@ -509,7 +580,15 @@ export function KubernetesClusters() {
                 {selected.authentication === "token"
                   ? "Bearer token"
                   : "Client certificate"}{" "}
-                · Direct HTTPS
+                ·{" "}
+                {selected.bastionId
+                  ? "HTTPS via SSH bastion"
+                  : selected.vpnProfileId
+                    ? "HTTPS via WireGuard"
+                    : "Direct HTTPS"}
+                {selected.bastionId && selected.vpnProfileId
+                  ? " + WireGuard"
+                  : ""}
                 {selected.lastCheckedAt
                   ? ` · checked ${timeAgo(selected.lastCheckedAt)}`
                   : ""}
@@ -743,6 +822,17 @@ export function KubernetesClusters() {
               <p className="small muted">{cluster.server}</p>
               <p className="small">
                 Context: {cluster.context} · {cluster.namespace}
+              </p>
+              <p className="small muted">
+                Route:{" "}
+                {cluster.bastionId
+                  ? "SSH bastion"
+                  : cluster.vpnProfileId
+                    ? "WireGuard"
+                    : "Direct"}
+                {cluster.bastionId && cluster.vpnProfileId
+                  ? " via WireGuard"
+                  : ""}
               </p>
               {cluster.description && (
                 <p className="small muted">{cluster.description}</p>

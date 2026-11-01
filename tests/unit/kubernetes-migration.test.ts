@@ -9,11 +9,11 @@ import {
 } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { seal, unseal } from "../../packages/shared/crypto.js";
 
-it("migrates fresh and existing databases without changing encrypted SSH identities", async () => {
+it("migrates fresh and existing databases without changing encrypted SSH identities or cluster credentials", async () => {
   const dataRoot = resolve("data");
   mkdirSync(dataRoot, { recursive: true });
   const directory = mkdtempSync(join(dataRoot, "kubernetes-migration-"));
@@ -45,7 +45,7 @@ it("migrates fresh and existing databases without changing encrypted SSH identit
     mkdirSync(join(directory, "migrations"));
     for (const entry of readdirSync(migrations, { withFileTypes: true })) {
       if (entry.isDirectory()) {
-        if (entry.name >= "20261101060000_kubernetes_clusters") continue;
+        if (entry.name >= "20261101080000_kubernetes_routes") continue;
         mkdirSync(join(directory, "migrations", entry.name));
         copyFileSync(
           join(migrations, entry.name, "migration.sql"),
@@ -79,6 +79,14 @@ it("migrates fresh and existing databases without changing encrypted SSH identit
         encryptedSecret: secret,
       },
     });
+    const clusterId = randomUUID();
+    const clusterSecret = seal(
+      { token: "existing-cluster-secret" },
+      encryptionKey,
+      `${organization.id}:kubernetes:${clusterId}`,
+    );
+    // Seed the previous cluster schema before its optional route columns exist.
+    await client.$executeRaw`INSERT INTO "KubernetesCluster" ("id", "updatedAt", "organizationId", "name", "server", "context", "authentication", "encryptedConfig") VALUES (${clusterId}, CURRENT_TIMESTAMP, ${organization.id}, 'Existing cluster', 'https://fixture.test', 'fixture', 'token', ${clusterSecret})`;
     await client.$disconnect();
     client = undefined;
     migrate("packages/database/prisma/schema.prisma", databaseURL);
@@ -93,7 +101,21 @@ it("migrates fresh and existing databases without changing encrypted SSH identit
     expect(unseal(secret, encryptionKey, "legacy-identity")).toEqual({
       password: "disposable-migration-password",
     });
-    expect(await client.kubernetesCluster.count()).toBe(0);
+    const existingCluster = await client.kubernetesCluster.findUniqueOrThrow({
+      where: { id: clusterId },
+    });
+    expect(existingCluster).toMatchObject({
+      encryptedConfig: clusterSecret,
+      vpnProfileId: null,
+      bastionId: null,
+    });
+    expect(
+      unseal(
+        existingCluster.encryptedConfig,
+        encryptionKey,
+        `${organization.id}:kubernetes:${clusterId}`,
+      ),
+    ).toEqual({ token: "existing-cluster-secret" });
     const cluster = await client.kubernetesCluster.create({
       data: {
         organizationId: organization.id,

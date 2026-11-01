@@ -4,6 +4,13 @@
 
 ### Added
 
+- Optional saved WireGuard and SSH bastion routes for Kubernetes profiles,
+  including WireGuard → bastion → API connections and tunneled pod WebSockets.
+  Destination allowlists, bastion host-key checks, TLS identity and route-bound
+  command approvals apply throughout.
+- MCP `kubernetes_cluster_create` for encrypted credential submission by
+  workspace-management agents. SSH identity and cluster imports return metadata
+  only; saved credentials cannot be retrieved through MCP.
 - Kubernetes administration with direct HTTPS API connections from uploaded
   kubeconfigs. Cluster credentials are encrypted; administrators can select
   contexts, check connections, browse paginated namespaces, nodes, pods,

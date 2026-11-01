@@ -36,7 +36,7 @@ const selection = {
   description: true,
   summary: true,
   updatedAt: true,
-  _count: { select: { servers: true } },
+  _count: { select: { servers: true, clusters: true } },
 } as const;
 @Controller("api/vpn-profiles")
 export class VpnController {
@@ -131,6 +131,7 @@ export class VpnController {
       throw new NotFoundException("VPN profile unavailable");
     try {
       await db.$transaction(async (tx) => {
+        if (await tx.kubernetesCluster.count({ where: { organizationId: p.organizationId, vpnProfileId: id } })) throw new BadRequestException("Remove this VPN profile from Kubernetes clusters before deleting it");
         if (await settingsReferenceCount(tx, p.organizationId, "vpnProfileId", id))
           throw new BadRequestException("Remove this VPN profile from servers, folder defaults and tag defaults before deleting it");
         await tx.vpnProfile.delete({ where: { id } });

@@ -205,7 +205,7 @@ export const managementTools: Record<string, Tool> = {
     "identities",
   ),
   identity_create: tool(
-    "Add an encrypted SSH password or private-key identity. For kind key supply privateKey and optional passphrase; for password supply password.",
+    "Add an encrypted SSH password or private-key identity. For kind key supply privateKey and optional passphrase; for password supply password. Returns identity metadata only; stored credentials cannot be retrieved or exported through MCP.",
     "POST",
     "identities",
     z.object(credential).strict(),
@@ -221,6 +221,19 @@ export const managementTools: Record<string, Tool> = {
     "DELETE",
     "identities/:id",
     resource,
+  ),
+  kubernetes_cluster_create: tool(
+    "Add a saved Kubernetes cluster from YAML/JSON kubeconfig text and an optional context. Embedded tokens or client certificates are encrypted. Returns profile metadata only; never returns the kubeconfig, token, certificates, private keys or encrypted credentials. Does not grant cluster access automatically; a human administrator assigns agent cluster/tool grants in the app.",
+    "POST",
+    "kubernetes/clusters",
+    z.object({
+      name,
+      description: z.string().max(2000).optional(),
+      kubeconfig: z.string().min(1).max(256 * 1024),
+      vpnProfileId: id.nullable().optional(),
+      bastionId: id.nullable().optional(),
+      context: z.string().min(1).max(256).optional(),
+    }).strict(),
   ),
   vpn_profiles_list: tool(
     "List WireGuard VPN profile summaries and server usage without key material.",

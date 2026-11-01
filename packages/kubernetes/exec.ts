@@ -1,3 +1,4 @@
+import type { KubernetesNetwork } from "./network.js";
 import WebSocket from "ws";
 import { kubernetesTarget, KubernetesError } from "./client.js";
 import type { ClusterConnection } from "./kubeconfig.js";
@@ -20,6 +21,7 @@ export async function kubernetesExec(
   },
   cidrs: string[],
   cancellation?: AbortSignal,
+  route?: KubernetesNetwork,
 ): Promise<ExecResult> {
   const signal = AbortSignal.any([
     AbortSignal.timeout(args.timeoutMs),
@@ -37,9 +39,9 @@ export async function kubernetesExec(
   });
   for (const part of args.command) query.append("command", part);
   const path = `/api/v1/namespaces/${namespace}/pods/${pod}/exec?${query}`;
-  const target = await kubernetesTarget(connection, path, cidrs, signal);
+  const target = await kubernetesTarget(connection, path, cidrs, signal, route);
   signal.throwIfAborted();
-  return new Promise((resolve, reject) => {
+  return new Promise<ExecResult>((resolve, reject) => {
     const url = new URL(connection.server + path);
     url.protocol = "wss:";
     // ws uses this URL to choose the address; pin it, retaining original Host/SNI.
@@ -144,5 +146,5 @@ export async function kubernetesExec(
         }
       }
     });
-  });
+  }).finally(target.close);
 }
