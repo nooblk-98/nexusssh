@@ -88,6 +88,7 @@ test("Administrator defaults to all permissions and Custom exposes selectable gr
   await expect(drawer.getByRole("checkbox")).toHaveCount(0);
   await drawer.getByLabel("Agent Name").fill("Full Admin");
   await drawer.getByRole("button", { name: "Create Token" }).click();
+  await expect.poll(() => writes.length).toBe(1);
   expect(writes[0]).toMatchObject({
     level: "administrator",
     name: "Full Admin",
@@ -122,6 +123,7 @@ test("Administrator defaults to all permissions and Custom exposes selectable gr
     .getByRole("checkbox", { name: "ssh_execute", exact: true })
     .uncheck();
   await edit.getByRole("button", { name: "Save Access", exact: true }).click();
+  await expect.poll(() => writes.length).toBe(2);
   expect(writes[1]).toMatchObject({
     level: "custom",
     serverIds: [serverId],
@@ -210,6 +212,7 @@ test("assign direct cluster tools to an agent without SSH grants and edit its ac
   await expect(
     page.getByText("1 Kubernetes cluster", { exact: true }),
   ).toBeVisible();
+  await expect.poll(() => writes.length).toBe(1);
   expect(writes[0]).toMatchObject({
     name: "Kubernetes assistant",
     level: "custom",
@@ -237,6 +240,7 @@ test("assign direct cluster tools to an agent without SSH grants and edit its ac
     .getByRole("checkbox", { name: "kubernetes_pod_exec", exact: true })
     .uncheck();
   await edit.getByRole("button", { name: "Save Access" }).click();
+  await expect.poll(() => writes.length).toBe(2);
   expect(writes[1].clusterOperations).not.toContain("kubernetes_pod_exec");
   expect(writes[1].clusterIds).toEqual([clusterId]);
 });
