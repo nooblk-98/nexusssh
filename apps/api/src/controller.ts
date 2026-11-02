@@ -1,3 +1,6 @@
+import { administratorAgentScopes, effectiveAgentScopes, isAgentAdministrator, administratorToken } from "../../../packages/policy-engine/index.js";
+import { kubernetesApprovals } from "./kubernetes-operations.js";
+import { kubernetesOperations, kubernetesReadOperations } from "../../../packages/kubernetes/policy.js";
 import {
   Controller,
   Get,
@@ -83,11 +86,16 @@ async function preflightDefaults(tx: Prisma.TransactionClient, org: string, type
 }
 import { finishTask } from "./task-finish.js";
 import { saveFolder, deleteFolder } from "./folders.js";
+import { markSshReachable } from "./connection-health.js";
+import { readiness } from "./readiness.js";
+import { correlationId as currentRequestId } from "../../../packages/shared/request-context.js";
+import { createWebSession } from "./sessions.js";
 import { enqueueHealthBatch } from "./health.js";
 import {
   WORKSPACE_MANAGE,
   managementTools,
   agentAccessSchema,
+  administratorAgentAccess,
 } from "../../../packages/shared/management.js";
 // Keep in sync with the icon picker in apps/web/components/icons.tsx.
 const serverIcons = [
@@ -258,6 +266,11 @@ export class AppController {
   @Get("health") health() {
     return { status: "ok", service: "api" };
   }
+  @Get("ready") async ready(@Res({ passthrough: true }) res: Response) {
+    const result = await readiness();
+    res.status(result.status === "ready" ? 200 : 503);
+    return result;
+  }
   @Get("auth/status") async status() {
     return { setupRequired: (await db.user.count()) === 0 };
   }
@@ -375,23 +388,7 @@ export class AppController {
       )
         throw new UnauthorizedException("Authenticator code already used");
     }
-    const token = secret();
-    await db.webSession.create({
-      data: {
-        userId: user.id,
-        tokenHash: hash(token),
-        expiresAt: new Date(Date.now() + 28800000),
-      },
-    });
-    res.cookie("nexus_session", token, {
-      httpOnly: true,
-      secure: config.APP_URL
-        ? config.NODE_ENV === "production"
-        : req.headers.origin?.startsWith("https://") === true,
-      sameSite: "strict",
-      path: "/",
-      maxAge: 28800000,
-    });
+    await createWebSession(user.id, req, res);
     await audit(p, "login", "success");
     return { authenticated: true };
   }
@@ -578,7 +575,7 @@ export class AppController {
         agents: await db.agent.count({
           where: { organizationId: p.organizationId, revoked: false },
         }),
-        approvals: await db.approvalRequest.count({
+        approvals: (await db.kubernetesApproval.count({ where: { organizationId: p.organizationId, status: "pending", expiresAt: { gt: new Date() } } })) + await db.approvalRequest.count({
           where: {
             organizationId: p.organizationId,
             status: "pending",
@@ -801,7 +798,7 @@ export class AppController {
           await tx.auditEvent.create({ data: {
             organizationId: p.organizationId, principalId: p.id,
             action: "server_created", status: "success", serverId: created.id,
-            correlationId: randomUUID(),
+            correlationId: randomUUID(), requestId: currentRequestId(),
           } });
           return created;
         });
@@ -1218,6 +1215,7 @@ export class AppController {
       where: { organizationId: p.organizationId },
       include: {
         permissions: true,
+        clusterPermissions: true,
         tokens: {
           select: { id: true, expiresAt: true, revoked: true, scopes: true },
         },
@@ -1230,42 +1228,15 @@ export class AppController {
   ) {
     const p = await authenticate(req);
     admin(p);
-    const a = z
-      .object({
-        name: z.string().min(1).max(100),
-        level: z
-          .enum(["viewer", "operator", "administrator", "custom"])
-          .default("viewer"),
-        serverIds: z.array(z.uuid()).max(100),
-        operations: z
-          .array(z.enum(allOperations as [string, ...string[]]))
-          .max(60),
-        workspaceManagement: z.boolean().default(false),
-        expiresInDays: z.number().int().min(1).max(90).default(30),
-        ...agentLimits,
-      })
-      .strict()
-      .parse(body);
-    if (
-      a.operations.includes("terminal") ||
-      (a.level === "viewer" &&
-        a.operations.some((o) => !readOperations.includes(o)))
-    )
-      throw new BadRequestException("Invalid agent operations");
-    if (
-      (await db.server.count({
-        where: {
-          id: { in: a.serverIds },
-          organizationId: p.organizationId,
-          archived: false,
-        },
-      })) !== new Set(a.serverIds).size
-    )
-      throw new BadRequestException("Server unavailable");
-    if (a.workspaceManagement && a.level !== "administrator")
-      throw new BadRequestException(
-        "Workspace management requires administrator level",
-      );
+    const parsed = agentAccessSchema.extend({ name: z.string().trim().min(1).max(100), level: z.enum(["administrator", "custom"]).default("custom"), clusterIds: z.array(z.uuid()).max(50).default([]), clusterOperations: z.array(z.enum(kubernetesOperations as [string, ...string[]])).max(20).default([]), expiresInDays: z.number().int().min(1).max(90).default(30), ...agentLimits }).parse(body);
+    const a = parsed.level === "administrator" ? { ...parsed, ...administratorAgentAccess } : parsed;
+    if (a.level === "administrator" && p.kind === "agent" && !isAgentAdministrator(p)) human(p);
+    if ((await db.server.count({ where: { id: { in: a.serverIds }, organizationId: p.organizationId, archived: false } })) !== new Set(a.serverIds).size) throw new BadRequestException("Server unavailable");
+    if (a.level === "custom" && (a.clusterIds.length || a.clusterOperations.length)) {
+      if (!isAgentAdministrator(p)) human(p);
+      if (a.clusterIds.length && !a.clusterOperations.length) throw new BadRequestException("Choose Kubernetes tools for the selected clusters");
+      if (await db.kubernetesCluster.count({ where: { organizationId: p.organizationId, id: { in: a.clusterIds } } }) !== new Set(a.clusterIds).size) throw new BadRequestException("Cluster unavailable");
+    }
     const token = secret();
     const agent = await db.agent.create({
       data: {
@@ -1281,6 +1252,7 @@ export class AppController {
             operations: JSON.stringify(a.operations),
           })),
         },
+        clusterPermissions: { create: [...new Set(a.clusterIds)].map((clusterId) => ({ clusterId, operations: JSON.stringify(a.clusterOperations) })) },
         tokens: {
           create: {
             tokenHash: hash(token),
@@ -1289,6 +1261,8 @@ export class AppController {
             scopes: JSON.stringify([
               ...new Set([
                 ...a.operations,
+                ...a.clusterOperations,
+                ...(a.level === "administrator" ? administratorAgentScopes : []),
                 ...(a.workspaceManagement ? [WORKSPACE_MANAGE] : []),
               ]),
             ]),
@@ -1307,13 +1281,11 @@ export class AppController {
   ) {
     const p = await authenticate(req);
     admin(p);
-    const a = agentAccessSchema.parse(body);
-    if (
-      (a.workspaceManagement && a.level !== "administrator") ||
-      (a.level === "viewer" &&
-        a.operations.some((op) => !readOperations.includes(op)))
-    )
-      throw new BadRequestException("Invalid agent access");
+    const parsed = agentAccessSchema.parse(body);
+    const a = parsed.level === "administrator" ? { ...parsed, ...administratorAgentAccess } : parsed;
+    if ((a.clusterIds === undefined) !== (a.clusterOperations === undefined)) throw new BadRequestException("Supply both clusterIds and clusterOperations");
+    if ((a.level === "administrator" || a.clusterIds !== undefined) && !isAgentAdministrator(p)) human(p);
+    if (a.clusterIds?.length && !a.clusterOperations?.length) throw new BadRequestException("Choose Kubernetes tools for the selected clusters");
     await db.$transaction(async (tx) => {
       const agent = await tx.agent.findFirst({
         where: { id, organizationId: p.organizationId, revoked: false },
@@ -1342,17 +1314,17 @@ export class AppController {
           },
         },
       });
-      await tx.agentToken.updateMany({
-        where: { agentId: id, revoked: false },
-        data: {
-          scopes: JSON.stringify([
-            ...new Set([
-              ...a.operations,
-              ...(a.workspaceManagement ? [WORKSPACE_MANAGE] : []),
-            ]),
-          ]),
-        },
-      });
+      if (a.clusterIds !== undefined) {
+        if (await tx.kubernetesCluster.count({ where: { organizationId: p.organizationId, id: { in: a.clusterIds } } }) !== new Set(a.clusterIds).size) throw new BadRequestException("Cluster unavailable");
+        await tx.kubernetesAgentPermission.deleteMany({ where: { agentId: id } });
+        await tx.kubernetesAgentPermission.createMany({ data: [...new Set(a.clusterIds)].map((clusterId) => ({ agentId: id, clusterId, operations: JSON.stringify(a.clusterOperations) })) });
+      }
+      const tokens = await tx.agentToken.findMany({ where: { agentId: id, revoked: false } });
+      for (const token of tokens) {
+        const old: string[] = JSON.parse(token.scopes);
+        const clusterScopes = a.clusterOperations ?? old.filter((op) => kubernetesOperations.includes(op));
+        await tx.agentToken.update({ where: { id: token.id }, data: { scopes: JSON.stringify([...new Set(a.level === "administrator" ? administratorAgentScopes : [...a.operations, ...clusterScopes, ...(a.workspaceManagement ? [WORKSPACE_MANAGE] : [])])]) } });
+      }
     });
     await audit(p, "agent_access_updated", "success", undefined, id);
     return { updated: true };
@@ -1366,11 +1338,10 @@ export class AppController {
       if (!agent) throw new NotFoundException("Agent unavailable");
       const server = await tx.server.findFirst({ where: { id: input.serverId, organizationId: p.organizationId, archived: false } });
       if (!server) throw new NotFoundException("Server unavailable");
-      if (agent.level === "viewer" && input.operations.some((op) => !readOperations.includes(op)))
-        throw new BadRequestException("Viewer agents may only receive read operations");
+      if (agent.level === "administrator") throw new BadRequestException("Administrator access is automatic. Choose Custom to edit grants.");
       const operations = JSON.stringify([...new Set(input.operations)]);
       await tx.agentPermission.upsert({ where: { agentId_serverId: { agentId: id, serverId: input.serverId } }, create: { agentId: id, serverId: input.serverId, operations }, update: { operations } });
-      await tx.auditEvent.create({ data: { organizationId: p.organizationId, principalId: p.id, action: "agent_grant_updated", status: "success", serverId: input.serverId, correlationId: randomUUID() } });
+      await tx.auditEvent.create({ data: { organizationId: p.organizationId, principalId: p.id, action: "agent_grant_updated", status: "success", serverId: input.serverId, correlationId: randomUUID(), requestId: currentRequestId() } });
     });
     return { agentId: id, serverId: input.serverId, operations: [...new Set(input.operations)] };
   }
@@ -1383,8 +1354,9 @@ export class AppController {
       if (!agent) throw new NotFoundException("Agent unavailable");
       const server = await tx.server.findFirst({ where: { id: serverId, organizationId: p.organizationId, archived: false } });
       if (!server) throw new NotFoundException("Server unavailable");
+      if (agent.level === "administrator") throw new BadRequestException("Administrator access is automatic. Choose Custom to edit grants.");
       const result = await tx.agentPermission.deleteMany({ where: { agentId: id, serverId } });
-      await tx.auditEvent.create({ data: { organizationId: p.organizationId, principalId: p.id, action: "agent_grant_revoked", status: "success", serverId, correlationId: randomUUID() } });
+      await tx.auditEvent.create({ data: { organizationId: p.organizationId, principalId: p.id, action: "agent_grant_revoked", status: "success", serverId, correlationId: randomUUID(), requestId: currentRequestId() } });
       return result.count > 0;
     });
     return { agentId: id, serverId, removed };
@@ -1421,7 +1393,7 @@ export class AppController {
       }))
     )
       throw new NotFoundException();
-    const [executions, management] = await Promise.all([
+    const [executions, management, clusterExecutions] = await Promise.all([
       db.commandExecution.findMany({
         where: { principalId: id, organizationId: p.organizationId },
         include: { server: { select: { name: true } } },
@@ -1437,13 +1409,18 @@ export class AppController {
         orderBy: { createdAt: "desc" },
         take: 200,
       }),
+      db.kubernetesExecution.findMany({ where: { organizationId: p.organizationId, principalId: id }, select: { id: true, createdAt: true, operation: true, status: true, clusterId: true, cluster: { select: { name: true } } }, orderBy: { createdAt: "desc" }, take: 200 }),
     ]);
+    const clusters = await db.kubernetesCluster.findMany({ where: { organizationId: p.organizationId }, select: { id: true, name: true } });
+    const names = new Map(clusters.map((cluster) => [cluster.id, cluster.name]));
     return [
+      ...clusterExecutions.map(({ cluster, ...entry }) => ({ ...entry, serverId: entry.clusterId, server: { name: cluster.name + " (Kubernetes)" } })),
       ...executions,
       ...management.map((event) => ({
         ...event,
-        operation: event.action.slice(4),
-        server: { name: "Workspace" },
+        operation: event.action.split(":")[1],
+        serverId: event.action.split(":")[2] || "workspace",
+        server: { name: names.has(event.action.split(":")[2]) ? names.get(event.action.split(":")[2]) + " (Kubernetes)" : "Workspace" },
       })),
     ]
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
@@ -1488,10 +1465,11 @@ export class AppController {
     const batchIds = [...new Set(decoded.flatMap((item) => item.operation === "ssh_execute_many" && Array.isArray(item.args.serverIds) ? item.args.serverIds.filter((id): id is string => typeof id === "string") : []))];
     const targets = batchIds.length ? await db.server.findMany({ where: { id: { in: batchIds }, organizationId: p.organizationId }, select: { id: true, name: true } }) : [];
     const names = new Map(targets.map((server) => [server.id, server.name]));
-    return decoded.map((item) => ({
+    const ssh = decoded.map((item) => ({
       ...item,
       ...(item.operation === "ssh_execute_many" && Array.isArray(item.args.serverIds) ? { targetNames: item.args.serverIds.map((id) => names.get(String(id)) ?? "Unavailable server"), targetCount: item.args.serverIds.length } : {}),
     }));
+    return [...ssh, ...await kubernetesApprovals(p)].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 100);
   }
   @Post("approvals/:id") async decide(
     @Req() req: Request,
@@ -1512,8 +1490,11 @@ export class AppController {
       },
       data: { status: a.decision, decidedBy: p.id },
     });
-    if (result.count !== 1)
-      throw new BadRequestException("Approval unavailable or expired");
+    if (result.count !== 1) {
+      human(p);
+      const kube = await db.kubernetesApproval.updateMany({ where: { id, organizationId: p.organizationId, status: "pending", expiresAt: { gt: new Date() } }, data: { status: a.decision, decidedBy: p.id } });
+      if (kube.count !== 1) throw new BadRequestException("Approval unavailable or expired");
+    }
     await audit(p, "approval_" + a.decision, "success", undefined, id);
     return { id, status: a.decision };
   }
@@ -1521,6 +1502,7 @@ export class AppController {
     @Req() req: Request,
     @Query("action") action?: string,
     @Query("cursor") cursor?: string,
+    @Query("requestId") requestId?: string,
   ) {
     const p = await authenticate(req);
     admin(p);
@@ -1528,6 +1510,7 @@ export class AppController {
       where: {
         organizationId: p.organizationId,
         ...(action ? { action: { contains: action.slice(0, 100) } } : {}),
+        ...(requestId ? { requestId: z.uuid().parse(requestId) } : {}),
       },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: 100,
@@ -1645,6 +1628,8 @@ export class AppController {
       recording: false,
       operations: allOperations,
       readOperations,
+      kubernetesOperations,
+      kubernetesReadOperations,
       managementTools: Object.entries(managementTools).map(([name, tool]) => ({
         name,
         description: tool.description,
@@ -2011,10 +1996,10 @@ export class AppController {
       const tasks = await tx.backgroundTask.findMany({ where: { batchId }, select: { principalId: true, organizationId: true, tokenId: true, serverId: true, status: true } });
       if (!tasks.length || tasks.some((task) => task.principalId !== batch.principalId || task.organizationId !== batch.organizationId || task.status !== "running"))
         throw new ForbiddenException("Batch preflight is incomplete");
-      const agent = await tx.agent.findFirst({ where: { id: batch.principalId, organizationId: batch.organizationId, revoked: false, owner: { disabled: false } }, include: { tokens: { where: { id: tasks[0].tokenId ?? "", revoked: false, expiresAt: { gt: new Date() } } } } });
+      const agent = await tx.agent.findFirst({ where: { id: batch.principalId, organizationId: batch.organizationId, revoked: false, owner: { disabled: false } }, include: { owner: true, tokens: { where: { id: tasks[0].tokenId ?? "", revoked: false, expiresAt: { gt: new Date() } } } } });
       if (agent) {
         const token = agent.tokens[0];
-        const scopes: string[] = token ? JSON.parse(token.scopes) : [];
+        const scopes: string[] = token ? effectiveAgentScopes(agent.level, JSON.parse(token.scopes), agent.owner.role) : [];
         if (tasks.some((task) => task.tokenId !== tasks[0].tokenId) || !batchTokenAllowed(tasks[0].tokenId, token ? { id: token.id, scopes } : null))
           throw new ForbiddenException("Original agent token no longer permits this batch");
       } else {
@@ -2036,7 +2021,8 @@ export class AppController {
       if (agent) for (const task of tasks) {
         const server = await tx.server.findFirst({ where: { id: task.serverId, organizationId: batch.organizationId, archived: false } });
         const grant = await tx.agentPermission.findUnique({ where: { agentId_serverId: { agentId: agent.id, serverId: task.serverId } } });
-        if (!server || !grant || !JSON.parse(grant.operations).includes("ssh_execute"))
+        const full = agent.tokens[0] && administratorToken(agent.level, effectiveAgentScopes(agent.level, JSON.parse(agent.tokens[0].scopes), agent.owner.role));
+        if (!server || (!full && (!grant || !JSON.parse(grant.operations).includes("ssh_execute"))))
           throw new ForbiddenException("Batch server execution grant was removed");
       }
       await tx.batchDispatch.update({ where: { id: batchId }, data: { status: "executing" } });
@@ -2062,7 +2048,7 @@ export class AppController {
       ? null
       : await db.user.findUnique({ where: { id: t.principalId } });
     const batchToken = t.batchId && agent && t.tokenId ? await db.agentToken.findFirst({ where: { id: t.tokenId, agentId: agent.id, revoked: false, expiresAt: { gt: new Date() } } }) : null;
-    const batchScopes: string[] = batchToken ? JSON.parse(batchToken.scopes) : [];
+    const batchScopes: string[] = batchToken && agent ? effectiveAgentScopes(agent.level, JSON.parse(batchToken.scopes), agent.owner.role) : [];
     return {
       cancelled:
         t.status === "cancelled" ||
@@ -2070,6 +2056,7 @@ export class AppController {
         !!(t.batchId && (await db.batchDispatch.findUnique({ where: { id: t.batchId }, select: { status: true } }))?.status === "aborted") ||
         !!agent?.revoked ||
         !!agent?.owner.disabled ||
+        !!(agent?.level === "administrator" && !["owner", "administrator"].includes(agent.owner.role)) ||
         !!(t.batchId && agent && !batchTokenAllowed(t.tokenId, batchToken ? { id: batchToken.id, scopes: batchScopes } : null)) ||
         !!user?.disabled ||
         t.expiresAt < new Date(),
@@ -2087,12 +2074,16 @@ export class AppController {
         status: z.enum(["completed", "failed", "cancelled"]),
         exitCode: z.number().int().nullable().optional(),
         durationMs: z.number().int().optional(),
+        connectedHost: z.string().min(1).max(253).optional(),
+        connectedPort: z.number().int().min(1).max(65535).optional(),
       })
       .parse(body);
     const t = await db.backgroundTask.findUniqueOrThrow({ where: { id } });
     if (!t.leaseHash || !equal(t.leaseHash, hash(a.lease)))
       throw new ForbiddenException();
     const status = await finishTask(id, t.leaseHash, a);
+    if (status === "completed" && a.connectedHost && a.connectedPort)
+      await markSshReachable(t.organizationId, t.serverId, { host: a.connectedHost, port: a.connectedPort }).catch(() => {});
     await audit(
       {
         id: t.principalId,

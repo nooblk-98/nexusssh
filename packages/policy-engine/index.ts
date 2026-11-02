@@ -1,3 +1,7 @@
+import {
+  kubernetesOperations,
+  kubernetesWriteOperations,
+} from "../kubernetes/policy.js";
 export type Principal = {
   id: string;
   organizationId: string;
@@ -41,8 +45,39 @@ export const allOperations = [
   ...writeOperations,
   "terminal",
 ];
+export const WORKSPACE_ADMIN = "workspace_admin";
+export const agentSshOperations = allOperations.filter(
+  (op) => op !== "terminal",
+);
+export const administratorAgentScopes = [
+  ...agentSshOperations,
+  ...kubernetesOperations,
+  "workspace_manage",
+  WORKSPACE_ADMIN,
+];
+export function administratorToken(level: string, scopes: string[]) {
+  return level === "administrator" && scopes.includes(WORKSPACE_ADMIN);
+}
+export function isAgentAdministrator(p: Principal) {
+  return p.kind === "agent" && administratorToken(p.role, p.scopes);
+}
+export function effectiveAgentScopes(
+  level: string,
+  scopes: string[],
+  ownerRole?: string,
+) {
+  if (
+    administratorToken(level, scopes) &&
+    ownerRole !== undefined &&
+    !["owner", "administrator"].includes(ownerRole)
+  )
+    return [];
+  return administratorToken(level, scopes)
+    ? [...administratorAgentScopes]
+    : scopes.filter((scope) => scope !== WORKSPACE_ADMIN);
+}
 export function needsApproval(op: string) {
-  return writeOperations.includes(op);
+  return writeOperations.includes(op) || kubernetesWriteOperations.includes(op);
 }
 export function permitted(
   p: Principal,
@@ -52,6 +87,8 @@ export function permitted(
 ) {
   if (p.organizationId !== org) return false;
   if (p.kind === "user" && ["owner", "administrator"].includes(p.role))
+    return true;
+  if (isAgentAdministrator(p) && administratorAgentScopes.includes(operation))
     return true;
   if (!grants.includes(operation)) return false;
   if (p.kind === "agent" && !p.scopes.includes(operation)) return false;

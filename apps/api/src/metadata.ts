@@ -2,6 +2,7 @@ import { BadRequestException } from "@nestjs/common";
 import { z } from "zod";
 import { db } from "../../../packages/database/index.js";
 import type { Prisma } from "@prisma/client";
+import { sshHealthState, SSH_HEALTH_STALE_MS } from "../../../packages/shared/ssh-health.js";
 
 export const settingsSchema = z.object({
   identityId: z.uuid().optional(),
@@ -25,10 +26,10 @@ export function mergeSettings(raw: string, change: Settings, inherit: (typeof se
   if (defaults && next.vpnProfileId === null) delete next.vpnProfileId;
   return JSON.stringify(settingsSchema.parse(next));
 }
-export async function validateSettings(org: string, settings: Settings) {
-  if (settings.identityId && !(await db.sSHIdentity.findFirst({ where: { id: settings.identityId, organizationId: org } })))
+export async function validateSettings(org: string, settings: Settings, client: Prisma.TransactionClient = db) {
+  if (settings.identityId && !(await client.sSHIdentity.findFirst({ where: { id: settings.identityId, organizationId: org } })))
     throw new BadRequestException("Identity unavailable");
-  if (settings.vpnProfileId && !(await db.vpnProfile.findFirst({ where: { id: settings.vpnProfileId, organizationId: org } })))
+  if (settings.vpnProfileId && !(await client.vpnProfile.findFirst({ where: { id: settings.vpnProfileId, organizationId: org } })))
     throw new BadRequestException("VPN profile unavailable");
 }
 export async function resolveSettings(serverId: string, org: string, proposed?: {
@@ -75,7 +76,7 @@ export async function resolveSettings(serverId: string, org: string, proposed?: 
   }
   if (conflicts.length) throw new BadRequestException({ message: "Conflicting tag defaults", serverIds: [serverId], fields: conflicts });
   if (!values.identityId || !values.username) throw new BadRequestException({ message: "Effective identity and username are required", serverIds: [serverId] });
-  await validateSettings(org, { identityId: values.identityId, vpnProfileId: values.vpnProfileId });
+  await validateSettings(org, { identityId: values.identityId, vpnProfileId: values.vpnProfileId }, client);
   return { values: values as { identityId: string; username: string; environment: string; vpnProfileId: string | null }, sources };
 }
 
@@ -114,6 +115,6 @@ export function numericMetadata<T extends { ramBytes: { toString(): string } | n
     if (!Number.isSafeInteger(parsed) || parsed < 0) throw new BadRequestException("Stored byte count exceeds the supported range");
     return parsed;
   };
-  const healthStale = !row.lastCheckedAt || Date.now() - row.lastCheckedAt.getTime() > 30 * 60_000;
-  return { ...row, ramBytes: number(row.ramBytes), diskBytes: number(row.diskBytes), status: healthStale ? "unknown" : row.status, healthFailureCategory: healthStale ? null : row.healthFailureCategory, healthStale };
+  const healthStale = !row.lastCheckedAt || Date.now() - row.lastCheckedAt.getTime() > SSH_HEALTH_STALE_MS;
+  return { ...row, ramBytes: number(row.ramBytes), diskBytes: number(row.diskBytes), status: sshHealthState(row), healthFailureCategory: healthStale ? null : row.healthFailureCategory, healthStale };
 }

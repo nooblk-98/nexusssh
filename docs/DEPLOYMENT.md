@@ -1,5 +1,7 @@
 # Deployment and operations
 
+See [operations and workflow configuration](OPERATIONS.md) for readiness probes, verified deployment gating, scheduled encrypted backups, file history and generic OIDC sign-in.
+
 ## Linux VPS, Lightsail and EC2
 
 Use a Linux host with Docker Engine and Compose 2.24.4+. Ubuntu/Debian are straightforward defaults. Ordinary target SSH connections do not need AWS API credentials. Provision the host, domain, reverse proxy and security-group/firewall rules yourself: allow HTTPS to your reverse proxy, and your administrative maintenance channel. Allow SSH egress only to approved target networks.
@@ -14,15 +16,16 @@ Containers run as the Node user where practical. Redis has no published port. Ne
 
 ## Automatic deployment from GitHub
 
-The `Deploy` workflow sends a POST to the URL in the `DEPLOY_WEBHOOK_URL`
-repository secret on every push to `development`. Configure the secret under
-Settings > Secrets and variables > Actions. The webhook URL stays out of the
-repository and workflow logs.
+The `Verification` workflow calls the reusable `Deploy` workflow only after
+checks pass for a push to `development`. Deployments run serially and skip
+superseded commits. Configure `DEPLOY_WEBHOOK_URL` under Settings > Secrets
+and variables > Actions; the URL stays out of the repository and workflow logs.
 
-Deployment runs independently of the `Verification` workflow. A successful
-run means the webhook accepted the request; check the stack in Portainer for
-deployment completion. Missing secrets, connection errors, timeouts, and
-non-2xx responses fail the workflow.
+The POST includes the verified branch and commit SHA. Configure the receiving
+deployment service to honor that SHA rather than independently pulling a moving
+branch. A successful workflow means the webhook accepted the request; check the
+deployment service for completion. Missing secrets, connection errors, timeouts,
+and non-2xx responses fail the workflow. See [operations](OPERATIONS.md) for details.
 
 ## Backup
 
@@ -101,4 +104,21 @@ Back up and verify restore before upgrading. Review migrations and dependency ch
 
 `SSH_CONNECT_TIMEOUT`, `SSH_IDLE_TIMEOUT`, `SSH_MAX_SESSIONS`, and `SSH_OUTPUT_LIMIT` bound resources. `SSH_WORKER_CONCURRENCY` (default 4) sets how many interactive SSH operations run at once, and `SSH_HEALTH_CONCURRENCY` (default 4) how many reachability checks run at once. `AUDIT_RETENTION_DAYS` controls audit cleanup. Terminal transcripts are not recorded.
 
+Server status is evidence of reachability through its saved route. Green means
+a recent successful check or authenticated connection; an active SSH terminal
+also shows green. Red means a network/handshake check failed twice. Gray means
+the result is stale or a VPN, DNS, policy, permission or configuration problem
+prevented the check; hover the dot for its reason and timestamp. Successful
+terminal, SFTP and completed MCP operations refresh this evidence without
+changing host-key trust. Older queued probes cannot overwrite newer successful
+connections. Unsuccessful checks become eligible for another scan after one
+minute; successful evidence expires after 30 minutes. The scheduler runs every
+minute and the server list refreshes every 30 seconds while the app is visible.
+
 Job output is transient. Restarting Redis loses queued work/results; task metadata may remain queued or running until reconciled. Inspect and explicitly reissue safe operations rather than automatically replaying side effects.
+
+Direct Kubernetes API connections use a separate `KUBERNETES_ALLOWED_CIDRS`
+allowlist, defaulting to RFC 1918 private networks. Configure approved cluster
+endpoint ranges and recreate the application container when changing it. See
+[Kubernetes cluster connections](KUBERNETES.md) for kubeconfig, TLS, and RBAC
+requirements. The SSH VPN/bastion selections do not route these direct API reads.

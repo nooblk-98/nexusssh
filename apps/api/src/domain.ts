@@ -1,3 +1,7 @@
+import { authorize, serverVisibility } from "./server-access.js";
+export { authorize, serverVisibility } from "./server-access.js";
+import { kubernetesOperation, kubernetesApprovalStatus } from "./kubernetes-operations.js";
+import { kubernetesOperations } from "../../../packages/kubernetes/policy.js";
 import {
   ForbiddenException,
   NotFoundException,
@@ -5,6 +9,7 @@ import {
 } from "@nestjs/common";
 import { Queue, QueueEvents } from "bullmq";
 import { randomUUID } from "node:crypto";
+import { correlationId as currentRequestId } from "../../../packages/shared/request-context.js";
 import type { Prisma } from "@prisma/client";
 import { reserveAgentCall, reserveAgentCalls } from "./agent-quota.js";
 import { resolveSettings, numericMetadata } from "./metadata.js";
@@ -24,7 +29,7 @@ import {
   batchTokenAllowed,
 } from "../../../packages/shared/operations.js";
 import {
-  permitted,
+  effectiveAgentScopes,
   needsApproval,
   type Principal,
 } from "../../../packages/policy-engine/index.js";
@@ -54,7 +59,7 @@ export async function audit(
   action: string,
   status: string,
   serverId?: string,
-  correlationId: string = randomUUID(),
+  correlationId: string = currentRequestId(),
 ) {
   await db.auditEvent.create({
     data: {
@@ -64,72 +69,9 @@ export async function audit(
       status,
       serverId,
       correlationId,
+      requestId: currentRequestId(),
     },
   });
-}
-export async function authorize(p: Principal, id: string, op: string) {
-  const server = await db.server.findFirst({
-    where: { id, organizationId: p.organizationId, archived: false },
-  });
-  if (!server) throw new NotFoundException("Server unavailable");
-  if (p.kind === "agent" && !(p.managementOperation && op === "server_get_info")) {
-    const grant = await db.agentPermission.findUnique({ where: { agentId_serverId: { agentId: p.id, serverId: id } } });
-    if (!grant || !JSON.parse(grant.operations).includes(op))
-      throw new ForbiddenException({ code: "server_not_granted", message: "This server operation is not granted to the agent" });
-    if (!p.scopes.includes(op))
-      throw new ForbiddenException({ code: "operation_not_in_token_scope", message: "This operation is not in the agent token scope" });
-    if (!permitted(p, server.organizationId, op, JSON.parse(grant.operations)))
-      throw new ForbiddenException({ code: "agent_policy_denied", message: "The agent level does not permit this operation" });
-    return server;
-  }
-  if (
-    !(p.managementOperation && op === "server_get_info") &&
-    !permitted(p, server.organizationId, op, await grants(p, id))
-  )
-    throw new ForbiddenException("Operation is not permitted for this server");
-  return server;
-}
-// A person's operations on a server: their own grant plus every grant given
-// to a team they belong to. Agents only have their own grant.
-async function grants(p: Principal, serverId: string): Promise<string[]> {
-  if (p.kind === "agent") {
-    const grant = await db.agentPermission.findUnique({
-      where: { agentId_serverId: { agentId: p.id, serverId } },
-    });
-    return grant ? JSON.parse(grant.operations) : [];
-  }
-  const [own, teams] = await Promise.all([
-    db.serverPermission.findUnique({
-      where: { serverId_userId: { serverId, userId: p.id } },
-    }),
-    db.teamPermission.findMany({
-      where: { serverId, team: { members: { some: { userId: p.id } } } },
-    }),
-  ]);
-  return [
-    ...new Set(
-      [own, ...teams].flatMap((g) => (g ? JSON.parse(g.operations) : [])),
-    ),
-  ];
-}
-export function serverVisibility(p: Principal) {
-  return {
-      organizationId: p.organizationId,
-      ...(p.kind === "agent" && !p.managementOperation
-        ? { archived: false, agentPermissions: { some: { agentId: p.id } } }
-        : ["owner", "administrator"].includes(p.role)
-          ? {}
-          : {
-              OR: [
-                { permissions: { some: { userId: p.id } } },
-                {
-                  teamPermissions: {
-                    some: { team: { members: { some: { userId: p.id } } } },
-                  },
-                },
-              ],
-            }),
-    };
 }
 export async function listServers(p: Principal) {
   const servers = await db.server.findMany({
@@ -264,6 +206,7 @@ async function pinNewHostKey(
         status: "success",
         serverId: s.id,
         correlationId: randomUUID(),
+        requestId: currentRequestId(),
       },
     });
   const row = await db.server.findUniqueOrThrow({
@@ -363,6 +306,7 @@ export async function operation(
   input: unknown,
   signal?: AbortSignal,
 ): Promise<any> {
+  if (kubernetesOperations.includes(op)) return kubernetesOperation(p, op, input, signal);
   if (op === "ssh_execute_many") return executeMany(p, input, signal);
   return singleOperation(p, op, input, signal);
 }
@@ -382,12 +326,12 @@ async function executeMany(p: Principal, input: unknown, signal?: AbortSignal) {
     if (approval.principalId !== p.id) {
       if (p.kind !== "user" || !["owner", "administrator"].includes(p.role))
         throw new ForbiddenException("Only an administrator may execute another principal's approved batch");
-      const agent = await db.agent.findFirst({ where: { id: approval.principalId, organizationId: p.organizationId, revoked: false, owner: { disabled: false } }, include: { tokens: { where: { id: approval.tokenId ?? "", revoked: false, expiresAt: { gt: new Date() } } } } });
+      const agent = await db.agent.findFirst({ where: { id: approval.principalId, organizationId: p.organizationId, revoked: false, owner: { disabled: false } }, include: { owner: true, tokens: { where: { id: approval.tokenId ?? "", revoked: false, expiresAt: { gt: new Date() } } } } });
       if (agent) {
         const token = agent.tokens[0];
-        const scopes: string[] = token ? JSON.parse(token.scopes) : [];
+        const scopes: string[] = token ? effectiveAgentScopes(agent.level, JSON.parse(token.scopes), agent.owner.role) : [];
         if (!batchTokenAllowed(approval.tokenId, token ? { id: token.id, scopes } : null)) throw new ForbiddenException("The originally approved agent token is no longer active for batch execution");
-        subject = { id: agent.id, organizationId: p.organizationId, kind: "agent", role: agent.level, scopes: JSON.parse(token.scopes), tokenId: token.id, ownerId: agent.ownerId };
+        subject = { id: agent.id, organizationId: p.organizationId, kind: "agent", role: agent.level, scopes, tokenId: token.id, ownerId: agent.ownerId };
       } else {
         if (approval.tokenId) throw new ForbiddenException("The originally approved agent is unavailable");
         const user = await db.user.findFirst({ where: { id: approval.principalId, organizationId: p.organizationId, disabled: false } });
@@ -432,7 +376,7 @@ async function executeMany(p: Principal, input: unknown, signal?: AbortSignal) {
       await tx.commandExecution.create({ data: { id: task.id, organizationId: subject.organizationId, principalId: subject.id, serverId, operation: "ssh_execute", argumentDigest: hash(canonical(args)), status: "queued" } });
       taskIds.push(task.id);
     }
-    await tx.auditEvent.create({ data: { organizationId: subject.organizationId, principalId: subject.id, action: "ssh_execute_many", status: "queued", serverId: ids[0], correlationId: batch.id } });
+    await tx.auditEvent.create({ data: { organizationId: subject.organizationId, principalId: subject.id, action: "ssh_execute_many", status: "queued", serverId: ids[0], correlationId: batch.id, requestId: currentRequestId() } });
     return { batchId: batch.id, taskIds };
   };
   const batch = subject.kind === "agent"
@@ -449,7 +393,7 @@ async function executeMany(p: Principal, input: unknown, signal?: AbortSignal) {
   });
   let job;
   try {
-    job = await batchQueue.add("batch", { batchId: batch.batchId, taskIds: batch.taskIds, serverIds: ids }, { jobId: batch.batchId });
+    job = await batchQueue.add("batch", { batchId: batch.batchId, taskIds: batch.taskIds, serverIds: ids, requestId: currentRequestId() }, { jobId: batch.batchId });
     const released = await db.batchDispatch.updateMany({ where: { id: batch.batchId, status: "pending" }, data: { status: "released" } });
     if (!released.count) throw new Error("Batch could not be released");
   } catch {
@@ -491,7 +435,7 @@ async function singleOperation(
       },
       select: { id: true, status: true, expiresAt: true, consumedAt: true },
     });
-    if (!row) throw new NotFoundException();
+    if (!row) return kubernetesApprovalStatus(p, a.approvalId);
     return row;
   }
   if (op === "task_status" || op === "task_cancel") {
@@ -542,6 +486,7 @@ async function singleOperation(
         status: "requested",
         serverId: server.id,
         correlationId: randomUUID(),
+        requestId: currentRequestId(),
       },
     }));
   }
@@ -649,7 +594,7 @@ async function singleOperation(
   await audit(p, op, "queued", server.id, task.id);
   const job = await queue.add(
     "operation",
-    { taskId: task.id },
+    { taskId: task.id, requestId: currentRequestId() },
     { jobId: task.id },
   );
   if (a.async) return { taskId: task.id, status: "queued" };
@@ -717,7 +662,7 @@ export async function claimTask(id: string) {
     kind: agent ? "agent" : "user",
     role: agent?.level || user!.role,
     scopes: agent
-      ? Array.from(new Set(agent.tokens.flatMap((v) => JSON.parse(v.scopes))))
+      ? Array.from(new Set(agent.tokens.flatMap((v) => effectiveAgentScopes(agent.level, JSON.parse(v.scopes), agent.owner.role))))
       : [],
   };
   if (t.batchId && agent && !batchTokenAllowed(t.tokenId, agent.tokens[0] ? { id: agent.tokens[0].id, scopes: p.scopes } : null))

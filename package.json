@@ -1,7 +1,7 @@
 {
   "name": "nexusssh",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "license": "UNLICENSED",
   "type": "module",
   "workspaces": [
@@ -10,6 +10,8 @@
     "workers/*"
   ],
   "scripts": {
+    "bootstrap": "node infrastructure/scripts/bootstrap.mjs",
+    "doctor": "npm run db:generate && npm run typecheck",
     "dev": "concurrently -k \"npm:dev:api\" \"npm:dev:web\" \"npm:dev:mcp\" \"npm:dev:worker\" \"npm:dev:vpn\"",
     "dev:vpn": "docker compose -f docker-compose.vpn-dev.yml up --build --abort-on-container-exit",
     "dev:api": "tsx watch apps/api/src/main.ts",
@@ -27,8 +29,8 @@
     "assets": "node infrastructure/scripts/web-assets.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "2.3.1",
     "@modelcontextprotocol/node": "2.1.1",
+    "@modelcontextprotocol/server": "2.3.1",
     "@nestjs/common": "^11.1.0",
     "@nestjs/core": "^11.1.0",
     "@nestjs/platform-express": "^11.1.0",
@@ -43,10 +45,12 @@
     "helmet": "^8.1.0",
     "ipaddr.js": "^2.2.0",
     "jose": "^6.1.0",
+    "openid-client": "^6.8.8",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "ssh2": "^1.17.0",
     "ws": "^8.18.3",
+    "yaml": "^2.9.1",
     "zod": "^4.1.0"
   },
   "devDependencies": {
@@ -60,14 +64,16 @@
     "@types/ws": "^8.18.1",
     "concurrently": "^9.2.1",
     "eslint": "^9.36.0",
+    "prettier": "^3.6.2",
     "prisma": "6.19.0",
     "tsx": "^4.20.0",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.44.0",
-    "vitest": "^5.0.5",
-    "prettier": "^3.6.2"
+    "vitest": "^5.0.5"
   },
   "overrides": {
+    "body-parser": "^2.4.0",
+    "multer": "^2.5.0",
     "effect": "^3.20.0",
     "deepmerge-ts": "^8.0.0",
     "js-yaml": "^5.4.1"

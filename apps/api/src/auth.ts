@@ -1,6 +1,6 @@
 import { UnauthorizedException, ForbiddenException } from "@nestjs/common";
 import { reserveAgentCall } from "./agent-quota.js";
-import { randomUUID } from "node:crypto";
+import { correlationId } from "../../../packages/shared/request-context.js";
 import {
   managementRoute,
   WORKSPACE_MANAGE,
@@ -13,7 +13,11 @@ import {
   mcpAudience,
   sameOrigin,
 } from "../../../packages/shared/config.js";
-import type { Principal } from "../../../packages/policy-engine/index.js";
+import {
+  administratorToken,
+  effectiveAgentScopes,
+  type Principal,
+} from "../../../packages/policy-engine/index.js";
 export async function authenticate(req: Request): Promise<Principal> {
   const auth = req.headers.authorization;
   if (auth?.startsWith("Bearer ")) {
@@ -33,7 +37,17 @@ export async function authenticate(req: Request): Promise<Principal> {
       throw new UnauthorizedException(
         "Invalid, expired, or revoked agent credential",
       );
-    const scopes: string[] = JSON.parse(token.scopes);
+    const scopes = effectiveAgentScopes(
+      token.agent.level,
+      JSON.parse(token.scopes),
+    );
+    if (
+      administratorToken(token.agent.level, scopes) &&
+      !["owner", "administrator"].includes(token.agent.owner.role)
+    )
+      throw new ForbiddenException(
+        "Administrator agents require an administrator owner",
+      );
     const managementOperation = managementRoute(
       req.method,
       req.originalUrl.split("?")[0],
@@ -41,11 +55,10 @@ export async function authenticate(req: Request): Promise<Principal> {
     if (managementOperation) {
       if (
         !scopes.includes(WORKSPACE_MANAGE) ||
-        token.agent.level !== "administrator" ||
         !["owner", "administrator"].includes(token.agent.owner.role)
       )
         throw new ForbiddenException(
-          "Enable Workspace management for an administrator agent to use this tool",
+          "Enable Workspace management for this agent to use this tool",
         );
       const entry = await reserveAgentCall(token.agentId, (tx) =>
         tx.auditEvent.create({
@@ -54,7 +67,8 @@ export async function authenticate(req: Request): Promise<Principal> {
             principalId: token.agentId,
             action: "mcp:" + managementOperation,
             status: "requested",
-            correlationId: randomUUID(),
+            correlationId: correlationId(),
+            requestId: correlationId(),
           },
         }),
       );
@@ -71,7 +85,7 @@ export async function authenticate(req: Request): Promise<Principal> {
         data: { lastActivityAt: new Date() },
       });
     }
-    return {
+    const principal: Principal = {
       id: token.agentId,
       organizationId: token.agent.organizationId,
       kind: "agent",
@@ -81,6 +95,8 @@ export async function authenticate(req: Request): Promise<Principal> {
       ownerId: token.agent.ownerId,
       managementOperation,
     };
+    (req as Request & { nexusPrincipal: Principal }).nexusPrincipal = principal;
+    return principal;
   }
   const raw = req.cookies?.nexus_session;
   if (!raw) throw new UnauthorizedException();
@@ -90,13 +106,17 @@ export async function authenticate(req: Request): Promise<Principal> {
   });
   if (!session || session.expiresAt < new Date() || session.user.disabled)
     throw new UnauthorizedException();
-  return {
+  if (session.oidcIdentityId && !await db.oidcIdentity.findFirst({ where: { id: session.oidcIdentityId, userId: session.userId } }))
+    throw new UnauthorizedException("Single sign-on identity is no longer authorized");
+  const principal: Principal = {
     id: session.userId,
     organizationId: session.user.organizationId,
     kind: "user",
     role: session.user.role,
     scopes: [],
   };
+  (req as Request & { nexusPrincipal: Principal }).nexusPrincipal = principal;
+  return principal;
 }
 export function human(p: Principal) {
   if (p.kind !== "user") throw new ForbiddenException("Human account required");

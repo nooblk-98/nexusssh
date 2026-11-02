@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { z } from "zod";
 import ipaddr from "ipaddr.js";
 const key = z
@@ -46,6 +47,47 @@ export const wireguardSchema = z
   })
   .strict();
 export type WireGuardConfig = z.infer<typeof wireguardSchema>;
+export function wireguardError(error: unknown): string {
+  if (!(error instanceof z.ZodError))
+    return error instanceof Error
+      ? error.message
+      : "Invalid WireGuard configuration";
+  const fields: Record<string, string> = {
+    privateKey: "PrivateKey: use a 32-byte base64 key",
+    addresses: "Address: use valid IPv4/IPv6 addresses or CIDRs",
+    dns: "DNS: use IP addresses without search suffixes",
+    mtu: "MTU: use a whole number from 1280 to 1500",
+    listenPort: "ListenPort: use a whole number from 0 to 65535",
+    publicKey: "PublicKey: use a 32-byte base64 key",
+    presharedKey: "PresharedKey: use a 32-byte base64 key",
+    endpoint: "Endpoint: use hostname:port or [IPv6]:port",
+    allowedIPs: "AllowedIPs: use valid IP addresses or CIDRs",
+    persistentKeepalive:
+      "PersistentKeepalive: use a whole number from 0 to 65535",
+  };
+  return [
+    ...new Set(
+      error.issues.map((issue) => {
+        const field = issue.path.at(-1);
+        const known = issue.path.find(
+          (part) => typeof part === "string" && part in fields,
+        );
+        const peer =
+          issue.path[0] === "peers" && typeof issue.path[1] === "number"
+            ? `Peer ${issue.path[1] + 1}: `
+            : "";
+        return (
+          peer +
+          (known
+            ? fields[String(known)]
+            : field === "peers"
+              ? "Include at least one valid [Peer] section"
+              : "Check the Interface and Peer sections")
+        );
+      }),
+    ),
+  ].join("; ");
+}
 export function parseWireGuard(text: string): WireGuardConfig {
   if (text.length > 65536)
     throw new Error("WireGuard configuration is too large");
@@ -87,6 +129,12 @@ export function parseWireGuard(text: string): WireGuardConfig {
     section[name] = value.trim();
   }
   const list = (v?: string) => (v ? v.split(",").map((x) => x.trim()) : []);
+  // WireGuard clients accept bare IPs as host prefixes; the gateway needs CIDRs.
+  const cidrList = (v?: string) =>
+    list(v).map((address) => {
+      const family = isIP(address);
+      return family ? `${address}/${family === 4 ? 32 : 128}` : address;
+    });
   if (
     iface?.ListenPort !== undefined &&
     (!/^\d+$/.test(iface.ListenPort) || Number(iface.ListenPort) > 65535)
@@ -94,7 +142,7 @@ export function parseWireGuard(text: string): WireGuardConfig {
     throw new Error("ListenPort must be a whole number from 0 to 65535.");
   return wireguardSchema.parse({
     privateKey: iface?.PrivateKey,
-    addresses: list(iface?.Address),
+    addresses: cidrList(iface?.Address),
     dns: list(iface?.DNS),
     mtu: iface?.MTU ? Number(iface.MTU) : undefined,
     listenPort:
@@ -103,7 +151,7 @@ export function parseWireGuard(text: string): WireGuardConfig {
       publicKey: p.PublicKey,
       presharedKey: p.PresharedKey,
       endpoint: p.Endpoint,
-      allowedIPs: list(p.AllowedIPs),
+      allowedIPs: cidrList(p.AllowedIPs),
       persistentKeepalive: p.PersistentKeepalive
         ? Number(p.PersistentKeepalive)
         : undefined,

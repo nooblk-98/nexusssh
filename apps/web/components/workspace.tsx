@@ -1,6 +1,7 @@
 "use client";
 import dynamic from "next/dynamic";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { WorkspacePresets } from "./workspace-presets";
 import {
   ChevronRight,
   Columns2,
@@ -16,12 +17,21 @@ import {
 import { useServers } from "../lib/servers";
 import { useWorkspace, type Tab } from "../lib/store";
 import { Home } from "./home";
+import { KubernetesIcon } from "./kubernetes-icon";
 import { openMenu, openMenuAt } from "./ui";
 
 const TerminalView = dynamic(() => import("./terminal"), { ssr: false });
 const SftpView = dynamic(() => import("./sftp"), { ssr: false });
 const EditorView = dynamic(() => import("./editor"), { ssr: false });
-const kindIcon = { terminal: SquareTerminal, sftp: Folder, editor: FileText };
+const KubernetesConsole = dynamic(() => import("./kubernetes-console"), {
+  ssr: false,
+});
+const kindIcon = {
+  terminal: SquareTerminal,
+  sftp: Folder,
+  editor: FileText,
+  kubernetes: KubernetesIcon,
+};
 const layouts = [
   { n: 1, label: "Single view", icon: Square },
   { n: 2, label: "Two columns", icon: Columns2 },
@@ -29,6 +39,7 @@ const layouts = [
   { n: 4, label: "Grid (2 × 2)", icon: Grid2x2 },
 ];
 export function Workspace() {
+  const [presets, setPresets] = useState(false);
   const {
     tabs,
     active,
@@ -49,6 +60,20 @@ export function Workspace() {
   const tabMenu = (t: Tab) => {
     const server = servers.find((s) => s.id === t.serverId);
     return [
+      ...(t.kind === "kubernetes"
+        ? [
+            {
+              label: "Duplicate console",
+              onClick: () =>
+                open({
+                  kind: t.kind,
+                  serverId: t.serverId,
+                  title: t.title,
+                  status: "connecting" as const,
+                }),
+            },
+          ]
+        : []),
       ...(server && t.kind !== "editor"
         ? [
             {
@@ -166,6 +191,14 @@ export function Workspace() {
         </div>
         <button
           className="tabbar-end"
+          aria-label="Workspace presets"
+          title="Workspace presets"
+          onClick={() => setPresets(true)}
+        >
+          <Folder size={16} />
+        </button>
+        <button
+          className="tabbar-end"
           aria-label="Layout"
           title="Layout"
           onClick={(e) =>
@@ -211,7 +244,9 @@ export function Workspace() {
               }
               onMouseDown={() => split && activate(t.id)}
             >
-              {!server ? (
+              {t.kind === "kubernetes" ? (
+                <KubernetesConsole tab={t} visible={visible} />
+              ) : !server ? (
                 <div className="empty-state">
                   <h3>Server unavailable</h3>
                   <p>
@@ -229,6 +264,7 @@ export function Workspace() {
           );
         })}
       </div>
+      {presets && <WorkspacePresets onClose={() => setPresets(false)} />}
     </main>
   );
 }

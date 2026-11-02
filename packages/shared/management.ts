@@ -1,5 +1,6 @@
+import { kubernetesOperations } from "../kubernetes/policy.js";
 import { z } from "zod";
-import { allOperations } from "../policy-engine/index.js";
+import { allOperations, agentSshOperations } from "../policy-engine/index.js";
 
 export const WORKSPACE_MANAGE = "workspace_manage";
 const id = z.uuid();
@@ -60,12 +61,15 @@ const vpn = {
 };
 export const agentAccessSchema = z
   .object({
-    level: z.enum(["viewer", "operator", "administrator", "custom"]),
-    serverIds: z.array(id).max(100),
-    operations,
+    level: z.enum(["administrator", "custom"]),
+    serverIds: z.array(id).max(100).default([]),
+    operations: operations.default([]),
+    clusterIds: z.array(id).max(50).optional(),
+    clusterOperations: z.array(z.enum(kubernetesOperations as [string, ...string[]])).max(20).optional(),
     workspaceManagement: z.boolean().default(false),
   })
   .strict();
+export const administratorAgentAccess = { serverIds: [] as string[], operations: agentSshOperations, clusterIds: [] as string[], clusterOperations: kubernetesOperations, workspaceManagement: true };
 const limits = {
   maxCallsPerMinute: z.number().int().min(1).max(10000).nullable().optional(),
   maxCallsPerDay: z.number().int().min(1).max(1000000).nullable().optional(),
@@ -202,7 +206,7 @@ export const managementTools: Record<string, Tool> = {
     "identities",
   ),
   identity_create: tool(
-    "Add an encrypted SSH password or private-key identity. For kind key supply privateKey and optional passphrase; for password supply password.",
+    "Add an encrypted SSH password or private-key identity. For kind key supply privateKey and optional passphrase; for password supply password. Returns identity metadata only; stored credentials cannot be retrieved or exported through MCP.",
     "POST",
     "identities",
     z.object(credential).strict(),
@@ -218,6 +222,20 @@ export const managementTools: Record<string, Tool> = {
     "DELETE",
     "identities/:id",
     resource,
+  ),
+  kubernetes_cluster_create: tool(
+    "Add a saved Kubernetes cluster from YAML/JSON kubeconfig text and an optional context and folder groupId in this workspace. Embedded tokens or client certificates are encrypted. Returns profile metadata only; never returns the kubeconfig, token, certificates, private keys or encrypted credentials. Custom agents need separate cluster/tool grants; Administrator agents automatically have workspace-wide access. Never returns saved connection credentials.",
+    "POST",
+    "kubernetes/clusters",
+    z.object({
+      name,
+      description: z.string().max(2000).optional(),
+      kubeconfig: z.string().min(1).max(256 * 1024),
+      groupId: id.nullable().optional(),
+      vpnProfileId: id.nullable().optional(),
+      bastionId: id.nullable().optional(),
+      context: z.string().min(1).max(256).optional(),
+    }).strict(),
   ),
   vpn_profiles_list: tool(
     "List WireGuard VPN profile summaries and server usage without key material.",
@@ -268,7 +286,7 @@ export const managementTools: Record<string, Tool> = {
       .strict(),
   ),
   folder_delete: tool(
-    "Delete a folder, moving its direct servers and subfolders to top level. No servers are deleted.",
+    "Delete a folder, moving its direct servers, Kubernetes clusters and subfolders to top level. No connections are deleted.",
     "DELETE",
     "groups/:id",
     resource,
@@ -360,7 +378,7 @@ export const managementTools: Record<string, Tool> = {
     "agents",
   ),
   agent_create: tool(
-    "Register an agent and return its bearer token once. Store that token securely. Workspace management requires administrator level.",
+    "Register an agent and return its bearer token once. Store that token securely. Choose administrator for all current/future servers, clusters and tools, or custom for selected grants and optional workspace management. Promoting agents or assigning cluster grants requires a human administrator or a full Administrator agent.",
     "POST",
     "agents",
     agentAccessSchema.extend({
@@ -370,7 +388,7 @@ export const managementTools: Record<string, Tool> = {
     }),
   ),
   agent_update_access: tool(
-    "Replace an agent's level, SSH server/tool grants and workspace-management access. Updates existing tokens immediately without extending expiry.",
+    "Replace an agent's level, SSH server/tool grants and workspace-management access. Updates existing tokens immediately without extending expiry. Administrator automatically enables every tool and resource; supplied custom selections are ignored. For Custom, omit clusterIds and clusterOperations to preserve existing per-token cluster scopes. Cluster grants require a human administrator or full Administrator agent.",
     "PATCH",
     "agents/:id/access",
     agentAccessSchema.extend({ id }),

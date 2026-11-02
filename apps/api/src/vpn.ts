@@ -20,6 +20,7 @@ import { seal } from "../../../packages/shared/crypto.js";
 import {
   parseWireGuard,
   wireguardSummary,
+  wireguardError,
 } from "../../../packages/shared/wireguard.js";
 import { authenticate, admin, workspace } from "./auth.js";
 import { audit } from "./domain.js";
@@ -36,10 +37,16 @@ const selection = {
   description: true,
   summary: true,
   updatedAt: true,
-  _count: { select: { servers: true } },
+  _count: { select: { servers: true, clusters: true } },
 } as const;
 @Controller("api/vpn-profiles")
 export class VpnController {
+  @Post("validate") async validate(@Req() req: Request, @Body() body: unknown) {
+    const p = await authenticate(req); admin(p);
+    const { config: source } = z.object({ config: z.string().min(1).max(65536) }).strict().parse(body);
+    try { return { valid: true, summary: wireguardSummary(parseWireGuard(source)) }; }
+    catch (e) { throw new BadRequestException(wireguardError(e)); }
+  }
   @Get() async list(@Req() req: Request) {
     const p = await authenticate(req);
     workspace(p);
@@ -81,9 +88,7 @@ export class VpnController {
         };
       } catch (e) {
         throw new BadRequestException(
-          e instanceof z.ZodError
-            ? "Invalid WireGuard keys, addresses, or peer settings"
-            : (e as Error).message,
+          wireguardError(e),
         );
       }
     }
@@ -131,6 +136,7 @@ export class VpnController {
       throw new NotFoundException("VPN profile unavailable");
     try {
       await db.$transaction(async (tx) => {
+        if (await tx.kubernetesCluster.count({ where: { organizationId: p.organizationId, vpnProfileId: id } })) throw new BadRequestException("Remove this VPN profile from Kubernetes clusters before deleting it");
         if (await settingsReferenceCount(tx, p.organizationId, "vpnProfileId", id))
           throw new BadRequestException("Remove this VPN profile from servers, folder defaults and tag defaults before deleting it");
         await tx.vpnProfile.delete({ where: { id } });

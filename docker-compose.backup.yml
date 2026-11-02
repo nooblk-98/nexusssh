@@ -1,0 +1,10 @@
+# Set BACKUP_HOST_DIRECTORY to an existing, protected off-host-mounted directory.
+# The container's node user (UID 1000) needs write access.
+services:
+  nexusssh:
+    environment:
+      BACKUP_DIRECTORY: /app/backups
+    volumes:
+      - type: bind
+        source: ${BACKUP_HOST_DIRECTORY:?Set BACKUP_HOST_DIRECTORY to a protected backup directory}
+        target: /app/backups

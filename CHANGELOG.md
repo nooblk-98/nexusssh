@@ -1,5 +1,84 @@
 # Changelog
 
+## Unreleased
+
+No unreleased changes.
+
+## [0.3.0](https://github.com/nooblk-98/nexusssh/compare/v0.2.0...v0.3.0) - 2026-11-02
+
+NexusSSH is a centralized, self-hosted web workspace for SSH, SFTP, Kubernetes, and AI access through MCP. Saved infrastructure credentials remain encrypted on your deployment; compatible AI clients use scoped MCP tokens instead of receiving SSH keys, passwords, or kubeconfigs.
+
+### Highlights
+
+- Manage Kubernetes clusters alongside SSH servers in the same nested folder tree.
+- Use browser cluster consoles and scoped MCP tools for resources, logs, approved commands, and pod execution.
+- Protect remote edits with unsaved-work prompts, change previews, conflict checks, and optional encrypted file history.
+- Add account workspace presets, versioned runbooks, generic OIDC sign-in, and scheduled encrypted backups.
+- Diagnose complete connection routes and monitor application readiness with traceable request references.
+
+### Breaking changes and access review
+
+- MCP agent roles are now `administrator` and `custom`. Existing Viewer and Operator agents migrate to Custom while retaining their effective grants, tokens, expiry, and call limits.
+- Administrator agents receive all current and future workspace servers, clusters, tools, and workspace-management access. Review existing Administrator agents before upgrading; use Custom when selected grants are required.
+- Exact human command approvals, live access checks, token revocation, and saved-credential export restrictions continue to apply. Custom agents need explicit Kubernetes/tool grants.
+
+### Added
+
+- Direct Kubernetes HTTPS connections from encrypted kubeconfigs, including embedded bearer tokens or client certificates, context selection, namespace navigation, paginated resource browsing, and bounded pod logs.
+- Kubernetes command consoles in workspace tabs, with command history, cancellation, table/JSON/YAML output, namespace switching, and inline `apply -f -` manifests. Supported MCP commands use the same runner.
+- Scoped Kubernetes MCP tools for cluster discovery, connection checks, resources, logs, approved command execution, and non-interactive pod/container execution. Command results are encrypted and expire.
+- Saved WireGuard and SSH bastion routes for clusters, including combined VPN → bastion → Kubernetes API connections and tunneled pod WebSockets. Destination allowlists, bastion host-key checks, and TLS verification remain enforced.
+- Shared nested folders for SSH servers and clusters, cluster drag-and-drop and Move actions, and metadata-only cluster creation for permitted workspace-management agents.
+- Optional generic OIDC browser sign-in with authorization-code flow, PKCE, nonce/state validation, explicit mappings to existing users, and existing local MFA enforcement. Removed mappings invalidate associated browser sessions.
+- Account workspace presets for tab layouts, target references, SFTP paths, and Kubernetes namespaces. Presets exclude saved credentials, terminal contents, and resume tokens.
+- Encrypted, immutable runbook versions with parameter previews and the existing exact-target, single-use approval workflow for multi-server commands.
+- Editor Save/Discard/Cancel protection, browser reload warnings, change previews, version-checked saves, and optional encrypted previous-file contents for reviewed rollback.
+- Staged connection diagnostics covering configuration, VPN gateway setup, DNS/policy, bastion authentication, and target SSH authentication without running a command.
+- Field-specific WireGuard import validation and a Validate configuration action before saving profiles.
+- `/api/ready` dependency checks for SQLite, Redis, the SSH worker heartbeat, and the userspace VPN gateway, plus an administrator Operations page.
+- Scheduled encrypted backups with consistent SQLite/WAL snapshots, local retention, optional HTTPS upload, temporary restore rehearsal, administrator failure notifications, and an optional event webhook.
+- Request references across API errors, audit records, queued SSH execution, worker callbacks, and structured metadata logs.
+- `npm run bootstrap` and `npm run doctor`, updated operations documentation, a redesigned README, and editable repository banner/social-card assets.
+
+### Changed
+
+- Development deployment now waits for successful verification, runs serially, and skips superseded commits. The webhook receives the verified branch and SHA; configure its receiver to deploy that revision.
+- Compose health checks use dependency readiness while process startup sequencing uses liveness.
+- Compact SSH/Kubernetes rows, Kubernetes branding, and a resizable sidebar improve workspace navigation. Cluster consoles use a compact `kubectl >` prompt; switch namespaces with `kubectl config set-context --current --namespace=NAME` or `-n`.
+
+### Fixed
+
+- Successful SSH terminal, SFTP, and MCP connections refresh host status. Older queued probes cannot overwrite newer connection evidence; route/policy/configuration failures appear as unavailable checks rather than falsely offline hosts.
+- Kubernetes private API hostnames can resolve through a saved bastion when host/VPN DNS cannot supply an allowed address. Routing errors identify DNS, allowlist, gateway, and bastion failures without misreporting namespace permissions.
+- Rancher kubeconfigs with colon-separated bearer tokens import unchanged; invalid context previews report useful reasons without exposing credentials.
+- WireGuard profiles accept bare IPv4/IPv6 addresses in `Address` and `AllowedIPs`, normalizing them to host prefixes while preserving explicit CIDRs.
+- Concurrent editor saves using the same loaded version cannot silently overwrite each other through the editor API. Remote changes prompt a comparison before an acknowledged save.
+
+### Security
+
+- Updated the API dependency path and applied compatible body-parser/Multer fixes, removing the three high-severity advisories reported for v0.2.0.
+- The dependency audit on 2026-11-02 still reports 12 moderate advisories and no high or critical advisories. Review these findings as part of deployment maintenance.
+- SSH credentials, kubeconfigs, runbook definitions, optional file history, and backup archives retain encryption and access boundaries. MCP clients receive permitted tool output, which can itself contain sensitive data.
+
+### Upgrade notes
+
+1. Back up the SQLite data volume and installation-secrets volume together, and retain the previous application image. Preserve the installation encryption key.
+2. Review the Administrator-to-all-resources behavior above and convert agents to Custom where explicit grants are appropriate.
+3. Deploy the v0.3.0 source and rebuild with `docker compose up -d --build`. Startup applies the bundled SQLite migrations. Keep one application replica; rollback may require the matching pre-upgrade database and image.
+4. Configure `KUBERNETES_ALLOWED_CIDRS` for cluster destinations and retain verified SSH bastion fingerprints and Kubernetes TLS trust. Kubeconfig `exec` plugins and external credential files are intentionally unsupported.
+5. OIDC, managed backups, and encrypted file history are opt-in. Configure the provider and HTTPS `APP_URL`, a backup destination with a separate `BACKUP_ENCRYPTION_KEY`, or `SFTP_FILE_HISTORY=true` as needed. See [operations](docs/OPERATIONS.md) and [.env.example](.env.example).
+6. Update the development deployment webhook receiver to honor the supplied verified SHA. Main-branch pushes and release tags run verification without calling the development deployment webhook.
+
+### Validation and practical limits
+
+The release is verified through the repository's CI workflow: production Docker build, Go VPN tests with the race detector, lint, TypeScript checks, production build, SQLite migrations/recovery tests, SSH/Redis-backed integration tests, and Playwright browser workflows.
+
+Real OIDC providers, off-host backup destinations, deployment webhook receivers, and customer VPN peers need environment-specific verification. Managed backups currently support databases up to 256 MiB. Portable SFTP cannot eliminate races with external writers between a version check and remote rename. See [verification](docs/STATUS.md), [operations](docs/OPERATIONS.md), and [security](docs/SECURITY.md) for details.
+
+### Contributors
+
+- [Lahiru S Liyanage (@nooblk-98)](https://github.com/nooblk-98).
+
 ## [0.2.0](https://github.com/nooblk-98/nexusssh/compare/v0.1.0...v0.2.0) - 2026-11-01
 
 ### Breaking changes

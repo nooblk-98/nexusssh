@@ -19,6 +19,7 @@ model Organization {
   tags ServerTag[]
   identities SSHIdentity[]
   vpnProfiles VpnProfile[]
+  kubernetesClusters KubernetesCluster[]
   agents Agent[]
   audit AuditEvent[]
   settings SystemSetting[]
@@ -55,6 +56,7 @@ model WebSession {
   userId String
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   tokenHash String @unique
+  oidcIdentityId String?
   expiresAt DateTime
 }
 
@@ -106,6 +108,7 @@ model ServerGroup {
   children ServerGroup[] @relation("FolderTree")
   servers Server[]
   defaults String @default("{}")
+  clusters KubernetesCluster[]
   @@unique([organizationId, parentId, name])
   @@index([parentId])
   @@index([organizationId])
@@ -148,7 +151,39 @@ model VpnProfile {
   encryptedConfig String
   summary String
   servers Server[]
+  clusters KubernetesCluster[]
   @@index([organizationId])
+}
+
+model KubernetesCluster {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organizationId String
+  organization Organization @relation(fields: [organizationId], references: [id])
+  name String
+  description String @default("")
+  server String
+  context String
+  namespace String @default("default")
+  authentication String
+  encryptedConfig String
+  groupId String?
+  group ServerGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  vpnProfileId String?
+  vpnProfile VpnProfile? @relation(fields: [vpnProfileId], references: [id], onDelete: Restrict)
+  bastionId String?
+  bastion Server? @relation("KubernetesBastion", fields: [bastionId], references: [id], onDelete: Restrict)
+  status String @default("unknown")
+  version String?
+  lastCheckedAt DateTime?
+  lastError String?
+  agentPermissions KubernetesAgentPermission[]
+  approvals KubernetesApproval[]
+  executions KubernetesExecution[]
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@index([groupId])
 }
 
 model Server {
@@ -189,6 +224,7 @@ model Server {
   vpnProfile VpnProfile? @relation(fields: [vpnProfileId], references: [id], onDelete: Restrict)
   bastion Server? @relation("Bastion", fields: [bastionId], references: [id])
   targets Server[] @relation("Bastion")
+  clusterTargets KubernetesCluster[] @relation("KubernetesBastion")
   permissions ServerPermission[]
   teamPermissions TeamPermission[]
   agentPermissions AgentPermission[]
@@ -263,12 +299,13 @@ model Agent {
   ownerId String
   owner User @relation(fields: [ownerId], references: [id])
   name String
-  level String @default("viewer")
+  level String @default("custom")
   revoked Boolean @default(false)
   lastActivityAt DateTime?
   maxCallsPerMinute Int?
   maxCallsPerDay Int?
   permissions AgentPermission[]
+  clusterPermissions KubernetesAgentPermission[]
   tokens AgentToken[]
   @@index([organizationId])
 }
@@ -283,6 +320,54 @@ model AgentPermission {
   server Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
   operations String
   @@unique([agentId, serverId])
+}
+
+model KubernetesAgentPermission {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  agentId String
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  clusterId String
+  cluster KubernetesCluster @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  operations String
+  @@unique([agentId, clusterId])
+}
+
+model KubernetesApproval {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  clusterId String
+  cluster KubernetesCluster @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  organizationId String
+  principalId String
+  tokenId String?
+  operation String
+  argumentDigest String
+  configDigest String
+  encryptedArguments String
+  status String @default("pending")
+  decidedBy String?
+  expiresAt DateTime
+  consumedAt DateTime?
+  @@index([organizationId, createdAt])
+}
+
+model KubernetesExecution {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organizationId String
+  principalId String
+  tokenId String?
+  clusterId String
+  cluster KubernetesCluster @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  operation String
+  status String
+  encryptedResult String?
+  expiresAt DateTime
+  @@index([organizationId, principalId, createdAt])
 }
 
 model AgentToken {
@@ -382,9 +467,66 @@ model AuditEvent {
   action String
   status String
   correlationId String
+  requestId String?
+  @@index([requestId])
   durationMs Int?
   @@index([organizationId, createdAt])
   @@index([principalId, createdAt])
+}
+
+model WorkspacePreset {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organizationId String
+  userId String
+  name String
+  layout String
+  @@unique([userId, name])
+  @@index([organizationId, userId])
+}
+
+model Runbook {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  organizationId String
+  name String
+  revisions RunbookRevision[]
+  @@unique([organizationId, name])
+}
+
+model RunbookRevision {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  runbookId String
+  runbook Runbook @relation(fields: [runbookId], references: [id], onDelete: Cascade)
+  principalId String
+  version Int
+  encryptedDefinition String
+  @@unique([runbookId, version])
+}
+
+model FileRevision {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  organizationId String
+  principalId String
+  serverId String
+  connectionDigest String
+  path String
+  digest String
+  encryptedContent String
+  @@index([organizationId, serverId, path, createdAt])
+}
+
+model OidcIdentity {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  userId String
+  issuer String
+  subject String
+  @@unique([issuer, subject])
+  @@index([userId])
 }
 
 model FileTransfer {

@@ -70,6 +70,7 @@ const schema = z.object({
   SSH_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
   // Host key reachability checks run at once by the health worker.
   SSH_HEALTH_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
+  KUBERNETES_ALLOWED_CIDRS: z.string().min(1).default("10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"),
   SSH_OUTPUT_LIMIT: z.coerce
     .number()
     .int()
@@ -86,6 +87,18 @@ const schema = z.object({
   MCP_PORT: z.coerce.number().default(3002),
   INTERNAL_API_URL: z.url().default("http://127.0.0.1:3001"),
   AUDIT_RETENTION_DAYS: z.coerce.number().int().min(1).default(90),
+  SFTP_FILE_HISTORY: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  SFTP_HISTORY_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+  BACKUP_DIRECTORY: z.string().optional(),
+  BACKUP_ENCRYPTION_KEY: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  BACKUP_INTERVAL_HOURS: z.coerce.number().int().min(1).max(168).default(24),
+  BACKUP_RETAIN_COUNT: z.coerce.number().int().min(1).max(365).default(14),
+  BACKUP_UPLOAD_URL: z.url().startsWith("https://").optional(),
+  BACKUP_WEBHOOK_URL: z.url().startsWith("https://").optional(),
+  OIDC_ISSUER: z.url().startsWith("https://").optional(),
+  OIDC_CLIENT_ID: z.string().min(1).optional(),
+  OIDC_CLIENT_SECRET: z.string().min(1).optional(),
+  OIDC_LABEL: z.string().max(80).default("Single sign-on"),
 });
 const parsed = schema.parse(process.env);
 // Without APP_URL the platform serves whatever address it is reached on: browser

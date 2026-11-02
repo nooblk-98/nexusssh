@@ -641,13 +641,37 @@ p {
   position: relative;
   display: flex;
   flex-direction: column;
-  width: 305px;
+  width: var(--sidebar-width, 305px);
   flex: none;
   background: var(--sidebar);
   border-right: 3px solid var(--border);
 }
 .shell.collapsed .sidebar {
   display: none;
+}
+.sidebar-resize {
+  position: absolute;
+  inset: 0 -5px 0 auto;
+  z-index: 4;
+  width: 10px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.sidebar-resize::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 4px;
+  width: 2px;
+}
+.sidebar-resize:hover::after,
+.sidebar-resize:focus-visible::after,
+.sidebar.resizing .sidebar-resize::after {
+  background: var(--primary);
+}
+.sidebar-resizing,
+.sidebar-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 .sidebar-head {
   display: flex;
@@ -839,7 +863,8 @@ p {
   text-align: center;
 }
 .tree-server {
-  display: flex;
+  display: grid;
+  grid-template-columns: 26px 8px minmax(0, 1fr);
   align-items: center;
   gap: 12px;
   width: 100%;
@@ -952,10 +977,6 @@ p {
   font-size: 14px;
   color: var(--text-strong);
   line-height: 1.35;
-}
-.tree-server .srv-name {
-  white-space: normal;
-  overflow-wrap: anywhere;
 }
 .srv-sub {
   font-size: 11px;
@@ -1706,6 +1727,119 @@ p {
 .table-card .table td {
   font-size: 13px;
 }
+.kube-page {
+  display: grid;
+  gap: 16px;
+}
+.kube-console { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.kube-console .term-toolbar { flex-wrap: wrap; height: auto; min-height: 56px; padding-block: 8px; }
+.kube-console .term-host { height: 100%; width: 100%; }
+.kube-sidebar-cluster { cursor: pointer; }
+.kube-sidebar-cluster:hover { background: var(--hover); }
+.kube-cluster-row > .tree-server { padding-right: 38px; }
+.kube-cluster-row > .server-row-menu { right: 5px; }
+.kube-page > * {
+  min-width: 0;
+}
+.kube-clusters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr));
+  gap: 16px;
+}
+.kube-cluster-card {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+.kube-cluster-card h2,
+.kube-cluster-heading h2 {
+  color: var(--text-strong);
+  font-size: 16px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.kube-cluster-card p,
+.kube-connection p {
+  overflow-wrap: anywhere;
+  line-height: 1.7;
+}
+.kube-cluster-heading,
+.kube-connection,
+.kube-resource-tools,
+.kube-pagination {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.kube-connection {
+  justify-content: space-between;
+}
+.kube-connection > div:first-child {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.kube-connection .row {
+  flex-wrap: wrap;
+}
+.kube-resource-tools {
+  align-items: end;
+}
+.kube-resource-tools > .field {
+  width: 180px;
+}
+.kube-resource-tools .field {
+  margin: 0;
+  min-width: 0;
+}
+.kube-namespace {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+  max-width: 100%;
+}
+.kube-namespace .field {
+  flex: 1;
+}
+.kube-resource-table {
+  overflow: auto;
+}
+.kube-resource-table .table {
+  min-width: 760px;
+}
+.kube-resource-detail {
+  max-width: 340px;
+  overflow-wrap: anywhere;
+}
+.kube-pagination > span {
+  margin-right: auto;
+}
+.kube-log-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+.kube-logs {
+  padding: 16px;
+  min-height: 160px;
+  max-height: 55vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-strong);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.drawer:has(.kube-log-controls) .drawer-head h2 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .empty-state {
   display: grid;
   justify-items: center;
@@ -1947,6 +2081,9 @@ p {
     width: min(305px, 86vw);
     box-shadow: var(--shadow-lg);
   }
+  .sidebar-resize {
+    display: none;
+  }
   .collapse-btn {
     right: 8px;
     top: 10px;
@@ -2050,3 +2187,7 @@ p {
   line-height: 16px;
   text-align: center;
 }
+
+/* Keep operational sections readable across desktop and narrow settings layouts. */
+.operations-page > section { margin-bottom: 16px; }
+.operations-page .mono { overflow-wrap: anywhere; }

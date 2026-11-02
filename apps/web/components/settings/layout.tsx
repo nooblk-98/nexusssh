@@ -2,6 +2,7 @@
 import type { ReactNode } from "react";
 import {
   Bot,
+  Boxes,
   CircleArrowLeft,
   CirclePlay,
   History,
@@ -31,6 +32,9 @@ import { Agents, Approvals, AuditLog, McpServer } from "./mcp";
 import { VpnProfiles } from "./vpn";
 import { Network } from "lucide-react";
 import { About } from "./about";
+import { KubernetesClusters } from "./kubernetes";
+import { Operations } from "./operations";
+import { RunbooksPage } from "../runbooks";
 
 type Page = {
   slug: string;
@@ -67,6 +71,15 @@ const sections: { label: string; pages: Page[] }[] = [
   {
     label: "Administration",
     pages: [
+      { slug: "operations", label: "Operations", icon: SlidersHorizontal, admin: true, render: () => <Operations /> },
+      { slug: "runbooks", label: "Runbooks", icon: ScrollText, admin: true, render: () => <RunbooksPage /> },
+      {
+        slug: "kubernetes",
+        label: "Kubernetes",
+        icon: Boxes,
+        admin: true,
+        render: () => <KubernetesClusters />,
+      },
       {
         slug: "vpn",
         label: "VPN",
