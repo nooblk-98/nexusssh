@@ -15,7 +15,11 @@ Manage your servers, remote files, Kubernetes clusters, team access, and AI agen
 [![MCP support](https://img.shields.io/badge/MCP-supported-2563eb?style=flat-square)](#connect-ai-through-mcp)
 [![Kubernetes support](https://img.shields.io/badge/Kubernetes-supported-6366f1?style=flat-square)](docs/KUBERNETES.md)
 
-[Features](#what-you-can-do) · [Quick start](#quick-start) · [AI and MCP](#connect-ai-through-mcp) · [Documentation](#documentation)
+[Features](#what-you-can-do) · [Screenshots](#screenshots) · [Quick start](#quick-start) · [AI and MCP](#connect-ai-through-mcp) · [Documentation](#documentation)
+
+<p align="center">
+  <img src="docs/assets/screenshots/ssh-terminal.png" alt="NexusSSH workspace with a browser SSH terminal open next to the folder tree of servers and Kubernetes clusters" width="1000" />
+</p>
 
 ## What you can do
 
@@ -29,6 +33,51 @@ Manage your servers, remote files, Kubernetes clusters, team access, and AI agen
 | **Private infrastructure** | Reach targets through saved WireGuard profiles, an SSH bastion, or both. Use the same routes for browser sessions and permitted MCP operations.                                 |
 | **Team access**            | Manage users, teams, operation grants, TOTP MFA and recovery codes, and optional generic OIDC sign-in.                                                                          |
 | **Operations**             | Use versioned runbooks, staged connection diagnostics, dependency readiness checks, audit request references, and optional scheduled encrypted backups with restore rehearsal.  |
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/assets/screenshots/sftp-file-browser.png"><img src="docs/assets/screenshots/sftp-file-browser.png" alt="SFTP file browser listing a remote home directory with upload drop zone" /></a>
+      <p align="center"><b>SFTP file browser</b><br/><sub>Browse, upload, download, and edit remote files in the browser.</sub></p>
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/assets/screenshots/kubernetes-console.png"><img src="docs/assets/screenshots/kubernetes-console.png" alt="Kubernetes console listing kube-system pods for a saved cluster" /></a>
+      <p align="center"><b>Kubernetes console</b><br/><sub>Run kubectl-style commands against saved clusters, with no local kubeconfig.</sub></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/assets/screenshots/mcp-server.png"><img src="docs/assets/screenshots/mcp-server.png" alt="MCP server settings showing the endpoint, client configuration, and available tools" /></a>
+      <p align="center"><b>Built-in MCP server</b><br/><sub>Point any remote HTTP MCP client at one endpoint with a scoped token.</sub></p>
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/assets/screenshots/ai-agents.png"><img src="docs/assets/screenshots/ai-agents.png" alt="AI Agents page listing registered agents with access, limits, and status" /></a>
+      <p align="center"><b>AI agents</b><br/><sub>Grant, limit, and revoke each agent's access to servers, clusters, and tools.</sub></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/assets/screenshots/audit-log.png"><img src="docs/assets/screenshots/audit-log.png" alt="Audit log of terminal connections, Kubernetes commands, and agent tool calls" /></a>
+      <p align="center"><b>Audit log</b><br/><sub>Every sign-in, connection, and agent tool call, with request references.</sub></p>
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/assets/screenshots/vpn-profiles.png"><img src="docs/assets/screenshots/vpn-profiles.png" alt="VPN page listing WireGuard profiles and the servers that use them" /></a>
+      <p align="center"><b>WireGuard routes</b><br/><sub>Reach private networks through saved VPN profiles and bastions.</sub></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/assets/screenshots/command-palette.png"><img src="docs/assets/screenshots/command-palette.png" alt="Command palette open over a terminal, with connect, details, and test actions per server" /></a>
+      <p align="center"><b>Command palette</b><br/><sub>Press <kbd>Ctrl</kbd>+<kbd>K</kbd> to connect, inspect, or test any server.</sub></p>
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/assets/screenshots/security-settings.png"><img src="docs/assets/screenshots/security-settings.png" alt="Security settings for host key policy, allowed SSH destinations, and approval notifications" /></a>
+      <p align="center"><b>Connection safeguards</b><br/><sub>Host key policy, destination allowlists, and approval notifications.</sub></p>
+    </td>
+  </tr>
+</table>
 
 ## Quick start
 
