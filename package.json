@@ -13,7 +13,7 @@
     "bootstrap": "node infrastructure/scripts/bootstrap.mjs",
     "doctor": "npm run db:generate && npm run typecheck",
     "dev": "concurrently -k \"npm:dev:api\" \"npm:dev:web\" \"npm:dev:mcp\" \"npm:dev:worker\" \"npm:dev:vpn\"",
-    "dev:vpn": "docker compose -f docker-compose.vpn-dev.yml up --build --abort-on-container-exit",
+    "dev:vpn": "docker compose --project-directory . -f infrastructure/compose/vpn-dev.yml up --build --abort-on-container-exit",
     "dev:api": "tsx watch apps/api/src/main.ts",
     "dev:web": "npm run assets && npm run dev -w @nexus/web",
     "dev:mcp": "tsx watch apps/mcp/src/main.ts",
