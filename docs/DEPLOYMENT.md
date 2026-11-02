@@ -6,18 +6,37 @@ See [operations and workflow configuration](OPERATIONS.md) for readiness probes,
 
 Use a Linux host with Docker Engine and Compose 2.24.4+. Ubuntu/Debian are straightforward defaults. Ordinary target SSH connections do not need AWS API credentials. Provision the host, domain, reverse proxy and security-group/firewall rules yourself: allow HTTPS to your reverse proxy, and your administrative maintenance channel. Allow SSH egress only to approved target networks.
 
-1. Deploy `docker-compose.yml` (for example as a Portainer Git stack, or `docker compose up -d --build`). It needs no `.env` or configuration to start. On first start the API generates `ENCRYPTION_KEY`, `SESSION_SECRET`, `INTERNAL_SECRET` and `SETUP_TOKEN` into the `nexusssh_secrets` volume and reuses them afterwards. Back that volume up; losing `ENCRYPTION_KEY` makes stored SSH identities unrecoverable.
+1. Deploy `docker-compose.yml` (for example as a Portainer Git stack, or `docker compose up -d`). It runs the published `ghcr.io/nooblk-98/nexusssh:latest` image for `linux/amd64` and `linux/arm64`; set `NEXUSSSH_IMAGE` to pin a version (`:0.3.0`), an exact commit (`:sha-<commit>`), or the `:development` channel. It needs no `.env` or configuration to start. On first start the API generates `ENCRYPTION_KEY`, `SESSION_SECRET`, `INTERNAL_SECRET` and `SETUP_TOKEN` into the `nexusssh_secrets` volume and reuses them afterwards. Back that volume up; losing `ENCRYPTION_KEY` makes stored SSH identities unrecoverable.
 2. Optionally set `APP_URL=https://ssh.example.com` as a stack/environment variable. Without it the platform works on whatever address it is reached at (`http://192.168.1.10:8080`, your proxy's domain, ...): browser writes must come from the same host they were sent to, the session cookie is `Secure` whenever the browser is on HTTPS, and the MCP endpoint and invite links follow the address in use. Setting `APP_URL` pins the allowed browser origin to exactly that value and requires HTTPS outside localhost; `AUTH_ISSUER`, `MCP_AUTH_ISSUER` and `MCP_PUBLIC_URL` (`APP_URL` + `/mcp`) derive from it. Agent tokens are bound to `MCP_PUBLIC_URL`, so tokens created before you set or change it must be reissued. `SSH_ALLOWED_CIDRS` defaults to the private ranges `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`; narrow it to your target networks, or add public ranges for internet-facing servers.
 3. The stack is two containers: `nexusssh` (API, web UI, MCP server and SSH worker behind one built-in HTTP gateway) and `redis`. It serves plain HTTP on `HTTP_PORT` (default `8080`). Put your own TLS-terminating reverse proxy (Caddy, Traefik, Nginx Proxy Manager, Cloudflare Tunnel, a load balancer) in front of it and forward your HTTPS domain to that port, including WebSocket upgrades for `/ws/`. Do not expose the HTTP port publicly without TLS in front; browser session cookies are `Secure` in production.
-4. Run `docker compose up -d --build`. The API applies versioned migrations without dropping existing records. The data volume mounts at `/app/data`. If any process inside `nexusssh` exits, the container stops and the restart policy restarts it.
+4. Run `docker compose pull && docker compose up -d`. The API applies versioned migrations without dropping existing records. The data volume mounts at `/app/data`. If any process inside `nexusssh` exits, the container stops and the restart policy restarts it.
 5. Open your HTTPS origin and create the first owner with the setup token printed in the API container logs (`First-run setup token: ...`), or the `SETUP_TOKEN` you set, and verify a restricted SSH identity against a disposable target before onboarding production servers.
 
 Containers run as the Node user where practical. Redis has no published port. Never run `docker compose down -v` for a deployment containing data you need.
 
+## Published images
+
+After checks pass, the `Verification` workflow calls the reusable `Publish image`
+workflow, which builds `linux/amd64` and `linux/arm64` images on native runners
+and pushes one multi-platform manifest to GitHub Container Registry:
+
+| Branch        | Tags                                       |
+| ------------- | ------------------------------------------ |
+| `main`        | `latest`, the `package.json` version, `sha-<commit>` |
+| `development` | `development`, `sha-<commit>`              |
+
+Moving tags (`latest`, `development`, versions) are convenient; `sha-<commit>`
+tags and registry digests are immutable and are what you should pin for
+production and rollback. Pushes use the workflow's `GITHUB_TOKEN`; no extra
+secret is required. The first publish creates the package; make it public under
+the package's settings if hosts should pull without signing in to `ghcr.io`.
+
 ## Automatic deployment from GitHub
 
 The `Verification` workflow calls the reusable `Deploy` workflow only after
-checks pass for a push to `development`. Deployments run serially and skip
+checks pass and the image is published for a push to `development`. Set the
+deployed stack's `NEXUSSSH_IMAGE` to `ghcr.io/nooblk-98/nexusssh:development`
+and have the deployment service pull images when it redeploys. Deployments run serially and skip
 superseded commits. Configure `DEPLOY_WEBHOOK_URL` under Settings > Secrets
 and variables > Actions; the URL stays out of the repository and workflow logs.
 
@@ -96,7 +115,10 @@ registry, image storage destination, or production deployment credential. The
 CI archive consumes Actions artifact storage; review its usage before relying
 on it for a long retention period.
 
-Back up and verify restore before upgrading. Review migrations and dependency changes. Build the new image, stop `nexusssh` to avoid in-flight side effects, then recreate it. Never scale `nexusssh` above one replica; it owns the SQLite file. If a migration is incompatible with an older version, rollback requires restoring the backup and its matching application image; do not run an old binary against an unreviewed new schema.
+Registry images are the simpler path: deploy by `sha-<commit>` tag or digest,
+and roll back by setting `NEXUSSSH_IMAGE` to the previous one.
+
+Back up and verify restore before upgrading. Review migrations and dependency changes. Pull the new image (`docker compose pull`), stop `nexusssh` to avoid in-flight side effects, then recreate it. Never scale `nexusssh` above one replica; it owns the SQLite file. If a migration is incompatible with an older version, rollback requires restoring the backup and its matching application image; do not run an old binary against an unreviewed new schema.
 
 ## Configuration
 

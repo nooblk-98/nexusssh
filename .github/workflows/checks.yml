@@ -53,8 +53,16 @@ jobs:
         run: tail -n 200 dev.log
       - if: always()
         run: docker compose -f tests/fixtures/compose.yml down
-  deploy:
+  publish:
     needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/development' || github.ref == 'refs/heads/main')
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/publish.yml
+  # Deploy after the image is published, so the deployment can pull it.
+  deploy:
+    needs: [test, publish]
     if: github.event_name == 'push' && github.ref == 'refs/heads/development'
     uses: ./.github/workflows/deploy.yml
     secrets: inherit

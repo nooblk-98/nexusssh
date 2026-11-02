@@ -2,7 +2,11 @@
 
 ## Unreleased
 
-No unreleased changes.
+### Deployment
+
+- Publish multi-platform (`linux/amd64`, `linux/arm64`) images to GitHub Container Registry after checks pass: `latest` and the release version from `main`, `development` from `development`, and an immutable `sha-<commit>` tag for every build.
+- `docker-compose.yml` now runs `ghcr.io/nooblk-98/nexusssh:latest` instead of building from source, so `docker compose up -d` is the whole deployment. Override the image with `NEXUSSSH_IMAGE`.
+- Building from source moved to `docker-compose.dev.yml`. If you deploy a Git stack that relied on `docker compose up -d --build`, set `NEXUSSSH_IMAGE` to the tag you want and pull images on redeploy.
 
 ## [0.3.0](https://github.com/nooblk-98/nexusssh/compare/v0.2.0...v0.3.0) - 2026-11-02
 

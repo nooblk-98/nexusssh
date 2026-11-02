@@ -4,6 +4,7 @@
 
 [![Verification](https://img.shields.io/github/actions/workflow/status/nooblk-98/nexusssh/checks.yml?branch=development&style=flat-square&label=checks)](https://github.com/nooblk-98/nexusssh/actions/workflows/checks.yml)
 [![Release](https://img.shields.io/badge/release-v0.3.0-0f766e?style=flat-square)](CHANGELOG.md)
+[![Container image](https://img.shields.io/badge/ghcr.io-nexusssh-2088ff?style=flat-square&logo=docker&logoColor=white)](https://github.com/nooblk-98/nexusssh/pkgs/container/nexusssh)
 [![Self-hosted](https://img.shields.io/badge/deployment-self--hosted-0f766e?style=flat-square)](#getting-started)
 [![MCP support](https://img.shields.io/badge/MCP-supported-2563eb?style=flat-square)](#connect-an-ai-client-through-mcp)
 [![Kubernetes support](https://img.shields.io/badge/Kubernetes-supported-6366f1?style=flat-square)](docs/KUBERNETES.md)
@@ -84,24 +85,29 @@ It also ships with a built-in [Model Context Protocol (MCP)](https://modelcontex
 
 ### Prerequisites
 
-- [Docker](https://docs.docker.com/get-docker/) with Linux containers
+- [Docker](https://docs.docker.com/get-docker/) with Linux containers, on `amd64` or `arm64`
 - Docker Compose **2.24.4 or newer**
 
-The application builds inside Docker, so you don't need Node.js to run it.
-
-### Run NexusSSH
+### Deploy with one command
 
 ```sh
-git clone https://github.com/nooblk-98/nexusssh.git
-cd nexusssh
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+curl -fsSL https://raw.githubusercontent.com/nooblk-98/nexusssh/main/docker-compose.yml -o docker-compose.yml && docker compose up -d
 ```
 
-The development override binds the app to loopback only. The stack is two containers: `nexusssh` (web UI, API, MCP server, and SSH worker behind one gateway) and `redis`.
+This pulls the prebuilt image from GitHub Container Registry and starts two containers: `nexusssh` (web UI, API, MCP server, and SSH worker behind one gateway) and `redis`. No `.env` file is needed to start.
+
+| Image tag                                 | Built from                                    |
+| ----------------------------------------- | --------------------------------------------- |
+| `ghcr.io/nooblk-98/nexusssh:latest`       | The `main` branch (default)                   |
+| `ghcr.io/nooblk-98/nexusssh:0.3.0`        | A specific release version                    |
+| `ghcr.io/nooblk-98/nexusssh:development`  | The `development` branch, for early testing   |
+| `ghcr.io/nooblk-98/nexusssh:sha-<commit>` | An exact commit, for pinning and rollback     |
+
+To run another tag, set `NEXUSSSH_IMAGE`, for example `NEXUSSSH_IMAGE=ghcr.io/nooblk-98/nexusssh:development docker compose up -d`. To upgrade, run `docker compose pull && docker compose up -d`.
 
 ### First sign-in
 
-1. Open [http://localhost:8080](http://localhost:8080).
+1. Open `http://<your-host>:8080`.
 2. Copy the first-run setup token from `docker compose logs nexusssh`, then create your owner account. No default password is shipped.
 3. Add an SSH identity and a server, or import a Kubernetes kubeconfig. Verify SSH host fingerprints through a trusted console before saving them.
 4. Under **Settings → Security**, allow the networks your targets live in, then test the connection. Pick a WireGuard profile or bastion if the target needs one.
@@ -113,7 +119,7 @@ Installation secrets are generated on first start and kept in the `nexusssh_secr
 > Back up both volumes. Losing the encryption key makes saved credentials unrecoverable, and `docker compose down -v` deletes them.
 
 > [!WARNING]
-> Never expose the development override publicly. For a shared or internet-facing installation, put a TLS-terminating reverse proxy in front, set a stable `APP_URL`, and narrow `SSH_ALLOWED_CIDRS` by following the [deployment guide](docs/DEPLOYMENT.md).
+> The app serves plain HTTP on port `8080`. For a shared or internet-facing installation, put a TLS-terminating reverse proxy in front, set a stable `APP_URL`, and narrow `SSH_ALLOWED_CIDRS` by following the [deployment guide](docs/DEPLOYMENT.md).
 
 ## Connect an AI client through MCP
 
@@ -162,7 +168,15 @@ The API checks every request against the caller's grants, consumes an exact huma
 
 ## Local development
 
-To work on NexusSSH itself, you need Node.js 24 and a Redis instance on `127.0.0.1:6379`.
+To build the container from your checkout instead of pulling it, add the development override. It also binds the app to loopback only:
+
+```sh
+git clone https://github.com/nooblk-98/nexusssh.git
+cd nexusssh
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+```
+
+To run the services natively, you need Node.js 24 and a Redis instance on `127.0.0.1:6379`.
 
 ```sh
 npm ci
