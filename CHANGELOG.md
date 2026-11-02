@@ -4,6 +4,27 @@
 
 No unreleased changes.
 
+## [0.3.1](https://github.com/nooblk-98/nexusssh/compare/v0.3.0...v0.3.1) - 2026-11-02
+
+NexusSSH now ships as a prebuilt multi-platform image, so a deployment is one command. Application behavior and the database schema are unchanged from v0.3.0; no migration runs.
+
+### Deployment
+
+- Publish multi-platform (`linux/amd64`, `linux/arm64`) images to GitHub Container Registry. Publishing a GitHub release pushes its tag (`v0.3.1`), version (`0.3.1`, `0.3`) and `latest`; pushes to `development` publish `development` after checks pass. Every build also gets an immutable `sha-<commit>` tag.
+- `docker-compose.yml` now runs `ghcr.io/nooblk-98/nexusssh:latest` instead of building from source, so `docker compose up -d` is the whole deployment. Override the image with `NEXUSSSH_IMAGE`.
+- The optional backup and native-development VPN overrides moved to `infrastructure/compose/backup.yml` and `infrastructure/compose/vpn-dev.yml`. Update any deployment that referenced `docker-compose.backup.yml`.
+- Building from source moved to `docker-compose.dev.yml`. If you deploy a Git stack that relied on `docker compose up -d --build`, set `NEXUSSSH_IMAGE` to the tag you want and pull images on redeploy.
+
+### Documentation
+
+- Rewrite the README with a one-command deploy, an image tag table, an architecture diagram, and a screenshot gallery of the platform.
+
+### Upgrade
+
+1. Back up the `nexusssh_data` and `nexusssh_secrets` volumes.
+2. Replace your `docker-compose.yml` with the v0.3.1 file, keeping your environment overrides.
+3. Run `docker compose pull && docker compose up -d`. Your existing volumes are reused.
+
 ## [0.3.0](https://github.com/nooblk-98/nexusssh/compare/v0.2.0...v0.3.0) - 2026-11-02
 
 NexusSSH is a centralized, self-hosted web workspace for SSH, SFTP, Kubernetes, and AI access through MCP. Saved infrastructure credentials remain encrypted on your deployment; compatible AI clients use scoped MCP tokens instead of receiving SSH keys, passwords, or kubeconfigs.

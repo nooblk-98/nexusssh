@@ -62,7 +62,7 @@ Backups are disabled until `BACKUP_DIRECTORY` and `BACKUP_ENCRYPTION_KEY` exist.
 | `BACKUP_WEBHOOK_URL`    | Optional HTTPS completion/failure notification endpoint                |
 | `APP_REVISION`          | Source revision recorded in the archive; set during image build        |
 
-The optional `docker-compose.backup.yml` mounts `BACKUP_HOST_DIRECTORY` at `/app/backups`. Provision a protected destination writable by UID 1000 and add this override to the base Compose deployment. Base Compose keeps backups disabled.
+The optional `infrastructure/compose/backup.yml` override mounts `BACKUP_HOST_DIRECTORY` at `/app/backups`. Provision a protected destination writable by UID 1000 and add the override to the base deployment: `docker compose -f docker-compose.yml -f infrastructure/compose/backup.yml up -d`. Base Compose keeps backups disabled.
 
 The scheduler snapshots committed SQLite/WAL content, captures effective installation encryption secrets, checks integrity/decryption, compresses and encrypts with AES-256-GCM, then decrypts and rehearses a temporary restored copy. It never restores over the live database. The current database limit is 256 MiB. External provider credentials and deployment configuration must be retained separately.
 

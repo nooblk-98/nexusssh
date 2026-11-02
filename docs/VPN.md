@@ -28,7 +28,7 @@ The production Docker image includes a userspace WireGuard gateway built with [w
 
 Each profile has its own userspace network stack, so unrelated profiles can use overlapping private address ranges. Concurrent SSH connections using the same profile share one WireGuard device. Idle devices expire after five minutes; capacity is 64 active or recently used profile versions. SSH sessions and application limits govern connection lifetimes.
 
-For native development, `npm run dev` starts the gateway using `docker-compose.vpn-dev.yml` on `127.0.0.1:3003`. It uses `INTERNAL_SECRET` from `.env`. `npm run dev:vpn` starts it separately. If needed, `VPN_GATEWAY_URL` points the API/worker at another trusted internal gateway. Do not expose the gateway as a public proxy. The all-in-one production container starts it automatically.
+For native development, `npm run dev` starts the gateway using `infrastructure/compose/vpn-dev.yml` on `127.0.0.1:3003`. It uses `INTERNAL_SECRET` from `.env`. `npm run dev:vpn` starts it separately. If needed, `VPN_GATEWAY_URL` points the API/worker at another trusted internal gateway. Do not expose the gateway as a public proxy. The all-in-one production container starts it automatically.
 
 The `VpnProfile` migration adds a new table and optional server relation; existing connections remain direct unless a profile is selected. Back up the SQLite database and installation encryption secrets together as before.
 

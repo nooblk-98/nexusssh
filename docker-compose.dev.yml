@@ -1,4 +1,12 @@
+# Builds the image from this checkout and binds it to loopback only.
 services:
   nexusssh:
+    image: nexusssh:local
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile
+      args:
+        APP_REVISION: ${APP_REVISION:-unknown}
+    pull_policy: build
     environment: {NODE_ENV: development, APP_URL: 'http://localhost:8080'}
     ports: !override ['127.0.0.1:8080:8080']
