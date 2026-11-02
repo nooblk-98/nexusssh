@@ -4,7 +4,7 @@
 
 ### Deployment
 
-- Publish multi-platform (`linux/amd64`, `linux/arm64`) images to GitHub Container Registry after checks pass: `latest` and the release version from `main`, `development` from `development`, and an immutable `sha-<commit>` tag for every build.
+- Publish multi-platform (`linux/amd64`, `linux/arm64`) images to GitHub Container Registry. Publishing a GitHub release pushes its tag (`v0.3.0`), version (`0.3.0`, `0.3`) and `latest`; pushes to `development` publish `development` after checks pass. Every build also gets an immutable `sha-<commit>` tag.
 - `docker-compose.yml` now runs `ghcr.io/nooblk-98/nexusssh:latest` instead of building from source, so `docker compose up -d` is the whole deployment. Override the image with `NEXUSSSH_IMAGE`.
 - Building from source moved to `docker-compose.dev.yml`. If you deploy a Git stack that relied on `docker compose up -d --build`, set `NEXUSSSH_IMAGE` to the tag you want and pull images on redeploy.
 

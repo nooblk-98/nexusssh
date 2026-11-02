@@ -2,8 +2,8 @@ name: nexusssh
 # Works with no configuration. Secrets are generated on first start and kept in
 # the nexusssh_secrets volume; back it up, losing it makes stored SSH identities
 # unrecoverable.
-# Runs the published image. Set NEXUSSSH_IMAGE to pin a release
-# (ghcr.io/nooblk-98/nexusssh:0.3.0), follow the development channel
+# Runs the newest release. Set NEXUSSSH_IMAGE to pin a release
+# (ghcr.io/nooblk-98/nexusssh:v0.3.0), follow the development channel
 # (ghcr.io/nooblk-98/nexusssh:development), or use an immutable sha-<commit> tag.
 # To build from source instead, add -f docker-compose.dev.yml.
 services:

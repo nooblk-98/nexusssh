@@ -96,12 +96,13 @@ curl -fsSL https://raw.githubusercontent.com/nooblk-98/nexusssh/main/docker-comp
 
 This pulls the prebuilt image from GitHub Container Registry and starts two containers: `nexusssh` (web UI, API, MCP server, and SSH worker behind one gateway) and `redis`. No `.env` file is needed to start.
 
-| Image tag                                 | Built from                                    |
-| ----------------------------------------- | --------------------------------------------- |
-| `ghcr.io/nooblk-98/nexusssh:latest`       | The `main` branch (default)                   |
-| `ghcr.io/nooblk-98/nexusssh:0.3.0`        | A specific release version                    |
-| `ghcr.io/nooblk-98/nexusssh:development`  | The `development` branch, for early testing   |
-| `ghcr.io/nooblk-98/nexusssh:sha-<commit>` | An exact commit, for pinning and rollback     |
+| Image tag                                 | Built from                                       |
+| ----------------------------------------- | ------------------------------------------------ |
+| `ghcr.io/nooblk-98/nexusssh:latest`       | The newest stable release (default)              |
+| `ghcr.io/nooblk-98/nexusssh:v0.3.0`       | A specific release, also published as `0.3.0`    |
+| `ghcr.io/nooblk-98/nexusssh:0.3`          | The newest patch release of a minor version      |
+| `ghcr.io/nooblk-98/nexusssh:development`  | The `development` branch, for early testing      |
+| `ghcr.io/nooblk-98/nexusssh:sha-<commit>` | An exact commit, for pinning and rollback        |
 
 To run another tag, set `NEXUSSSH_IMAGE`, for example `NEXUSSSH_IMAGE=ghcr.io/nooblk-98/nexusssh:development docker compose up -d`. To upgrade, run `docker compose pull && docker compose up -d`.
 

@@ -1,11 +1,14 @@
 name: Publish image
 
-# Called by Verification after checks pass. `development` publishes the
-# `development` tag; `main` publishes `latest` and the package.json version.
+# `development` is published by Verification after checks pass. Publishing a
+# GitHub release (tagged from main) publishes the release tag (`v0.3.0`), its
+# version (`0.3.0`, `0.3`) and, unless it is a pre-release, `latest`.
 # Every image also gets an immutable `sha-<commit>` tag.
 on:
   workflow_call:
   workflow_dispatch:
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -18,7 +21,7 @@ concurrency:
 
 jobs:
   build:
-    if: github.ref == 'refs/heads/development' || github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/development' || github.event_name == 'release'
     strategy:
       fail-fast: true
       matrix:
@@ -74,11 +77,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - name: Resolve image name and version
-        run: |
-          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
-          echo "VERSION=$(jq -r .version package.json)" >> "$GITHUB_ENV"
+      - name: Resolve image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
           path: ${{ runner.temp }}/digests
@@ -97,8 +97,10 @@ jobs:
           flavor: latest=false
           tags: |
             type=raw,value=development,enable=${{ github.ref == 'refs/heads/development' }}
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=${{ env.VERSION }},enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
             type=sha,prefix=sha-,format=short
       - name: Create multi-platform manifest
         working-directory: ${{ runner.temp }}/digests

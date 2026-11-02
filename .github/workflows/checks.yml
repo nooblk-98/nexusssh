@@ -55,7 +55,8 @@ jobs:
         run: docker compose -f tests/fixtures/compose.yml down
   publish:
     needs: test
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/development' || github.ref == 'refs/heads/main')
+    # Releases publish their own images; see publish.yml.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/development'
     permissions:
       contents: read
       packages: write
