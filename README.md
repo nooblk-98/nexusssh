@@ -1,38 +1,39 @@
-<p align="center">
-  <img src="docs/assets/nexusssh-banner.svg" alt="NexusSSH — a centralized web-based SSH and Kubernetes manager with MCP support. Infrastructure credentials stay on your deployment." width="1200" />
-</p>
+<div align="center">
 
-# NexusSSH
+<img src="docs/assets/nexusssh-banner.svg" alt="NexusSSH — a centralized web-based SSH and Kubernetes manager with MCP support. Infrastructure credentials stay on your deployment." width="1200" />
 
-**A centralized, web-based SSH and Kubernetes manager with built-in MCP support.**
-
-Manage your servers, remote files, Kubernetes clusters, team access, and AI agents from one self-hosted workspace. Connect your infrastructure once, then work through your browser or a compatible MCP client.
-
-**You no longer need to give AI providers your SSH passwords, private keys, Kubernetes tokens, or kubeconfig files to use NexusSSH's MCP tools.** NexusSSH keeps saved infrastructure credentials encrypted on your deployment. AI clients connect with scoped, expiring, revocable MCP tokens, and NexusSSH executes permitted operations on their behalf.
-
-[![GitHub Actions](https://img.shields.io/badge/CI-GitHub_Actions-2088ff?style=flat-square&logo=githubactions&logoColor=white)](https://github.com/nooblk-98/nexusssh/actions/workflows/checks.yml)
-[![Self-hosted](https://img.shields.io/badge/deployment-self--hosted-0f766e?style=flat-square)](#quick-start)
-[![MCP support](https://img.shields.io/badge/MCP-supported-2563eb?style=flat-square)](#connect-ai-through-mcp)
+[![Verification](https://img.shields.io/github/actions/workflow/status/nooblk-98/nexusssh/checks.yml?branch=development&style=flat-square&label=checks)](https://github.com/nooblk-98/nexusssh/actions/workflows/checks.yml)
+[![Release](https://img.shields.io/badge/release-v0.3.0-0f766e?style=flat-square)](CHANGELOG.md)
+[![Self-hosted](https://img.shields.io/badge/deployment-self--hosted-0f766e?style=flat-square)](#getting-started)
+[![MCP support](https://img.shields.io/badge/MCP-supported-2563eb?style=flat-square)](#connect-an-ai-client-through-mcp)
 [![Kubernetes support](https://img.shields.io/badge/Kubernetes-supported-6366f1?style=flat-square)](docs/KUBERNETES.md)
 
-[Features](#what-you-can-do) · [Screenshots](#screenshots) · [Quick start](#quick-start) · [AI and MCP](#connect-ai-through-mcp) · [Documentation](#documentation)
+⭐ If NexusSSH is useful to you, star the repository. It helps others find it.
 
-<p align="center">
-  <img src="docs/assets/screenshots/ssh-terminal.png" alt="NexusSSH workspace with a browser SSH terminal open next to the folder tree of servers and Kubernetes clusters" width="1000" />
-</p>
+[Overview](#overview) · [Features](#features) · [Screenshots](#screenshots) · [Getting started](#getting-started) · [AI and MCP](#connect-an-ai-client-through-mcp) · [Documentation](#documentation)
 
-## What you can do
+<img src="docs/assets/screenshots/ssh-terminal.png" alt="NexusSSH workspace with a browser SSH terminal open next to the folder tree of servers and Kubernetes clusters" width="1000" />
 
-| Area                       | Capabilities                                                                                                                                                                    |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Centralized workspace**  | Organize SSH servers and Kubernetes clusters in nested folders. Use search, tags, favorites, recent connections, split views, and account workspace presets.                    |
-| **Browser SSH**            | Open interactive terminals with pinned host keys, session resume, snippets, search, command suggestions, and broadcast input across selected sessions.                          |
-| **Remote files**           | Browse SFTP, transfer files with progress and resumable uploads, and edit with Monaco. Preview changes, detect conflicting saves, and optionally retain encrypted file history. |
-| **Kubernetes**             | Import kubeconfigs, choose contexts and namespaces, use cluster consoles, browse resources, view pod logs, and run supported commands or pod execution through MCP.             |
-| **AI access through MCP**  | Give agents explicit server, cluster, and tool grants. Require human approval for arbitrary commands and mutations, revoke tokens, and review activity.                         |
-| **Private infrastructure** | Reach targets through saved WireGuard profiles, an SSH bastion, or both. Use the same routes for browser sessions and permitted MCP operations.                                 |
-| **Team access**            | Manage users, teams, operation grants, TOTP MFA and recovery codes, and optional generic OIDC sign-in.                                                                          |
-| **Operations**             | Use versioned runbooks, staged connection diagnostics, dependency readiness checks, audit request references, and optional scheduled encrypted backups with restore rehearsal.  |
+</div>
+
+## Overview
+
+NexusSSH is a self-hosted workspace for your servers and Kubernetes clusters. Save your connections once, then open terminals, browse files, run cluster commands, and manage team access from a browser.
+
+It also ships with a built-in [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server, so AI assistants can work on your infrastructure **without ever receiving your SSH passwords, private keys, Kubernetes tokens, or kubeconfig files**. Credentials stay encrypted on your deployment. AI clients connect with scoped, expiring, revocable tokens, and NexusSSH runs only the operations you have granted them. Sensitive operations wait for human approval.
+
+## Features
+
+| Area                       | Capabilities                                                                                                                                                 |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Centralized workspace**  | Nested folders for servers and clusters, search, tags, favorites, recent connections, split views, a command palette, and saved workspace presets.          |
+| **Browser SSH**            | Interactive terminals with pinned host keys, session resume, snippets, search, command suggestions, and broadcast input across sessions.                     |
+| **Remote files**           | SFTP browsing, resumable uploads with progress, and a Monaco editor with change previews, conflict detection, and optional encrypted file history.            |
+| **Kubernetes**             | Kubeconfig import with context and namespace selection, a cluster command console, resource browsing, and pod logs.                                          |
+| **AI access through MCP**  | Per-agent server, cluster, and tool grants, human approval for commands and mutations, call limits, token revocation, and per-agent activity.                |
+| **Private infrastructure** | Reach targets through saved WireGuard profiles, an SSH bastion, or both. The same routes serve browser sessions and MCP operations.                          |
+| **Team access**            | Users, teams, operation grants, TOTP MFA with recovery codes, and optional OIDC single sign-on.                                                              |
+| **Operations**             | Versioned runbooks, staged connection diagnostics, readiness checks, a searchable audit log, and optional scheduled encrypted backups with restore rehearsal. |
 
 ## Screenshots
 
@@ -79,9 +80,16 @@ Manage your servers, remote files, Kubernetes clusters, team access, and AI agen
   </tr>
 </table>
 
-## Quick start
+## Getting started
 
-Requires Docker with Linux containers and Docker Compose **2.24.4 or newer**. The application builds inside Docker.
+### Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) with Linux containers
+- Docker Compose **2.24.4 or newer**
+
+The application builds inside Docker, so you don't need Node.js to run it.
+
+### Run NexusSSH
 
 ```sh
 git clone https://github.com/nooblk-98/nexusssh.git
@@ -89,35 +97,90 @@ cd nexusssh
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ```
 
-1. Open [http://localhost:8080](http://localhost:8080).
-2. Find the first-run setup token in `docker compose logs nexusssh`, then create your owner account. No default account password is shipped.
-3. Add an SSH identity and server, or import a Kubernetes kubeconfig. Verify SSH fingerprints through a trusted server console before saving them.
-4. Configure destination allowlists for your target networks, then test the connection. Select a WireGuard profile or bastion if the target needs one.
-5. Open a terminal, SFTP session, or cluster console. Configure an agent when you are ready to connect an AI client.
+The development override binds the app to loopback only. The stack is two containers: `nexusssh` (web UI, API, MCP server, and SSH worker behind one gateway) and `redis`.
 
-The local override binds the application to loopback. Installation secrets are generated on first start and retained in the `nexusssh_secrets` volume; application records live in `nexusssh_data`.
+### First sign-in
+
+1. Open [http://localhost:8080](http://localhost:8080).
+2. Copy the first-run setup token from `docker compose logs nexusssh`, then create your owner account. No default password is shipped.
+3. Add an SSH identity and a server, or import a Kubernetes kubeconfig. Verify SSH host fingerprints through a trusted console before saving them.
+4. Under **Settings → Security**, allow the networks your targets live in, then test the connection. Pick a WireGuard profile or bastion if the target needs one.
+5. Open a terminal, an SFTP session, or a cluster console.
+
+Installation secrets are generated on first start and kept in the `nexusssh_secrets` volume. Application records live in `nexusssh_data`.
 
 > [!IMPORTANT]
-> Back up your data and installation secrets. Losing the encryption key makes saved credentials unrecoverable. For a shared or internet-facing installation, configure HTTPS, a stable `APP_URL`, and explicit destination networks using the [deployment guide](docs/DEPLOYMENT.md).
+> Back up both volumes. Losing the encryption key makes saved credentials unrecoverable, and `docker compose down -v` deletes them.
 
-## Connect AI through MCP
+> [!WARNING]
+> Never expose the development override publicly. For a shared or internet-facing installation, put a TLS-terminating reverse proxy in front, set a stable `APP_URL`, and narrow `SSH_ALLOWED_CIDRS` by following the [deployment guide](docs/DEPLOYMENT.md).
 
-NexusSSH acts as the controlled execution layer between your AI client and your infrastructure. The client needs the NexusSSH endpoint and an agent token; it does not need direct SSH access or a copy of your kubeconfig.
+## Connect an AI client through MCP
 
-1. Save and verify your infrastructure connections in NexusSSH.
-2. Create an agent under **Settings → AI Agents**. Choose **Custom** to select its servers, clusters, and permitted tools.
-3. Issue a token and configure it in a compatible remote HTTP MCP client:
+NexusSSH is the controlled execution layer between your AI client and your infrastructure. The client needs only the NexusSSH endpoint and an agent token. It never needs direct SSH access or a copy of your kubeconfig.
 
-   ```text
-   Endpoint:       https://nexusssh.example.com/mcp
-   Authorization:  Bearer <your-agent-token>
+1. Save and verify your connections in NexusSSH.
+2. Under **Settings → AI Agents**, register an agent. Choose **Administrator** for the whole workspace, or **Custom** to pick its servers, clusters, and tools.
+3. Copy the token, which is shown once, into your client's secret store and add the server:
+
+   ```json
+   {
+     "mcpServers": {
+       "nexusssh": {
+         "type": "http",
+         "url": "https://nexusssh.example.com/mcp",
+         "headers": { "Authorization": "Bearer <agent-token>" }
+       }
+     }
+   }
    ```
 
-4. Use permitted tools to inspect infrastructure. Review requests that need human approval in **Settings → Approvals**, then let the requesting agent retry the exact approved operation.
+4. Ask your assistant to inspect disk usage, list Kubernetes resources, or read pod logs. Commands and mutations return an approval request. Approve it under **Settings → Approvals**, and the agent retries the exact approved operation.
 
-For example, an authorized agent can inspect disk usage on a server, list Kubernetes resources, retrieve pod logs, or request approval to restart a service or run a supported cluster command. Scopes and resource grants still apply to every operation.
+> [!NOTE]
+> Use a client that supports remote HTTP MCP with bearer authentication. Clients that require an OAuth consent flow can't authenticate to this release. Browser OIDC sign-in is separate from MCP authentication. See the [MCP client guide](docs/CLIENTS.md) for the tested flow, approvals, and async tasks.
 
-**Client compatibility:** use a client that supports remote HTTP MCP with bearer authentication. Clients requiring an OAuth consent flow cannot authenticate directly to this MCP release. Browser OIDC sign-in is separate from MCP authentication. See the [MCP client guide](docs/CLIENTS.md) for the tested SDK flow and compatibility details.
+## How it works
+
+```mermaid
+flowchart LR
+  B[Browser] --> G[Gateway :8080]
+  A[AI client] -- bearer token --> G
+  G --> W[Web UI]
+  G --> API[API]
+  G --> M[MCP server]
+  M --> API
+  API -- task ID --> R[(Redis)]
+  R --> K[SSH worker]
+  API --- D[(SQLite)]
+  K --> V[WireGuard / bastion]
+  API --> V
+  V --> T[Servers and clusters]
+```
+
+The API checks every request against the caller's grants, consumes an exact human approval when one is required, and queues only a task ID. The worker rechecks authorization before it receives an in-memory SSH configuration. Execution records keep metadata and argument digests, not raw output. Read the [architecture](docs/ARCHITECTURE.md) and [security](docs/SECURITY.md) notes for the full model.
+
+## Local development
+
+To work on NexusSSH itself, you need Node.js 24 and a Redis instance on `127.0.0.1:6379`.
+
+```sh
+npm ci
+npm run setup        # creates .env with generated secrets
+npm run db:generate
+npm run db:migrate
+npm run dev          # web on :3000, API on :3001, MCP on :3002
+```
+
+| Command             | Purpose                                    |
+| ------------------- | ------------------------------------------ |
+| `npm run lint`      | Lint all workspaces                        |
+| `npm run typecheck` | Type-check the API, worker, and web UI     |
+| `npm test`          | Run unit tests with Vitest                 |
+| `npm run test:e2e`  | Run Playwright browser tests               |
+| `npm run build`     | Build all workspaces for production        |
+
+REST route documentation is served at `/api/docs` on every installation.
 
 ## Documentation
 
@@ -133,21 +196,21 @@ For example, an authorized agent can inspect disk usage on a server, list Kubern
 | [Security](docs/SECURITY.md)         | Credential handling, permissions, and operational constraints             |
 | [Verification](docs/STATUS.md)       | Current coverage and remaining work                                       |
 
-REST route documentation is available at `/api/docs` on your installation.
-
-## Repository social card
-
 <details>
-<summary>Preview and download the social card</summary>
+<summary>Repository social card</summary>
 
 ![NexusSSH social card — centralized web-based SSH and Kubernetes management with MCP support](docs/assets/nexusssh-social-card.png)
 
 [Download PNG](docs/assets/nexusssh-social-card.png) · [Editable SVG](docs/assets/nexusssh-social-card.svg)
 
-The PNG is **1280 × 640 pixels**, ready for repository link previews. To activate it on GitHub, upload it under **Settings → Social preview → Edit → Upload an image**, following [GitHub's social preview guide](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/customizing-your-repositorys-social-media-preview).
+The PNG is **1280 × 640 pixels**. To use it for link previews, upload it under **Settings → Social preview → Edit → Upload an image**, following [GitHub's social preview guide](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/customizing-your-repositorys-social-media-preview).
 
 </details>
 
 ---
 
-Built by [Lahiru S Liyanage](https://github.com/nooblk-98) · [Release notes](CHANGELOG.md) · [License](LICENSE)
+<div align="center">
+
+Built by [Lahiru S Liyanage](https://github.com/nooblk-98) · [Release notes](CHANGELOG.md)
+
+</div>
