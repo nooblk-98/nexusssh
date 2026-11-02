@@ -1,6 +1,7 @@
 "use client";
 import dynamic from "next/dynamic";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { WorkspacePresets } from "./workspace-presets";
 import {
   ChevronRight,
   Columns2,
@@ -38,6 +39,7 @@ const layouts = [
   { n: 4, label: "Grid (2 × 2)", icon: Grid2x2 },
 ];
 export function Workspace() {
+  const [presets, setPresets] = useState(false);
   const {
     tabs,
     active,
@@ -189,6 +191,14 @@ export function Workspace() {
         </div>
         <button
           className="tabbar-end"
+          aria-label="Workspace presets"
+          title="Workspace presets"
+          onClick={() => setPresets(true)}
+        >
+          <Folder size={16} />
+        </button>
+        <button
+          className="tabbar-end"
           aria-label="Layout"
           title="Layout"
           onClick={(e) =>
@@ -254,6 +264,7 @@ export function Workspace() {
           );
         })}
       </div>
+      {presets && <WorkspacePresets onClose={() => setPresets(false)} />}
     </main>
   );
 }

@@ -27,9 +27,26 @@ export const sftp = (serverId: string) => {
         base + "search?" + q({ path, q: term }),
       ),
     read: (path: string) =>
-      api<{ content: string; size: number }>(base + "read?" + q({ path })),
-    write: (path: string, content: string) =>
-      api(base + "write", { path, content }),
+      api<{
+        content: string;
+        size: number;
+        version: string;
+        historyEnabled: boolean;
+      }>(base + "read?" + q({ path })),
+    write: (path: string, content: string, expectedVersion?: string) =>
+      api<{ version: string }>(base + "write", {
+        path,
+        content,
+        expectedVersion,
+      }),
+    history: (path: string) =>
+      api<{ id: string; createdAt: string; digest: string }[]>(
+        base + "history?" + q({ path }),
+      ),
+    historyContent: (path: string, id: string) =>
+      api<{ content: string; digest: string }>(
+        base + "history/" + id + "?" + q({ path }),
+      ),
     mkdir: (path: string) => api(base + "mkdir", { path }),
     remove: (paths: string[]) => api(base + "delete", { paths }),
     rename: (path: string, destination: string) =>

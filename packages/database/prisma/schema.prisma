@@ -56,6 +56,7 @@ model WebSession {
   userId String
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   tokenHash String @unique
+  oidcIdentityId String?
   expiresAt DateTime
 }
 
@@ -466,9 +467,66 @@ model AuditEvent {
   action String
   status String
   correlationId String
+  requestId String?
+  @@index([requestId])
   durationMs Int?
   @@index([organizationId, createdAt])
   @@index([principalId, createdAt])
+}
+
+model WorkspacePreset {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organizationId String
+  userId String
+  name String
+  layout String
+  @@unique([userId, name])
+  @@index([organizationId, userId])
+}
+
+model Runbook {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  organizationId String
+  name String
+  revisions RunbookRevision[]
+  @@unique([organizationId, name])
+}
+
+model RunbookRevision {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  runbookId String
+  runbook Runbook @relation(fields: [runbookId], references: [id], onDelete: Cascade)
+  principalId String
+  version Int
+  encryptedDefinition String
+  @@unique([runbookId, version])
+}
+
+model FileRevision {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  organizationId String
+  principalId String
+  serverId String
+  connectionDigest String
+  path String
+  digest String
+  encryptedContent String
+  @@index([organizationId, serverId, path, createdAt])
+}
+
+model OidcIdentity {
+  id String @id @default(uuid())
+  createdAt DateTime @default(now())
+  userId String
+  issuer String
+  subject String
+  @@unique([issuer, subject])
+  @@index([userId])
 }
 
 model FileTransfer {

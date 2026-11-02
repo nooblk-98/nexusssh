@@ -87,6 +87,9 @@ async function preflightDefaults(tx: Prisma.TransactionClient, org: string, type
 import { finishTask } from "./task-finish.js";
 import { saveFolder, deleteFolder } from "./folders.js";
 import { markSshReachable } from "./connection-health.js";
+import { readiness } from "./readiness.js";
+import { correlationId as currentRequestId } from "../../../packages/shared/request-context.js";
+import { createWebSession } from "./sessions.js";
 import { enqueueHealthBatch } from "./health.js";
 import {
   WORKSPACE_MANAGE,
@@ -263,6 +266,11 @@ export class AppController {
   @Get("health") health() {
     return { status: "ok", service: "api" };
   }
+  @Get("ready") async ready(@Res({ passthrough: true }) res: Response) {
+    const result = await readiness();
+    res.status(result.status === "ready" ? 200 : 503);
+    return result;
+  }
   @Get("auth/status") async status() {
     return { setupRequired: (await db.user.count()) === 0 };
   }
@@ -380,23 +388,7 @@ export class AppController {
       )
         throw new UnauthorizedException("Authenticator code already used");
     }
-    const token = secret();
-    await db.webSession.create({
-      data: {
-        userId: user.id,
-        tokenHash: hash(token),
-        expiresAt: new Date(Date.now() + 28800000),
-      },
-    });
-    res.cookie("nexus_session", token, {
-      httpOnly: true,
-      secure: config.APP_URL
-        ? config.NODE_ENV === "production"
-        : req.headers.origin?.startsWith("https://") === true,
-      sameSite: "strict",
-      path: "/",
-      maxAge: 28800000,
-    });
+    await createWebSession(user.id, req, res);
     await audit(p, "login", "success");
     return { authenticated: true };
   }
@@ -806,7 +798,7 @@ export class AppController {
           await tx.auditEvent.create({ data: {
             organizationId: p.organizationId, principalId: p.id,
             action: "server_created", status: "success", serverId: created.id,
-            correlationId: randomUUID(),
+            correlationId: randomUUID(), requestId: currentRequestId(),
           } });
           return created;
         });
@@ -1349,7 +1341,7 @@ export class AppController {
       if (agent.level === "administrator") throw new BadRequestException("Administrator access is automatic. Choose Custom to edit grants.");
       const operations = JSON.stringify([...new Set(input.operations)]);
       await tx.agentPermission.upsert({ where: { agentId_serverId: { agentId: id, serverId: input.serverId } }, create: { agentId: id, serverId: input.serverId, operations }, update: { operations } });
-      await tx.auditEvent.create({ data: { organizationId: p.organizationId, principalId: p.id, action: "agent_grant_updated", status: "success", serverId: input.serverId, correlationId: randomUUID() } });
+      await tx.auditEvent.create({ data: { organizationId: p.organizationId, principalId: p.id, action: "agent_grant_updated", status: "success", serverId: input.serverId, correlationId: randomUUID(), requestId: currentRequestId() } });
     });
     return { agentId: id, serverId: input.serverId, operations: [...new Set(input.operations)] };
   }
@@ -1364,7 +1356,7 @@ export class AppController {
       if (!server) throw new NotFoundException("Server unavailable");
       if (agent.level === "administrator") throw new BadRequestException("Administrator access is automatic. Choose Custom to edit grants.");
       const result = await tx.agentPermission.deleteMany({ where: { agentId: id, serverId } });
-      await tx.auditEvent.create({ data: { organizationId: p.organizationId, principalId: p.id, action: "agent_grant_revoked", status: "success", serverId, correlationId: randomUUID() } });
+      await tx.auditEvent.create({ data: { organizationId: p.organizationId, principalId: p.id, action: "agent_grant_revoked", status: "success", serverId, correlationId: randomUUID(), requestId: currentRequestId() } });
       return result.count > 0;
     });
     return { agentId: id, serverId, removed };
@@ -1510,6 +1502,7 @@ export class AppController {
     @Req() req: Request,
     @Query("action") action?: string,
     @Query("cursor") cursor?: string,
+    @Query("requestId") requestId?: string,
   ) {
     const p = await authenticate(req);
     admin(p);
@@ -1517,6 +1510,7 @@ export class AppController {
       where: {
         organizationId: p.organizationId,
         ...(action ? { action: { contains: action.slice(0, 100) } } : {}),
+        ...(requestId ? { requestId: z.uuid().parse(requestId) } : {}),
       },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: 100,

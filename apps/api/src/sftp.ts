@@ -1,5 +1,8 @@
 import {
   BadRequestException,
+  ConflictException,
+  HttpException,
+  NotFoundException,
   Body,
   Controller,
   Get,
@@ -31,6 +34,9 @@ import {
 } from "../../../packages/ssh-core/index.js";
 import type { Principal } from "../../../packages/policy-engine/index.js";
 import { markSshReachable } from "./connection-health.js";
+import { db } from "../../../packages/database/index.js";
+import { canonical, hash, seal, unseal } from "../../../packages/shared/crypto.js";
+import { fileVersion, withFileLock } from "../../../packages/shared/file-version.js";
 
 // Interactive SFTP for signed-in people, alongside the interactive terminal:
 // the same per-operation permissions and audit, but no approval step (that
@@ -44,6 +50,7 @@ type Session = {
   client: Client;
   sftp: SFTPWrapper;
   root: string;
+  connectionDigest: string;
   timer?: NodeJS.Timeout;
 };
 const pool = new Map<string, Promise<Session>>();
@@ -57,7 +64,7 @@ async function session(p: Principal, serverId: string): Promise<Session> {
       client.on("close", () => pool.delete(key));
       client.on("error", () => pool.delete(key));
       await markSshReachable(p.organizationId, serverId, c).catch(() => {});
-      return { client, sftp: await openSftp(client), root: c.fileRoot };
+      return { client, sftp: await openSftp(client), root: c.fileRoot, connectionDigest: hash(canonical({ host: c.host, port: c.port, username: c.username, fingerprint: c.fingerprint, root: c.fileRoot })) };
     })();
     pool.set(key, pending);
     pending.catch(() => pool.delete(key));
@@ -79,7 +86,7 @@ const sftpErrors: Record<number, string> = {
   4: "The server could not complete the operation",
 };
 function failure(e: unknown): never {
-  if (e instanceof BadRequestException) throw e;
+  if (e instanceof HttpException) throw e;
   const err = e as { code?: number; message?: string };
   const message = err.message || "";
   if (typeof err.code === "number" && sftpErrors[err.code])
@@ -313,7 +320,7 @@ export class SftpController {
         throw new BadRequestException(
           "This looks like a binary file; download it instead",
         );
-      return { path: real, content: data.toString("utf8"), size: data.length };
+      return { path: real, content: data.toString("utf8"), size: data.length, version: fileVersion(data), historyEnabled: config.SFTP_FILE_HISTORY };
     } catch (e) {
       failure(e);
     }
@@ -324,18 +331,50 @@ export class SftpController {
     @Body() body: unknown,
   ) {
     const a = z
-      .object({ path, content: z.string().max(EDIT_LIMIT) })
+      .object({ path, content: z.string().max(EDIT_LIMIT), expectedVersion: z.string().regex(/^[a-f0-9]{64}$/).optional() })
       .strict()
       .parse(body);
-    const { p, sftp, root } = await open(req, id, "ssh_write_file");
+    const { p, sftp, root, connectionDigest } = await open(req, id, "ssh_write_file");
     try {
       const target = await safePath(sftp, root, a.path, true);
-      await writeAtomic(sftp, target, Buffer.from(a.content, "utf8"));
+      const data = Buffer.from(a.content, "utf8");
+      if (data.length > EDIT_LIMIT) throw new BadRequestException("File exceeds the 5 MB editor limit");
+      await withFileLock(`${p.organizationId}:${id}:${target}`, async () => {
+        let previous: Buffer | undefined;
+        if (a.expectedVersion || config.SFTP_FILE_HISTORY) {
+          try { previous = await readAll(sftp, target, EDIT_LIMIT); }
+          catch (e) { if ((e as { code?: number }).code !== 2) throw e; }
+          if (a.expectedVersion && (!previous || fileVersion(previous) !== a.expectedVersion))
+            throw new ConflictException("The remote file changed since you opened it. Compare changes or reload before saving.");
+        }
+        if (config.SFTP_FILE_HISTORY && previous && !previous.equals(data)) {
+          const revisionId = randomUUID();
+          await db.fileRevision.create({ data: { id: revisionId, organizationId: p.organizationId, principalId: p.id, serverId: id, connectionDigest, path: target, digest: fileVersion(previous), encryptedContent: seal(previous.toString("utf8"), config.ENCRYPTION_KEY, `${p.organizationId}:file:${revisionId}`) } });
+          const versions = await db.fileRevision.findMany({ where: { organizationId: p.organizationId, serverId: id, path: target }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: 10, select: { id: true } });
+          await db.fileRevision.deleteMany({ where: { id: { in: versions.map((v) => v.id) } } });
+        }
+        await writeAtomic(sftp, target, data);
+      });
       await audit(p, "sftp_write", "success", id);
-      return { path: target, bytes: Buffer.byteLength(a.content) };
+      return { path: target, bytes: data.length, version: fileVersion(data) };
     } catch (e) {
       failure(e);
     }
+  }
+  @Get("history") async history(@Req() req: Request, @Param("serverId") id: string, @Query("path") file: string) {
+    const { p, sftp, root, connectionDigest } = await open(req, id, "ssh_read_file");
+    if (!config.SFTP_FILE_HISTORY) return [];
+    const target = await safePath(sftp, root, path.parse(file));
+    return db.fileRevision.findMany({ where: { organizationId: p.organizationId, serverId: id, path: target, connectionDigest, createdAt: { gt: new Date(Date.now() - config.SFTP_HISTORY_DAYS * 86400000) } }, select: { id: true, createdAt: true, digest: true }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 10 });
+  }
+  @Get("history/:revisionId") async historyContent(@Req() req: Request, @Param("serverId") id: string, @Param("revisionId") revisionId: string, @Query("path") file: string) {
+    const { p, sftp, root, connectionDigest } = await open(req, id, "ssh_read_file");
+    if (!config.SFTP_FILE_HISTORY) throw new NotFoundException("File history is disabled");
+    const target = await safePath(sftp, root, path.parse(file));
+    const revision = await db.fileRevision.findFirst({ where: { id: z.uuid().parse(revisionId), organizationId: p.organizationId, serverId: id, connectionDigest, path: target, createdAt: { gt: new Date(Date.now() - config.SFTP_HISTORY_DAYS * 86400000) } } });
+    if (!revision) throw new NotFoundException("File version unavailable");
+    await audit(p, "sftp_history_read", "success", id);
+    return { content: unseal<string>(revision.encryptedContent, config.ENCRYPTION_KEY, `${p.organizationId}:file:${revision.id}`), digest: revision.digest };
   }
   @Post("mkdir") async mkdir(
     @Req() req: Request,

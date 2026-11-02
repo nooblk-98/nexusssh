@@ -2187,3 +2187,7 @@ p {
   line-height: 16px;
   text-align: center;
 }
+
+/* Keep operational sections readable across desktop and narrow settings layouts. */
+.operations-page > section { margin-bottom: 16px; }
+.operations-page .mono { overflow-wrap: anywhere; }

@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title description">
+  <title id="title">NexusSSH repository social card</title>
+  <desc id="description">NexusSSH: a centralized, self-hosted web-based SSH and Kubernetes manager with MCP support for AI. Infrastructure credentials stay on your deployment.</desc>
+  <defs>
+    <linearGradient id="background" x2="1" y2="1"><stop stop-color="#07111f"/><stop offset="1" stop-color="#11243a"/></linearGradient>
+    <linearGradient id="accent" x2="1" y2="1"><stop stop-color="#22d3ee"/><stop offset="1" stop-color="#6366f1"/></linearGradient>
+    <linearGradient id="headline" x2="1" y2="0"><stop stop-color="#f0fdfa"/><stop offset="1" stop-color="#67e8f9"/></linearGradient>
+    <radialGradient id="glow"><stop stop-color="#0891b2" stop-opacity=".23"/><stop offset="1" stop-color="#0891b2" stop-opacity="0"/></radialGradient>
+    <pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="#45617e" opacity=".32"/></pattern>
+  </defs>
+  <rect width="1280" height="640" fill="url(#background)"/>
+  <rect x="824" width="456" height="480" fill="url(#dots)"/>
+  <ellipse cx="1050" cy="253" rx="292" ry="270" fill="url(#glow)"/>
+  <path d="M0 2h1280" stroke="#22d3ee" stroke-width="4"/>
+
+  <g font-family="Segoe UI, Inter, Arial, sans-serif">
+    <rect x="72" y="60" width="58" height="58" rx="16" fill="url(#accent)"/>
+    <g transform="translate(84 73) scale(2.1)" fill="#07111f"><path d="M2 2.5 9 8l-7 5.5V11l4-3-4-3z"/><rect x="8.5" y="12" width="6" height="2" rx="1"/></g>
+    <text x="149" y="103" font-size="43" font-weight="700" letter-spacing="-1.3" fill="#f1f5f9">NexusSSH</text>
+    <rect x="1040" y="71" width="168" height="35" rx="17.5" fill="#10343b" stroke="#23515b"/>
+    <circle cx="1061" cy="89" r="3.5" fill="#5eead4"/>
+    <text x="1076" y="94" font-size="13" font-weight="600" letter-spacing="1.4" fill="#b5f5e8">SELF-HOSTED</text>
+
+    <text x="69" y="223" font-size="70" font-weight="700" letter-spacing="-2.3" fill="#f8fafc">One workspace.</text>
+    <text x="69" y="309" font-size="70" font-weight="700" letter-spacing="-2.3" fill="url(#headline)">Your infrastructure.</text>
+    <text x="75" y="369" font-size="26" fill="#b1c4da">Centralized web-based SSH + Kubernetes.</text>
+    <text x="75" y="410" font-size="26" fill="#b1c4da">MCP access for AI. Credentials stay with you.</text>
+
+    <g fill="none" stroke="#4c7692" stroke-width="1.5">
+      <circle cx="1048" cy="257" r="73" stroke-opacity=".55"/>
+      <circle cx="1048" cy="257" r="104" stroke-opacity=".25"/>
+      <circle cx="1048" cy="257" r="131" stroke-dasharray="3 10" stroke-opacity=".3"/>
+      <path d="m984 170 45 48m54 52 50 50m-91-26-53 77" stroke="#6ca2af" stroke-width="2"/>
+    </g>
+    <rect x="1009" y="218" width="78" height="78" rx="23" fill="url(#accent)"/>
+    <g transform="translate(1025 233) scale(3)" fill="#07111f"><path d="M2 2.5 9 8l-7 5.5V11l4-3-4-3z"/><rect x="8.5" y="12" width="6" height="2" rx="1"/></g>
+    <rect x="922" y="143" width="112" height="48" rx="12" fill="#12283e" stroke="#406077"/>
+    <text x="978" y="174" text-anchor="middle" font-size="18" font-weight="600" fill="#bae6fd">SSH</text>
+    <rect x="1116" y="301" width="92" height="48" rx="12" fill="#17283e" stroke="#52608b"/>
+    <text x="1162" y="332" text-anchor="middle" font-size="18" font-weight="600" fill="#c7d2fe">MCP</text>
+    <rect x="906" y="371" width="151" height="48" rx="12" fill="#12283e" stroke="#406077"/>
+    <text x="981.5" y="402" text-anchor="middle" font-size="18" font-weight="600" fill="#bae6fd">Kubernetes</text>
+
+    <path d="M72 469h1136" stroke="#2b425b"/>
+    <g font-size="13" font-weight="600" letter-spacing="1.7" fill="#8dabc5">
+      <text x="75" y="511">BROWSER SSH</text>
+      <circle cx="212" cy="506" r="2" fill="#3b8a98"/>
+      <text x="232" y="511">KUBERNETES</text>
+      <circle cx="365" cy="506" r="2" fill="#3b8a98"/>
+      <text x="385" y="511">MCP FOR AI</text>
+    </g>
+    <text x="75" y="576" font-family="Consolas, monospace" font-size="19" fill="#c9d9e8">github.com/nooblk-98/nexusssh</text>
+    <path d="m875 559 8 3v6c0 5-8 9-8 9s-8-4-8-9v-6z" fill="none" stroke="#5eead4" stroke-width="1.6"/>
+    <path d="m871 567 3 3 5-6" fill="none" stroke="#5eead4" stroke-width="1.6"/>
+    <text x="900" y="574" font-size="17" fill="#9ebacd">Scoped access · Human approvals</text>
+  </g>
+</svg>

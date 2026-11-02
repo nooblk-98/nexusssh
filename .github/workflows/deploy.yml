@@ -1,10 +1,16 @@
 name: Deploy
 
 on:
-  push:
-    branches: [development]
+  workflow_call:
+    secrets:
+      DEPLOY_WEBHOOK_URL:
+        required: true
 
-permissions: {}
+permissions:
+  contents: read
+concurrency:
+  group: deployment-development
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -13,8 +19,15 @@ jobs:
     steps:
       - name: Trigger deployment webhook
         env:
+          GH_TOKEN: ${{ github.token }}
           DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
         run: |
+          set -euo pipefail
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/development" --jq .object.sha)
+          if [ "$latest" != "$GITHUB_SHA" ]; then
+            echo "Skipping superseded commit $GITHUB_SHA."
+            exit 0
+          fi
           if [ -z "$DEPLOY_WEBHOOK_URL" ]; then
             echo "::error::The DEPLOY_WEBHOOK_URL repository secret is not configured."
             exit 1
@@ -22,6 +35,8 @@ jobs:
 
           status=$(curl --fail --silent --show-error \
             --connect-timeout 10 --max-time 60 \
+            --header 'Content-Type: application/json' \
+            --data "{\"ref\":\"development\",\"sha\":\"$GITHUB_SHA\"}" \
             --request POST --output /dev/null --write-out '%{http_code}' \
             "$DEPLOY_WEBHOOK_URL")
 

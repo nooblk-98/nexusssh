@@ -1,5 +1,7 @@
 # Deployment and operations
 
+See [operations and workflow configuration](OPERATIONS.md) for readiness probes, verified deployment gating, scheduled encrypted backups, file history and generic OIDC sign-in.
+
 ## Linux VPS, Lightsail and EC2
 
 Use a Linux host with Docker Engine and Compose 2.24.4+. Ubuntu/Debian are straightforward defaults. Ordinary target SSH connections do not need AWS API credentials. Provision the host, domain, reverse proxy and security-group/firewall rules yourself: allow HTTPS to your reverse proxy, and your administrative maintenance channel. Allow SSH egress only to approved target networks.
@@ -14,15 +16,16 @@ Containers run as the Node user where practical. Redis has no published port. Ne
 
 ## Automatic deployment from GitHub
 
-The `Deploy` workflow sends a POST to the URL in the `DEPLOY_WEBHOOK_URL`
-repository secret on every push to `development`. Configure the secret under
-Settings > Secrets and variables > Actions. The webhook URL stays out of the
-repository and workflow logs.
+The `Verification` workflow calls the reusable `Deploy` workflow only after
+checks pass for a push to `development`. Deployments run serially and skip
+superseded commits. Configure `DEPLOY_WEBHOOK_URL` under Settings > Secrets
+and variables > Actions; the URL stays out of the repository and workflow logs.
 
-Deployment runs independently of the `Verification` workflow. A successful
-run means the webhook accepted the request; check the stack in Portainer for
-deployment completion. Missing secrets, connection errors, timeouts, and
-non-2xx responses fail the workflow.
+The POST includes the verified branch and commit SHA. Configure the receiving
+deployment service to honor that SHA rather than independently pulling a moving
+branch. A successful workflow means the webhook accepted the request; check the
+deployment service for completion. Missing secrets, connection errors, timeouts,
+and non-2xx responses fail the workflow. See [operations](OPERATIONS.md) for details.
 
 ## Backup
 

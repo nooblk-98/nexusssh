@@ -2,10 +2,17 @@ import { describe, it, expect } from "vitest";
 import {
   parseWireGuard,
   wireguardSummary,
+  wireguardError,
 } from "../../packages/shared/wireguard.js";
 const key = Buffer.alloc(32, 1).toString("base64");
 const source = `[Interface]\nPrivateKey = ${key}\nAddress = 10.77.0.2/32, fd00::2/128\nDNS = 10.77.0.1\n[Peer]\nPublicKey = ${key}\nPresharedKey = ${key}\nEndpoint = vpn.example.test:51820\nAllowedIPs = 10.0.0.0/8, fd00::/64\nPersistentKeepalive = 25`;
 describe("WireGuard imports", () => {
+  it("identifies invalid fields without echoing submitted keys", () => {
+    try { parseWireGuard(source.replace("10.77.0.2/32", "invalid")); }
+    catch (error) { expect(wireguardError(error)).toContain("Address:"); expect(wireguardError(error)).not.toContain(key); }
+    try { parseWireGuard(source.replace(`PublicKey = ${key}`, "PublicKey = confidential-invalid-key")); }
+    catch (error) { expect(wireguardError(error)).toContain("Peer 1: PublicKey:"); expect(wireguardError(error)).not.toContain("confidential-invalid-key"); }
+  });
   it.each([
     ["10.77.0.2", ["10.77.0.2/32"]],
     ["fd00::2", ["fd00::2/128"]],

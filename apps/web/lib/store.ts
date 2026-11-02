@@ -2,6 +2,7 @@
 import { useEffect } from "react";
 import { create } from "zustand";
 import { api, notify, queryClient, uid, useApi, type Row } from "./api";
+import { confirmEditorClose } from "./editor-guards";
 
 export type Prefs = {
   uiTheme: "auto" | "light" | "dark";
@@ -127,16 +128,20 @@ export const useWorkspace = create<Workspace>((set, get) => ({
     set((s) => ({ tabs: [...s.tabs, { ...t, id }], active: id }));
     return id;
   },
-  close: (id) =>
-    set((s) => {
-      const i = s.tabs.findIndex((t) => t.id === id);
-      const tabs = s.tabs.filter((t) => t.id !== id);
-      const active =
-        s.active === id
-          ? (tabs[Math.min(i, tabs.length - 1)]?.id ?? null)
-          : s.active;
-      return { tabs, active, broadcast: s.broadcast.filter((b) => b !== id) };
-    }),
+  close: (id) => {
+    void confirmEditorClose(id).then((allowed) => {
+      if (!allowed) return;
+      set((s) => {
+        const i = s.tabs.findIndex((t) => t.id === id);
+        const tabs = s.tabs.filter((t) => t.id !== id);
+        const active =
+          s.active === id
+            ? (tabs[Math.min(i, tabs.length - 1)]?.id ?? null)
+            : s.active;
+        return { tabs, active, broadcast: s.broadcast.filter((b) => b !== id) };
+      });
+    });
+  },
   activate: (active) => set({ active }),
   setStatus: (id, status) =>
     set((s) => ({

@@ -1066,9 +1066,9 @@ export function Approvals() {
 
 export function AuditLog() {
   const [filter, setFilter] = useState("");
+  const [reference, setReference] = useState("");
   const q = useApi<Row[]>(
-    "audit" +
-      (filter.trim() ? "?action=" + encodeURIComponent(filter.trim()) : ""),
+    "audit?" + new URLSearchParams({ ...(filter.trim() ? { action: filter.trim() } : {}), ...(/^[a-f0-9-]{36}$/i.test(reference.trim()) ? { requestId: reference.trim() } : {}) }),
     { interval: 30000 },
   );
   const list = q.data || [];
@@ -1111,6 +1111,7 @@ export function AuditLog() {
           onChange={setFilter}
           placeholder="Filter by action..."
         />
+        <SearchInput value={reference} onChange={setReference} placeholder="Find request reference..." />
         {list.length ? (
           <table className="table">
             <thead>
@@ -1120,6 +1121,7 @@ export function AuditLog() {
                 <th>Server</th>
                 <th>Status</th>
                 <th>Time</th>
+                <th>Request reference</th>
               </tr>
             </thead>
             <tbody>
@@ -1145,6 +1147,7 @@ export function AuditLog() {
                     </span>
                   </td>
                   <td>{new Date(e.createdAt).toLocaleString()}</td>
+                  <td className="mono small">{e.requestId || "-"}</td>
                 </tr>
               ))}
             </tbody>

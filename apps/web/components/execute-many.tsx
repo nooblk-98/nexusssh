@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { api, type Row } from "../lib/api";
 import { folderPath, type Folder } from "../lib/folders";
 import { Button, Drawer, Field } from "./ui";
+import { RunbookPicker } from "./runbooks";
 
 type Result = { serverId: string; status: string; result?: Row; error?: string; taskId?: string };
 type Request = { serverIds: string[]; command: string; timeoutMs: number; approvalId: string; status: string };
@@ -59,6 +60,7 @@ export function ExecuteMany({ servers, groups, tags, selectedIds, onClose }: { s
   }
   return <Drawer title="Run command on servers" wide onClose={() => !busy && onClose()} footer={<Button variant="secondary" disabled={busy} onClick={onClose}>Close</Button>}>
     <p className="small">Choose an exact set of 1–10 servers. The command requires administrator approval before it runs.</p>
+    <RunbookPicker disabled={frozen || busy} onPreview={(command, timeoutMs) => { setCommand(command); setTimeoutValue(String(timeoutMs)); }} />
     {error && <div className="alert danger" role="alert">{error}</div>}
     <Field label="Choose servers from"><select className="select" disabled={frozen} value={source} onChange={(event) => setSource(event.target.value as typeof source)}><option value="manual">Selected servers</option><option value="folder">Folder and subfolders</option><option value="tag">Tag</option></select></Field>
     {source === "folder" && <Field label="Folder"><select className="select" disabled={frozen} value={folderId} onChange={(event) => setFolderId(event.target.value)}><option value="">Choose folder</option>{groups.map((group) => <option key={group.id} value={group.id}>{folderPath(groups, group.id).map((part) => part.name).join(" / ")}</option>)}</select></Field>}

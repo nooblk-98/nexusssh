@@ -47,6 +47,47 @@ export const wireguardSchema = z
   })
   .strict();
 export type WireGuardConfig = z.infer<typeof wireguardSchema>;
+export function wireguardError(error: unknown): string {
+  if (!(error instanceof z.ZodError))
+    return error instanceof Error
+      ? error.message
+      : "Invalid WireGuard configuration";
+  const fields: Record<string, string> = {
+    privateKey: "PrivateKey: use a 32-byte base64 key",
+    addresses: "Address: use valid IPv4/IPv6 addresses or CIDRs",
+    dns: "DNS: use IP addresses without search suffixes",
+    mtu: "MTU: use a whole number from 1280 to 1500",
+    listenPort: "ListenPort: use a whole number from 0 to 65535",
+    publicKey: "PublicKey: use a 32-byte base64 key",
+    presharedKey: "PresharedKey: use a 32-byte base64 key",
+    endpoint: "Endpoint: use hostname:port or [IPv6]:port",
+    allowedIPs: "AllowedIPs: use valid IP addresses or CIDRs",
+    persistentKeepalive:
+      "PersistentKeepalive: use a whole number from 0 to 65535",
+  };
+  return [
+    ...new Set(
+      error.issues.map((issue) => {
+        const field = issue.path.at(-1);
+        const known = issue.path.find(
+          (part) => typeof part === "string" && part in fields,
+        );
+        const peer =
+          issue.path[0] === "peers" && typeof issue.path[1] === "number"
+            ? `Peer ${issue.path[1] + 1}: `
+            : "";
+        return (
+          peer +
+          (known
+            ? fields[String(known)]
+            : field === "peers"
+              ? "Include at least one valid [Peer] section"
+              : "Check the Interface and Peer sections")
+        );
+      }),
+    ),
+  ].join("; ");
+}
 export function parseWireGuard(text: string): WireGuardConfig {
   if (text.length > 65536)
     throw new Error("WireGuard configuration is too large");

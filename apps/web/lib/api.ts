@@ -6,8 +6,9 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public readonly status: number,
+    public readonly requestId?: string,
   ) {
-    super(message);
+    super(message + (requestId ? ` [reference: ${requestId}]` : ""));
   }
 }
 // crypto.randomUUID exists only on HTTPS and localhost; workspaces are often
@@ -40,6 +41,7 @@ export async function api<T = Row>(
           ? data.message.join(", ")
           : JSON.stringify(data.message || data),
       response.status,
+      response.headers.get("X-Correlation-ID") || data.requestId,
     );
   return data;
 }

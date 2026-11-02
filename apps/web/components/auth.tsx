@@ -5,6 +5,8 @@ import { Button, Field, Logo } from "./ui";
 
 export function Auth({ onLogin }: { onLogin: () => void }) {
   const { data, error: statusError, refetch } = useApi<Row>("auth/status");
+  const sso = useApi<{ enabled: boolean; label: string }>("auth/oidc/options");
+  const [ssoMfa, setSsoMfa] = useState(false);
   const [invitation, setInvitation] = useState("");
   useEffect(
     () =>
@@ -15,6 +17,14 @@ export function Auth({ onLogin }: { onLogin: () => void }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [needCode, setNeedCode] = useState(false);
+  useEffect(() => {
+    const state = new URLSearchParams(location.search).get("sso");
+    setSsoMfa(state === "mfa");
+    if (state === "failed")
+      setError(
+        "Single sign-on failed. Ask an administrator to check the identity mapping or use your local account.",
+      );
+  }, []);
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
@@ -50,6 +60,58 @@ export function Auth({ onLogin }: { onLogin: () => void }) {
       </div>
     );
   if (!data) return <div className="splash">Opening your workspace…</div>;
+  if (ssoMfa)
+    return (
+      <div className="auth">
+        <form
+          className="auth-card"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const code = new FormData(e.currentTarget).get("code");
+            setBusy(true);
+            setError("");
+            void api("auth/oidc/complete", { code })
+              .then(() => {
+                history.replaceState(null, "", "/");
+                onLogin();
+              })
+              .catch((e) => setError(e.message))
+              .finally(() => setBusy(false));
+          }}
+        >
+          <Logo />
+          <h1>Verify your account</h1>
+          <p>Enter an authenticator or recovery code to finish signing in.</p>
+          {error && (
+            <p className="alert danger" role="alert">
+              {error}
+            </p>
+          )}
+          <Field label="Authenticator or recovery code">
+            <input
+              className="input"
+              name="code"
+              required
+              maxLength={30}
+              autoComplete="one-time-code"
+              autoFocus
+            />
+          </Field>
+          <Button type="submit" disabled={busy}>
+            Verify and sign in
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setSsoMfa(false);
+              history.replaceState(null, "", "/");
+            }}
+          >
+            Use local sign-in
+          </Button>
+        </form>
+      </div>
+    );
   return (
     <div className="auth">
       <form className="auth-card" onSubmit={submit}>
@@ -159,6 +221,18 @@ export function Auth({ onLogin }: { onLogin: () => void }) {
                 ? "Create account"
                 : "Sign in"}
         </Button>
+        {!setup && !invitation && sso.data?.enabled && (
+          <Button
+            block
+            variant="secondary"
+            disabled={busy}
+            onClick={() => {
+              location.assign("/api/auth/oidc/start");
+            }}
+          >
+            {sso.data.label}
+          </Button>
+        )}
       </form>
     </div>
   );

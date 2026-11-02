@@ -1,5 +1,7 @@
 name: Verification
 on: [push, pull_request]
+permissions:
+  contents: read
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -11,7 +13,7 @@ jobs:
       - run: docker compose config --quiet
       - run: python3 tests/recovery_bundle_test.py
       - name: Build commit image
-        run: docker build -f infrastructure/docker/Dockerfile -t "nexusssh:${GITHUB_SHA}" .
+        run: docker build --build-arg APP_REVISION="$GITHUB_SHA" -f infrastructure/docker/Dockerfile -t "nexusssh:${GITHUB_SHA}" .
       - uses: actions/setup-go@v5
         with: {go-version-file: services/vpn-gateway/go.mod, cache-dependency-path: services/vpn-gateway/go.sum}
       - run: go test -race ./...
@@ -51,3 +53,8 @@ jobs:
         run: tail -n 200 dev.log
       - if: always()
         run: docker compose -f tests/fixtures/compose.yml down
+  deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/development'
+    uses: ./.github/workflows/deploy.yml
+    secrets: inherit

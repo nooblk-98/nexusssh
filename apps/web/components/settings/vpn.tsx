@@ -10,7 +10,9 @@ export function VpnProfiles() {
   const [form, setForm] = useState<Form | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [validated, setValidated] = useState(false);
   function edit(profile?: Row) {
+    setValidated(false);
     setError("");
     setForm({
       id: profile?.id,
@@ -216,6 +218,7 @@ export function VpnProfiles() {
                     current ? { ...current, config } : current,
                   );
                   setError("");
+                  setValidated(false);
                 } catch {
                   setError("Could not read that file.");
                 }
@@ -241,9 +244,14 @@ export function VpnProfiles() {
               placeholder={
                 "[Interface]\nPrivateKey = …\nAddress = 10.0.0.2/32\n\n[Peer]\nPublicKey = …\nEndpoint = vpn.example.com:51820\nAllowedIPs = 10.0.0.0/24"
               }
-              onChange={(e) => setForm({ ...form, config: e.target.value })}
+              onChange={(e) => { setForm({ ...form, config: e.target.value }); setValidated(false); }}
             />
           </Field>
+          <Button variant="secondary" disabled={busy || !form.config.trim()} onClick={() => {
+            setBusy(true); setError(""); setValidated(false);
+            void api("vpn-profiles/validate", { config: form.config }).then(() => setValidated(true)).catch((e) => setError(e.message)).finally(() => setBusy(false));
+          }}>Validate configuration</Button>
+          {validated && <p role="status">Configuration is valid. Connectivity is checked separately on a server.</p>}
           <p className="hint">
             Saving stores the profile. Use Test Connection on a server to verify
             the complete VPN and SSH route.

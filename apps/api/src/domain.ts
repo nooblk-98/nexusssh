@@ -9,6 +9,7 @@ import {
 } from "@nestjs/common";
 import { Queue, QueueEvents } from "bullmq";
 import { randomUUID } from "node:crypto";
+import { correlationId as currentRequestId } from "../../../packages/shared/request-context.js";
 import type { Prisma } from "@prisma/client";
 import { reserveAgentCall, reserveAgentCalls } from "./agent-quota.js";
 import { resolveSettings, numericMetadata } from "./metadata.js";
@@ -58,7 +59,7 @@ export async function audit(
   action: string,
   status: string,
   serverId?: string,
-  correlationId: string = randomUUID(),
+  correlationId: string = currentRequestId(),
 ) {
   await db.auditEvent.create({
     data: {
@@ -68,6 +69,7 @@ export async function audit(
       status,
       serverId,
       correlationId,
+      requestId: currentRequestId(),
     },
   });
 }
@@ -204,6 +206,7 @@ async function pinNewHostKey(
         status: "success",
         serverId: s.id,
         correlationId: randomUUID(),
+        requestId: currentRequestId(),
       },
     });
   const row = await db.server.findUniqueOrThrow({
@@ -373,7 +376,7 @@ async function executeMany(p: Principal, input: unknown, signal?: AbortSignal) {
       await tx.commandExecution.create({ data: { id: task.id, organizationId: subject.organizationId, principalId: subject.id, serverId, operation: "ssh_execute", argumentDigest: hash(canonical(args)), status: "queued" } });
       taskIds.push(task.id);
     }
-    await tx.auditEvent.create({ data: { organizationId: subject.organizationId, principalId: subject.id, action: "ssh_execute_many", status: "queued", serverId: ids[0], correlationId: batch.id } });
+    await tx.auditEvent.create({ data: { organizationId: subject.organizationId, principalId: subject.id, action: "ssh_execute_many", status: "queued", serverId: ids[0], correlationId: batch.id, requestId: currentRequestId() } });
     return { batchId: batch.id, taskIds };
   };
   const batch = subject.kind === "agent"
@@ -390,7 +393,7 @@ async function executeMany(p: Principal, input: unknown, signal?: AbortSignal) {
   });
   let job;
   try {
-    job = await batchQueue.add("batch", { batchId: batch.batchId, taskIds: batch.taskIds, serverIds: ids }, { jobId: batch.batchId });
+    job = await batchQueue.add("batch", { batchId: batch.batchId, taskIds: batch.taskIds, serverIds: ids, requestId: currentRequestId() }, { jobId: batch.batchId });
     const released = await db.batchDispatch.updateMany({ where: { id: batch.batchId, status: "pending" }, data: { status: "released" } });
     if (!released.count) throw new Error("Batch could not be released");
   } catch {
@@ -483,6 +486,7 @@ async function singleOperation(
         status: "requested",
         serverId: server.id,
         correlationId: randomUUID(),
+        requestId: currentRequestId(),
       },
     }));
   }
@@ -590,7 +594,7 @@ async function singleOperation(
   await audit(p, op, "queued", server.id, task.id);
   const job = await queue.add(
     "operation",
-    { taskId: task.id },
+    { taskId: task.id, requestId: currentRequestId() },
     { jobId: task.id },
   );
   if (a.async) return { taskId: task.id, status: "queued" };
