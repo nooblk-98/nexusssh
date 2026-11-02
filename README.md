@@ -15,7 +15,7 @@ Manage your servers, remote files, Kubernetes clusters, team access, and AI agen
 [![MCP support](https://img.shields.io/badge/MCP-supported-2563eb?style=flat-square)](#connect-ai-through-mcp)
 [![Kubernetes support](https://img.shields.io/badge/Kubernetes-supported-6366f1?style=flat-square)](docs/KUBERNETES.md)
 
-[Features](#what-you-can-do) · [Quick start](#quick-start) · [AI and MCP](#connect-ai-through-mcp) · [Security](#access-and-credential-boundaries) · [Documentation](#documentation)
+[Features](#what-you-can-do) · [Quick start](#quick-start) · [AI and MCP](#connect-ai-through-mcp) · [Documentation](#documentation)
 
 ## What you can do
 
@@ -32,7 +32,7 @@ Manage your servers, remote files, Kubernetes clusters, team access, and AI agen
 
 ## Quick start
 
-Requires Docker with Linux containers and Docker Compose **2.24.4 or newer**. The application builds inside Docker; Node.js is only needed for native development.
+Requires Docker with Linux containers and Docker Compose **2.24.4 or newer**. The application builds inside Docker.
 
 ```sh
 git clone https://github.com/nooblk-98/nexusssh.git
@@ -69,67 +69,6 @@ NexusSSH acts as the controlled execution layer between your AI client and your 
 For example, an authorized agent can inspect disk usage on a server, list Kubernetes resources, retrieve pod logs, or request approval to restart a service or run a supported cluster command. Scopes and resource grants still apply to every operation.
 
 **Client compatibility:** use a client that supports remote HTTP MCP with bearer authentication. Clients requiring an OAuth consent flow cannot authenticate directly to this MCP release. Browser OIDC sign-in is separate from MCP authentication. See the [MCP client guide](docs/CLIENTS.md) for the tested SDK flow and compatibility details.
-
-## Access and credential boundaries
-
-| Kept on your NexusSSH deployment                                         | Supplied to the AI client    |
-| ------------------------------------------------------------------------ | ---------------------------- |
-| Encrypted SSH passwords, private keys, and passphrases                   | Your NexusSSH MCP endpoint   |
-| Encrypted kubeconfigs, cluster tokens, and client keys                   | A scoped agent token         |
-| Connection routing, access policies, approval records, and audit history | Results from permitted tools |
-
-Saved credential APIs do not export SSH secrets or kubeconfigs. AI clients still receive permitted tool results, which can contain sensitive file contents or command output. Protect agent tokens and grant only the access appropriate for each agent.
-
-- **Explicit access:** Custom agents use selected resource and tool grants. Administrator agents receive broader workspace access and remain subject to command approvals.
-- **Human approval:** arbitrary shell commands, Kubernetes command execution, and mutating MCP tools require exact, single-use approval.
-- **Verified connections:** SSH host keys are pinned; Kubernetes TLS verification stays enabled. Destination allowlists and restricted remote accounts remain part of the boundary.
-- **Your deployment:** application records use SQLite, and Redis holds bounded transient jobs/results. The API owns the SQLite file; run one application replica.
-
-Read [security boundaries](docs/SECURITY.md) and [verification and remaining work](docs/STATUS.md) for the practical limits.
-
-## Native development
-
-Requires **Node.js 24 or newer**, Docker for the development VPN gateway, and a private Redis instance.
-
-```sh
-npm run bootstrap
-# Configure REDIS_URL and your target network allowlists in .env.
-npm run dev
-```
-
-The bootstrap command installs locked dependencies, preserves an existing `.env`, generates Prisma, applies migrations, and checks types. `npm run doctor` refreshes the generated client and checks types on an existing checkout.
-
-The native services use web `:3000`, API `:3001`, and MCP `:3002`. Match the browser URL to `APP_URL`; the setup default is [http://localhost:3000](http://localhost:3000). `npm run dev` also starts the local WireGuard gateway container.
-
-```sh
-npm run lint
-npm run typecheck
-npm run build
-npm test
-```
-
-Docker-backed integration tests use disposable SSH and Redis fixtures:
-
-```sh
-docker compose -f tests/fixtures/compose.yml up -d --build
-RUN_INTEGRATION=1 npm test
-```
-
-On PowerShell, use `$env:RUN_INTEGRATION='1'; npm test`. Browser workflows run with `npm run test:e2e`; use a disposable installation because some workflows create records. See the [verification notes](docs/STATUS.md).
-
-## Project layout
-
-```text
-apps/web/                 Browser workspace
-apps/api/                 Authentication, policies, REST, SSH/SFTP, Kubernetes
-apps/mcp/                 Remote MCP gateway
-packages/ssh-core/        Verified SSH and routed connections
-packages/kubernetes/      Kubernetes clients, commands, and policies
-packages/database/        SQLite schema and migrations
-services/vpn-gateway/     Userspace WireGuard gateway
-workers/ssh-worker/       Queued remote execution
-infrastructure/           Containers, setup, backup, and recovery
-```
 
 ## Documentation
 
