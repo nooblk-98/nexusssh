@@ -20,6 +20,8 @@ The importer accepts one `[Interface]` section with `PrivateKey`, `Address` (one
 
 When editing, leave the configuration field blank to keep the stored keys. To rotate keys or endpoints, paste a replacement. Close sessions using the old profile before opening sessions with its replacement. A profile cannot be deleted while a Kubernetes cluster or any server references it, including archived servers. Use distinct WireGuard client identities for separate profiles.
 
+Bare IP addresses in `Address` and `AllowedIPs` are also accepted and saved as host prefixes (`/32` for IPv4, `/128` for IPv6). Explicit CIDR prefixes are preserved.
+
 ## Runtime
 
 The production Docker image includes a userspace WireGuard gateway built with [wireguard-go's netstack](https://git.zx2c4.com/wireguard-go/tree/tun/netstack). It runs as the same non-root user and listens only on the container's loopback interface. No host VPN installation, network-administration capabilities, TUN device, or host-route changes are needed. The gateway has no database or persistent key files; configuration is sent over an authenticated internal connection when needed.

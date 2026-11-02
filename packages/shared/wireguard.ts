@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { z } from "zod";
 import ipaddr from "ipaddr.js";
 const key = z
@@ -87,6 +88,12 @@ export function parseWireGuard(text: string): WireGuardConfig {
     section[name] = value.trim();
   }
   const list = (v?: string) => (v ? v.split(",").map((x) => x.trim()) : []);
+  // WireGuard clients accept bare IPs as host prefixes; the gateway needs CIDRs.
+  const cidrList = (v?: string) =>
+    list(v).map((address) => {
+      const family = isIP(address);
+      return family ? `${address}/${family === 4 ? 32 : 128}` : address;
+    });
   if (
     iface?.ListenPort !== undefined &&
     (!/^\d+$/.test(iface.ListenPort) || Number(iface.ListenPort) > 65535)
@@ -94,7 +101,7 @@ export function parseWireGuard(text: string): WireGuardConfig {
     throw new Error("ListenPort must be a whole number from 0 to 65535.");
   return wireguardSchema.parse({
     privateKey: iface?.PrivateKey,
-    addresses: list(iface?.Address),
+    addresses: cidrList(iface?.Address),
     dns: list(iface?.DNS),
     mtu: iface?.MTU ? Number(iface.MTU) : undefined,
     listenPort:
@@ -103,7 +110,7 @@ export function parseWireGuard(text: string): WireGuardConfig {
       publicKey: p.PublicKey,
       presharedKey: p.PresharedKey,
       endpoint: p.Endpoint,
-      allowedIPs: list(p.AllowedIPs),
+      allowedIPs: cidrList(p.AllowedIPs),
       persistentKeepalive: p.PersistentKeepalive
         ? Number(p.PersistentKeepalive)
         : undefined,
