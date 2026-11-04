@@ -70,8 +70,20 @@ const sections: { label: string; pages: Page[] }[] = [
   {
     label: "Administration",
     pages: [
-      { slug: "operations", label: "Operations", icon: SlidersHorizontal, admin: true, render: () => <Operations /> },
-      { slug: "runbooks", label: "Runbooks", icon: ScrollText, admin: true, render: () => <RunbooksPage /> },
+      {
+        slug: "operations",
+        label: "Operations",
+        icon: SlidersHorizontal,
+        admin: true,
+        render: () => <Operations />,
+      },
+      {
+        slug: "runbooks",
+        label: "Runbooks",
+        icon: ScrollText,
+        admin: true,
+        render: () => <RunbooksPage />,
+      },
       {
         slug: "kubernetes",
         label: "Kubernetes",
@@ -170,7 +182,12 @@ export function Settings({ me, slug }: { me: Row; slug: string }) {
     <div className="settings">
       <nav className="settings-nav" aria-label="Settings">
         <Logo />
-        <button className="nav-item" onClick={() => navigate("/")}>
+        <button
+          className="nav-item"
+          aria-label="Back to workspace"
+          title="Back to workspace"
+          onClick={() => navigate("/")}
+        >
           <CircleArrowLeft size={18} />
           <span>Back</span>
         </button>
@@ -183,6 +200,7 @@ export function Settings({ me, slug }: { me: Row; slug: string }) {
                 className={"nav-item" + (p.slug === page.slug ? " active" : "")}
                 aria-current={p.slug === page.slug ? "page" : undefined}
                 title={p.label}
+                aria-label={p.label}
                 onClick={() => navigate("/settings/" + p.slug)}
               >
                 <p.icon size={18} />
