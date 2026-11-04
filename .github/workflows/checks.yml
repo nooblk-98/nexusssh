@@ -4,7 +4,10 @@ permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Never execute untrusted fork code on the persistent host.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 60
+    runs-on: [self-hosted, Linux, X64, nexusssh]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,7 +27,7 @@ jobs:
       - run: npm test
         env: {RUN_INTEGRATION: '1'}
       # Browser tests run against a native stack that can reach the SSH fixture.
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install chromium
       - run: sed -i 's#^SSH_ALLOWED_CIDRS=.*#SSH_ALLOWED_CIDRS=127.0.0.1/32#; s#^REDIS_URL=.*#REDIS_URL=redis://127.0.0.1:26379#' .env
       - run: |
           (npm run dev > dev.log 2>&1 &)
@@ -52,7 +55,9 @@ jobs:
       - if: failure()
         run: tail -n 200 dev.log
       - if: always()
-        run: docker compose -f tests/fixtures/compose.yml down
+        run: |
+          docker compose -f tests/fixtures/compose.yml down --remove-orphans
+          docker compose --project-directory . -f infrastructure/compose/vpn-dev.yml down --remove-orphans
   publish:
     needs: test
     # Releases publish their own images; see publish.yml.
