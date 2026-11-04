@@ -9,8 +9,7 @@ import {
 import { kubernetesOperations } from "../../packages/kubernetes/policy.js";
 let api: Server, child: ChildProcess, client: Client;
 const received: { path: string; args: any }[] = [];
-const clusterId = "c074ce87-e874-4e60-bbd6-ea6dc51c4ff9",
-  approvalId = "e519cf25-41fc-407c-962e-0d344f555839";
+const clusterId = "c074ce87-e874-4e60-bbd6-ea6dc51c4ff9";
 beforeAll(async () => {
   api = createServer((req, res) => {
     res.setHeader("Content-Type", "application/json");
@@ -33,12 +32,10 @@ beforeAll(async () => {
         JSON.stringify(
           req.url!.endsWith("kubernetes_clusters_list")
             ? { clusters: [{ id: clusterId, name: "Fixture" }] }
-            : args.approvalId
-              ? {
+            : {
                   status: "completed",
                   result: { stdout: "uid=1000", stderr: "", exitCode: 0 },
-                }
-              : { status: "approval_required", approvalId },
+                },
         ),
       );
     });
@@ -165,15 +162,7 @@ it("advertises direct Kubernetes tools and forwards both command forms with the 
       },
     ],
   ] as const) {
-    const pending: any = await client.callTool({ name, arguments: args });
-    expect(pending.structuredContent).toMatchObject({
-      status: "approval_required",
-      approvalId,
-    });
-    const completed: any = await client.callTool({
-      name,
-      arguments: { ...args, approvalId },
-    });
+    const completed: any = await client.callTool({name, arguments: args});
     expect(completed.isError).toBe(false);
     expect(completed.structuredContent).toMatchObject({
       status: "completed",
@@ -181,7 +170,7 @@ it("advertises direct Kubernetes tools and forwards both command forms with the 
     });
     expect(received.at(-1)).toMatchObject({
       path: "/api/operations/" + name,
-      args: { ...args, approvalId, timeoutMs: 30000 },
+      args: { ...args, timeoutMs: 30000 },
     });
   }
   const before = received.length;

@@ -1,6 +1,6 @@
 import { authorize, serverVisibility } from "./server-access.js";
 export { authorize, serverVisibility } from "./server-access.js";
-import { kubernetesOperation, kubernetesApprovalStatus } from "./kubernetes-operations.js";
+import { kubernetesOperation } from "./kubernetes-operations.js";
 import { kubernetesOperations } from "../../../packages/kubernetes/policy.js";
 import {
   ForbiddenException,
@@ -110,17 +110,6 @@ export async function listServersPage(p: Principal, q: {
     })),
     nextCursor: page.length > 100 ? page[99].id : null,
   };
-}
-// Optional webhook (Slack, Discord, Teams or any JSON endpoint) told about
-// new approval requests so they are not left waiting unseen.
-export const APPROVAL_WEBHOOK = "notify.approvalWebhook";
-export async function approvalWebhook(org: string) {
-  const row = await db.systemSetting.findUnique({
-    where: {
-      organizationId_key: { organizationId: org, key: APPROVAL_WEBHOOK },
-    },
-  });
-  return row?.value || "";
 }
 // SSH destinations allowed for a workspace: the deployment's SSH_ALLOWED_CIDRS
 // plus networks administrators add under Settings > Security.
@@ -363,18 +352,6 @@ async function singleOperation(
 ): Promise<any> {
   const a = parseOperation(op, input);
   if (op === "servers_list") return listServersPage(p, a);
-  if (op === "approval_get_status") {
-    const row = await db.approvalRequest.findFirst({
-      where: {
-        id: a.approvalId,
-        principalId: p.id,
-        organizationId: p.organizationId,
-      },
-      select: { id: true, status: true, expiresAt: true, consumedAt: true },
-    });
-    if (!row) return kubernetesApprovalStatus(p, a.approvalId);
-    return row;
-  }
   if (op === "task_status" || op === "task_cancel") {
     const t = await db.backgroundTask.findFirst({
       where: {

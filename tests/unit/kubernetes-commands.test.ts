@@ -92,9 +92,9 @@ describe("kubectl command planning", () => {
   ])("rejects unsupported/unsafe argv %j", (...command) =>
     expect(() => plan(command)).toThrow(),
   );
-  it("requires command approvals, bounded timeouts, explicit container, and strict schemas", () => {
-    expect(needsApproval("kubernetes_execute")).toBe(true);
-    expect(needsApproval("kubernetes_pod_exec")).toBe(true);
+  it("requires no command approvals, bounded timeouts, explicit container, and strict schemas", () => {
+    expect(needsApproval("kubernetes_execute")).toBe(false);
+    expect(needsApproval("kubernetes_pod_exec")).toBe(false);
     const clusterId = "a36f3487-d487-4e9a-9286-12a1f82342bf";
     expect(() =>
       parseOperation("kubernetes_pod_exec", {

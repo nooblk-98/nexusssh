@@ -244,62 +244,16 @@ test("assign direct cluster tools to an agent without SSH grants and edit its ac
   expect(writes[1].clusterOperations).not.toContain("kubernetes_pod_exec");
   expect(writes[1].clusterIds).toEqual([clusterId]);
 });
-test("review the exact cluster command and resume through its requesting agent", async ({
-  page,
-}) => {
-  let status = "pending";
-  const command = ["sh", "-lc", "printf hello; id"];
-  let decisions = 0,
-    executions = 0;
+test("approval UI and polling are absent from agent settings", async ({page}) => {
+  let approvalRequests = 0;
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname.slice(5);
-    let data: any = [];
-    if (path === "auth/me")
-      data = { id: "owner", name: "Owner", role: "owner" };
-    else if (path === "preferences") data = { uiTheme: "light" };
-    else if (path === "approvals")
-      data = [
-        {
-          id: "approval-fixture",
-          operation: "kubernetes_pod_exec",
-          clusterId,
-          cluster: { name: "Production cluster" },
-          args: {
-            clusterId,
-            namespace: "apps",
-            pod: "api-1",
-            container: "api",
-            command,
-            timeoutMs: 30000,
-          },
-          status,
-          createdAt: new Date().toISOString(),
-          expiresAt: new Date(Date.now() + 600000).toISOString(),
-        },
-      ];
-    else if (path === "approvals/approval-fixture") {
-      expect(route.request().postDataJSON()).toEqual({ decision: "approved" });
-      decisions++;
-      status = "approved";
-      data = { status };
-    } else if (path.startsWith("operations/")) executions++;
-    await route.fulfill({ json: data });
+    if (path.startsWith("approvals")) approvalRequests++;
+    await route.fulfill({json: path === "auth/me" ? {id: "owner", name: "Owner", role: "owner"} : path === "preferences" ? {uiTheme: "light"} : path === "settings" ? {} : []});
   });
-  await page.goto("/settings/approvals");
-  await expect(
-    page.getByRole("cell", { name: "Production cluster", exact: true }),
-  ).toBeVisible();
-  await page.getByText("Review command and arguments", { exact: true }).click();
-  const args = page.locator("details pre");
-  await expect(args).toContainText("printf hello; id");
-  await expect(args).toContainText('"container": "api"');
-  await page.getByRole("button", { name: "Approve", exact: true }).click();
-  await expect(
-    page.getByText("Requester can resume with this approval."),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Execute", exact: true }),
-  ).toHaveCount(0);
-  expect(decisions).toBe(1);
-  expect(executions).toBe(0);
+  await page.goto("/settings/agents");
+  await expect(page.getByRole("heading", {name: "AI Agents", exact: true})).toBeVisible();
+  await expect(page.getByRole("button", {name: "Approvals", exact: true})).toHaveCount(0);
+  await expect(page.getByRole("link", {name: "Approvals", exact: true})).toHaveCount(0);
+  expect(approvalRequests).toBe(0);
 });

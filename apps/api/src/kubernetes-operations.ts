@@ -12,12 +12,7 @@ import type { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { db } from "../../../packages/database/index.js";
 import { config, mcpAudience } from "../../../packages/shared/config.js";
-import {
-  canonical,
-  hash,
-  seal,
-  unseal,
-} from "../../../packages/shared/crypto.js";
+import { seal, unseal } from "../../../packages/shared/crypto.js";
 import {
   administratorToken,
   effectiveAgentScopes,
@@ -52,12 +47,10 @@ const cidrs = () =>
   config.KUBERNETES_ALLOWED_CIDRS.split(",")
     .map((x) => x.trim())
     .filter(Boolean);
-const approvalAAD = (org: string, id: string) =>
-  `${org}:kubernetes-approval:${id}`;
 const resultAAD = (org: string, id: string) =>
   `${org}:kubernetes-execution:${id}`;
 
-// Re-read live token and grants for every request and again before consumption.
+// Re-read live token and grants for every request and again before execution.
 // Full administrator tokens cover the workspace; Custom tokens need grants.
 export async function kubernetesAccess(
   p: Principal,
@@ -151,32 +144,6 @@ async function callRecord(p: Principal, op: string, clusterId?: string) {
     });
   return p.kind === "agent" ? reserveAgentCall(p.id, record) : record(db);
 }
-export async function kubernetesApprovalStatus(p: Principal, id: string) {
-  const row = await db.kubernetesApproval.findFirst({
-    where: {
-      id,
-      organizationId: p.organizationId,
-      principalId: p.id,
-      tokenId: p.tokenId || null,
-    },
-  });
-  if (!row) throw new NotFoundException();
-  await clusterFor(p, row.operation, row.clusterId);
-  const event = await callRecord(p, "approval_get_status", row.clusterId);
-  await db.auditEvent.update({
-    where: { id: event.id },
-    data: { status: "success" },
-  });
-  return {
-    id: row.id,
-    status:
-      row.expiresAt < new Date() && ["pending", "approved"].includes(row.status)
-        ? "expired"
-        : row.status,
-    expiresAt: row.expiresAt,
-    consumedAt: row.consumedAt,
-  };
-}
 export async function kubernetesOperation(
   p: Principal,
   op: string,
@@ -196,11 +163,9 @@ export async function kubernetesOperation(
       where: { id: event.id },
       data: {
         status:
-          result.status === "approval_required"
-            ? "approval_pending"
-            : result.status === "interrupted" || result.status === "failed"
-              ? result.status
-              : "success",
+          result.status === "interrupted" || result.status === "failed"
+            ? result.status
+            : "success",
       },
     });
     return result;
@@ -304,53 +269,10 @@ async function perform(
         );
       }
     }
-    const { approvalId, ...normalized } = a,
-      digest = hash(canonical(normalized)),
-      configDigest = kubernetesConnectionDigest(
-        cluster.encryptedConfig,
-        routing.digest,
-      );
-    if (!approvalId) {
-      const id = randomUUID();
-      const approval = await db.kubernetesApproval.create({
-        data: {
-          id,
-          organizationId: p.organizationId,
-          principalId: p.id,
-          tokenId: p.tokenId || null,
-          clusterId: cluster.id,
-          operation: op,
-          argumentDigest: digest,
-          configDigest,
-          encryptedArguments: seal(
-            normalized,
-            config.ENCRYPTION_KEY,
-            approvalAAD(p.organizationId, id),
-          ),
-          expiresAt: new Date(Date.now() + 600000),
-        },
-      });
-      const admins = await db.user.findMany({
-        where: {
-          organizationId: p.organizationId,
-          disabled: false,
-          role: { in: ["owner", "administrator"] },
-        },
-        select: { id: true },
-      });
-      await db.notification.createMany({
-        data: admins.map((user) => ({
-          organizationId: p.organizationId,
-          principalId: user.id,
-          message: `Approval required: ${op} on ${cluster.name}. Review the exact command in Approvals. Request ${id}.`,
-        })),
-      });
-      return {
-        status: "approval_required",
-        approvalId: id,
-        expiresAt: approval.expiresAt,
-      };
-    }
+    const configDigest = kubernetesConnectionDigest(
+      cluster.encryptedConfig,
+      routing.digest,
+    );
     return withKubernetesSlot(p.organizationId, async () => {
       signal?.throwIfAborted();
       const execution = await db.$transaction(async (tx) => {
@@ -367,27 +289,7 @@ async function perform(
           ) !== configDigest
         )
           throw new ForbiddenException(
-            "Cluster credentials changed. Request a new approval.",
-          );
-        const consumed = await tx.kubernetesApproval.updateMany({
-          where: {
-            id: approvalId,
-            organizationId: p.organizationId,
-            principalId: p.id,
-            tokenId: p.tokenId || null,
-            clusterId: cluster.id,
-            operation: op,
-            argumentDigest: digest,
-            configDigest,
-            status: "approved",
-            consumedAt: null,
-            expiresAt: { gt: new Date() },
-          },
-          data: { status: "consumed", consumedAt: new Date() },
-        });
-        if (consumed.count !== 1)
-          throw new ForbiddenException(
-            "Approval is missing, expired, mismatched, or already consumed.",
+            "Cluster connection changed. Retry using the current configuration.",
           );
         return tx.kubernetesExecution.create({
           data: {
@@ -531,33 +433,4 @@ export async function expireKubernetesResults() {
   await db.kubernetesApproval.deleteMany({
     where: { createdAt: { lt: before } },
   });
-}
-
-export async function kubernetesApprovals(p: Principal) {
-  // Machine workspace-management tokens must never retrieve inline manifests or
-  // pod command arguments belonging to other principals.
-  if (p.kind !== "user" || !["owner", "administrator"].includes(p.role))
-    return [];
-  const rows = await db.kubernetesApproval.findMany({
-    where: { organizationId: p.organizationId },
-    include: { cluster: { select: { name: true } } },
-    orderBy: { createdAt: "desc" },
-    take: 100,
-  });
-  return rows.map(
-    ({
-      encryptedArguments,
-      tokenId: _token,
-      configDigest: _config,
-      argumentDigest: _digest,
-      ...row
-    }) => ({
-      ...row,
-      args: unseal(
-        encryptedArguments,
-        config.ENCRYPTION_KEY,
-        approvalAAD(p.organizationId, row.id),
-      ),
-    }),
-  );
 }

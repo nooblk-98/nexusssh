@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ArrowDownToLine,
   ArrowUpDown,
@@ -985,11 +985,6 @@ export function SessionHistory() {
 export function Security() {
   const q = useApi<Row>("settings");
   const [cidr, setCidr] = useState("");
-  const [webhook, setWebhook] = useState<string>("");
-  useEffect(() => {
-    if (q.data?.approvalWebhook !== undefined)
-      setWebhook(q.data.approvalWebhook);
-  }, [q.data?.approvalWebhook]);
   // Updates show immediately and roll back if the API refuses them.
   const save = (patch: Row, success: string) => {
     const before = q.data;
@@ -1128,35 +1123,6 @@ export function Security() {
           from this server.
         </div>
       )}
-      <div className="section-title" style={{ marginTop: 28 }}>
-        Approval Notifications
-      </div>
-      <p className="small muted" style={{ lineHeight: 1.6, marginBottom: 14 }}>
-        Posts a short message when an agent or user asks for approval. Works
-        with Slack, Discord and Microsoft Teams incoming webhooks, or any
-        endpoint that accepts JSON <span className="mono">{"{ text }"}</span>.
-        Administrators also see a badge on the bell in the server list and get a
-        browser notification once they allow it.
-      </p>
-      <form
-        className="input-group"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void save(
-            { approvalWebhook: webhook.trim() },
-            webhook.trim() ? "Webhook saved." : "Webhook removed.",
-          );
-        }}
-      >
-        <input
-          className="input mono"
-          aria-label="Webhook URL"
-          placeholder="https://hooks.slack.com/services/…"
-          value={webhook}
-          onChange={(e) => setWebhook(e.target.value)}
-        />
-        <button className="btn btn-primary">Save</button>
-      </form>
     </div>
   );
 }
