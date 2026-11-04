@@ -6,7 +6,7 @@
 
 - Add the `nexusssh-mcp` installer. `npx -y nexusssh-mcp@latest --url <endpoint>` prompts for an agent token, verifies it, and adds NexusSSH to Claude Code, Claude Desktop, Cursor, VS Code, Cline, Windsurf, Gemini CLI, Codex and opencode, backing up each file it changes. `uninstall` removes the entries again. Claude Desktop connects through the package's stdio bridge.
 - **Settings → MCP Server** and the one-time token banner on **Settings → AI Agents** now show the install command for this deployment. The manual JSON configuration moved under **Configure a client manually**.
-- Publishing a GitHub release also publishes the installer to npm at the release version.
+- The installer publishes to npm automatically. A push to `main` that changes it publishes a newer `package.json` version as `latest`. A push to `development` publishes `<version>-dev.<run>` as `next`. A GitHub release publishes the release version. Versions already on npm are skipped.
 
 ### Deployment
 
