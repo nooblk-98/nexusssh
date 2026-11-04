@@ -10,7 +10,7 @@
 
 ### Deployment
 
-- `docker-compose.yml` now sets only `APP_URL`, `SSH_ALLOWED_CIDRS` and `REDIS_URL`. `SSH_ALLOWED_CIDRS` now defaults to every address (`0.0.0.0/0,::/0`) instead of the private ranges, both in compose and in the application; cloud metadata addresses stay blocked. Set it to narrower ranges to keep the previous behavior. Every other setting already had the same default in the application, and the unused `ENCRYPTION_KEY_PROVIDER` and `LOG_LEVEL` entries are gone. The README lists the optional settings and how to set them in `docker-compose.override.yml`. If you set OIDC, backup, file history or other optional variables through your shell or `.env`, move them into that override file before you upgrade.
+- `docker-compose.yml` now sets only `APP_URL` and `REDIS_URL`. `SSH_ALLOWED_CIDRS` and `KUBERNETES_ALLOWED_CIDRS` now default to every address (`0.0.0.0/0,::/0`) instead of the private ranges; cloud metadata addresses stay blocked. Set them in `docker-compose.override.yml` to restrict destinations. This compose file needs an image from this release or later, because older images require `SSH_ALLOWED_CIDRS`. Every other setting already had the same default in the application, and the unused `ENCRYPTION_KEY_PROVIDER` and `LOG_LEVEL` entries are gone. The README lists the optional settings and how to set them in `docker-compose.override.yml`. If you set OIDC, backup, file history or other optional variables through your shell or `.env`, move them into that override file before you upgrade.
 
 ## [0.3.1](https://github.com/nooblk-98/nexusssh/compare/v0.3.0...v0.3.1) - 2026-11-02
 

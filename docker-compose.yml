@@ -6,8 +6,6 @@ services:
     ports: ['${HTTP_PORT:-8080}:8080']
     environment:
       APP_URL: ${APP_URL:-}
-      # Every address by default (cloud metadata stays blocked). Images before v0.3.2 require this value.
-      SSH_ALLOWED_CIDRS: ${SSH_ALLOWED_CIDRS:-0.0.0.0/0,::/0}
       REDIS_URL: redis://redis:6379
     volumes: [nexusssh_data:/app/data, nexusssh_secrets:/app/secrets]
     restart: unless-stopped

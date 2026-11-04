@@ -60,18 +60,22 @@ certificate instead. Token expiration is handled by replacing the kubeconfig.
 
 ## Network access
 
-The API endpoint must be reachable from the NexusSSH deployment, with its IP
-addresses included in `KUBERNETES_ALLOWED_CIDRS`. This is a separate setting from
-the SSH destination allowlist and defaults to RFC 1918 private networks:
+The API endpoint must be reachable from the NexusSSH deployment. Its IP
+addresses are checked against `KUBERNETES_ALLOWED_CIDRS`, a separate setting from
+the SSH destination allowlist. It defaults to every address (`0.0.0.0/0,::/0`);
+cloud metadata addresses are always refused. To restrict it to your cluster
+endpoints, set it in `docker-compose.override.yml`:
 
-```dotenv
-KUBERNETES_ALLOWED_CIDRS=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+```yaml
+services:
+  nexusssh:
+    environment:
+      KUBERNETES_ALLOWED_CIDRS: 10.0.0.0/8,192.168.0.0/16
 ```
 
-Narrow the ranges to your cluster endpoints. For a public managed API, add its
-approved address ranges and allow the NexusSSH host through the cluster's
+For a public managed API, also allow the NexusSSH host through the cluster's
 network access controls. Recreate the application container after changing the
-setting. The Compose file passes this variable to the application.
+setting.
 
 Every DNS result is checked, and the selected address is pinned for the HTTPS
 connection. Cloud metadata addresses remain blocked regardless of the allowlist.

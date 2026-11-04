@@ -70,7 +70,7 @@ const schema = z.object({
   SSH_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
   // Host key reachability checks run at once by the health worker.
   SSH_HEALTH_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
-  KUBERNETES_ALLOWED_CIDRS: z.string().min(1).default("10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"),
+  KUBERNETES_ALLOWED_CIDRS: z.string().min(1).default("0.0.0.0/0,::/0"),
   SSH_OUTPUT_LIMIT: z.coerce
     .number()
     .int()

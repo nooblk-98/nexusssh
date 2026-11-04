@@ -121,7 +121,7 @@ Installation secrets are generated on first start and kept in the `nexusssh_secr
 > Back up both volumes. Losing the encryption key makes saved credentials unrecoverable, and `docker compose down -v` deletes them.
 
 > [!WARNING]
-> The app serves plain HTTP on port `8080`. For a shared or internet-facing installation, put a TLS-terminating reverse proxy in front, set a stable `APP_URL`, and narrow `SSH_ALLOWED_CIDRS` by following the [deployment guide](docs/DEPLOYMENT.md).
+> The app serves plain HTTP on port `8080`. For a shared or internet-facing installation, put a TLS-terminating reverse proxy in front, set a stable `APP_URL`, and restrict `SSH_ALLOWED_CIDRS` and `KUBERNETES_ALLOWED_CIDRS` by following the [deployment guide](docs/DEPLOYMENT.md).
 
 ### Optional settings
 
@@ -130,11 +130,10 @@ Installation secrets are generated on first start and kept in the `nexusssh_secr
 | Variable            | Default                                        | Purpose                                                                                                          |
 | ------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `APP_URL`           | Unset: serve whatever address the app is reached on | Public HTTPS address, such as `https://nexusssh.example.com`. Fixes the allowed browser origin and the MCP endpoint (`<APP_URL>/mcp`). |
-| `SSH_ALLOWED_CIDRS` | `0.0.0.0/0,::/0` (every address)              | Networks SSH targets may live in. Cloud metadata addresses are always blocked. Narrow it, for example to `10.0.0.0/8,192.168.0.0/16`, for shared or internet-facing installs. |
 | `HTTP_PORT`         | `8080`                                         | Host port the gateway publishes.                                                                                 |
 | `NEXUSSSH_IMAGE`    | `ghcr.io/nooblk-98/nexusssh:latest`            | Image tag to run.                                                                                                |
 
-Everything else is optional and has a working default. To set any of these, create a `docker-compose.override.yml` beside `docker-compose.yml`. Docker Compose merges it automatically, and replacing `docker-compose.yml` on upgrade leaves it in place:
+Everything else is optional and has a working default. Cloud metadata addresses such as `169.254.169.254` are always refused, whatever the allowlists say. To set any of these, create a `docker-compose.override.yml` beside `docker-compose.yml`. Docker Compose merges it automatically, and replacing `docker-compose.yml` on upgrade leaves it in place:
 
 ```yaml
 services:
@@ -148,7 +147,8 @@ services:
 | Variable                                                                            | Default                                   | Purpose                                                                                                                       |
 | ----------------------------------------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `SETUP_TOKEN`                                                                       | Generated on first start                  | Token for creating the owner account. Read the generated one from `docker compose logs nexusssh`.                            |
-| `KUBERNETES_ALLOWED_CIDRS`                                                          | `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` | Networks Kubernetes API servers may live in. See [Kubernetes](docs/KUBERNETES.md#network-access).                            |
+| `SSH_ALLOWED_CIDRS`                                                                 | `0.0.0.0/0,::/0` (every address)          | Restricts the networks SSH targets may live in, for example `10.0.0.0/8,192.168.0.0/16`. Administrators can add networks under **Settings → Security**. |
+| `KUBERNETES_ALLOWED_CIDRS`                                                          | `0.0.0.0/0,::/0` (every address)          | Restricts the networks Kubernetes API servers may live in. See [Kubernetes](docs/KUBERNETES.md#network-access).               |
 | `SSH_ALLOWLIST_LOCKED`                                                              | `false`                                   | `true` applies only `SSH_ALLOWED_CIDRS` and stops administrators from adding networks in the UI.                             |
 | `MCP_PUBLIC_URL`                                                                    | `<APP_URL>/mcp`                           | MCP endpoint address, when it differs from the one derived from `APP_URL`.                                                   |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`                               | Unset                                     | Single sign-on. Requires an HTTPS `APP_URL`. See [Operations](docs/OPERATIONS.md).                                            |
