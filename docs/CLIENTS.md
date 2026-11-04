@@ -33,9 +33,11 @@ await client.close();
 
 No SSH executable, SSH key or access to the target's SSH port is required on the client. Only the NexusSSH HTTPS endpoint and a supported bearer credential are needed.
 
-## Approvals
+## SSH execution and Kubernetes approvals
 
-Call a permitted mutation. The result supplies `status: approval_required` and an approval UUID. A human reviews the exact arguments in the web UI and approves or rejects. Poll `approval_get_status` with that UUID, then retry the identical operation with `approvalId`. The original principal must retry. Concurrent or subsequent replays fail.
+SSH commands (including `ssh_execute_many`) and file/service mutations execute immediately within the caller’s grants and token scopes. No `approvalId` is needed. A legacy SSH `approvalId` is accepted but ignored; it never changes the execution principal. Each repeated request is a new execution, not an approval replay. Do not automatically retry side effects after uncertain results.
+
+For Kubernetes commands, call a permitted command. The result supplies `status: approval_required` and an approval UUID. A human reviews the exact arguments in the web UI and approves or rejects. Poll `approval_get_status` with that UUID, then retry the identical operation with `approvalId`. The original principal must retry. Concurrent or subsequent replays fail.
 
 Use `async: true` for a queued operation; poll `task_status` with the task UUID. `task_cancel` closes execution when the worker observes cancellation. This is an application-level polling API, not a claim to implement deprecated MCP protocol task semantics.
 

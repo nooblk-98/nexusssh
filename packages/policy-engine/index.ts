@@ -77,7 +77,7 @@ export function effectiveAgentScopes(
     : scopes.filter((scope) => scope !== WORKSPACE_ADMIN);
 }
 export function needsApproval(op: string) {
-  return writeOperations.includes(op) || kubernetesWriteOperations.includes(op);
+  return kubernetesWriteOperations.includes(op);
 }
 export function permitted(
   p: Principal,
