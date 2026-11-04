@@ -97,12 +97,17 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
   >(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
+  const listing = useRef<AbortController | null>(null);
   const load = useCallback(
     async (target?: string) => {
+      listing.current?.abort();
+      const controller = new AbortController();
+      listing.current = controller;
       setLoading(true);
       setError("");
       try {
-        const r = await api.list(target || undefined);
+        const r = await api.list(target || undefined, controller.signal);
+        if (controller.signal.aborted) return;
         setEntries(r.entries);
         setPath(r.path);
         setRoot(r.root);
@@ -111,16 +116,18 @@ export default function SftpView({ tab, server }: { tab: Tab; server: Row }) {
         setStatus(tab.id, "connected");
         updateTab(tab.id, { path: r.path });
       } catch (e) {
+        if (controller.signal.aborted) return;
         setError((e as Error).message);
         setStatus(tab.id, "error");
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     },
     [api, setStatus, updateTab, tab.id],
   );
   useEffect(() => {
     void load(path);
+    return () => listing.current?.abort();
     // Initial load only; navigation calls load directly.
   }, []);
   const go = (target: string) => {

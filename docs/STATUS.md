@@ -1,6 +1,6 @@
 # Verification and remaining work
 
-Source review updated: 2 November 2026. This page describes implemented behavior and the limits of local verification; it is not a production-readiness declaration.
+Source review updated: 4 November 2026. This page describes implemented behavior and the limits of local verification; it is not a production-readiness declaration.
 
 ## Verification
 
@@ -9,6 +9,8 @@ The operations update adds deployment gating, editor protection and conflict che
 Local checks cover TypeScript, ESLint, the native production build, unit suites with disposable SQLite migration tests, encrypted-backup restore rehearsal, and browser workflows using mocked API/SSH surfaces. Container-based integration requires a running Docker daemon. Real identity-provider login, off-host backup endpoints, deployment webhook behavior and customer VPN peers require validation in the target environment. Repository tests do not certify those external systems.
 
 The unit suites include real database migrations and encrypted storage, authorization/direct-execution boundaries, Kubernetes command planning, VPN parsing, task recovery, SFTP conflict/history protection, request-context isolation, SSO browser/state binding and local MFA enforcement. Browser fixtures validate UI behavior; Linux/OpenSSH integration fixtures separately exercise the actual remote transports when enabled.
+
+The [4 November follow-up UI review](ui-review/README.md#2026-11-04-follow-up-request-lifecycle-and-status-contrast) adds browser regressions for stale SFTP directory responses, cancellation when leaving Operations, and computed AA contrast for readiness badges. Its performance measurement is browser request cancellation, not a backend throughput benchmark.
 
 ## Phase status
 

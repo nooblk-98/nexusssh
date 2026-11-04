@@ -79,3 +79,5 @@ This refuses an existing destination, authenticates/decrypts the archive and ver
 ## Request references
 
 API errors expose `X-Correlation-ID`; **Audit Log** can filter by this request reference. It follows queued SSH jobs into worker requests, audit records and structured metadata logs. Existing business correlation IDs for tasks/approvals are preserved separately. Bodies, credentials, authorization codes and remote output are excluded from these logs.
+
+Browser readiness polling stops when the Operations view unmounts; any outstanding status fetch is cancelled. This does not cancel server-side backups or other mutations.
