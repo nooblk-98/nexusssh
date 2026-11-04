@@ -126,7 +126,7 @@ p {
   margin: 0;
 }
 :focus-visible {
-  outline: 2px solid var(--primary-border);
+  outline: 2px solid var(--primary);
   outline-offset: 1px;
 }
 ::-webkit-scrollbar {
@@ -169,6 +169,7 @@ p {
 .select,
 .textarea {
   width: 100%;
+  min-width: 0;
   height: 35px;
   padding: 0 10px;
   border: 1px solid var(--field-border);
@@ -277,7 +278,10 @@ p {
   color: var(--text-strong);
 }
 .field {
+  min-width: 0;
+  overflow-wrap: anywhere;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 7px;
   margin-bottom: 18px;
 }
@@ -440,7 +444,7 @@ p {
 /* ---------- Overlays: menus, drawers, dialogs, toasts ---------- */
 .menu {
   position: fixed;
-  z-index: 1100;
+  z-index: 1260;
   min-width: 150px;
   padding: 4px 0;
   background: var(--panel);
@@ -513,12 +517,17 @@ p {
   border-bottom: 1px solid var(--border);
 }
 .drawer-head h2 {
+  min-width: 0;
+  overflow-wrap: anywhere;
   flex: 1;
   font-size: 14px;
   font-weight: 600;
   color: var(--text-strong);
 }
 .drawer-body {
+  min-height: 0;
+  overflow-wrap: anywhere;
+  overscroll-behavior: contain;
   flex: 1;
   overflow: auto;
   padding: 18px 13px;
@@ -531,6 +540,7 @@ p {
 }
 .drawer-foot {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   padding: 18px;
   border-top: 1px solid var(--border);
@@ -549,6 +559,7 @@ p {
 .dialog {
   width: min(450px, 100%);
   max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
   overflow: auto;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -562,18 +573,22 @@ p {
   padding: 18px 18px 6px;
 }
 .dialog-head h2 {
+  min-width: 0;
+  overflow-wrap: anywhere;
   flex: 1;
   font-size: 17px;
   font-weight: 600;
   color: var(--text-strong);
 }
 .dialog-body {
+  overflow-wrap: anywhere;
   padding: 8px 18px 4px;
   font-size: 13px;
   line-height: 1.6;
 }
 .dialog-foot {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
   padding: 14px 18px 18px;
@@ -635,6 +650,7 @@ p {
 .shell {
   display: flex;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 .sidebar {
@@ -1093,7 +1109,7 @@ p {
   background: var(--bg);
 }
 .pane.focused {
-  outline: 2px solid var(--primary-border);
+  outline: 2px solid var(--primary);
   outline-offset: -2px;
   z-index: 1;
 }
@@ -1228,6 +1244,7 @@ p {
   padding: 6px 0 0 8px;
 }
 .term-search {
+  max-width: calc(100% - 16px);
   position: absolute;
   top: 8px;
   right: 20px;
@@ -1243,6 +1260,7 @@ p {
 }
 .term-search .input {
   width: 220px;
+  min-width: 0;
   height: 30px;
 }
 .term-overlay {
@@ -1429,7 +1447,6 @@ p {
 }
 .sftp-nav .input {
   height: 35px;
-  margin: 0 8px;
 }
 .sftp-table-wrap {
   flex: 1;
@@ -1553,6 +1570,7 @@ p {
 .settings {
   display: flex;
   height: 100vh;
+  height: 100dvh;
 }
 .settings-nav {
   width: 188px;
@@ -1847,13 +1865,34 @@ p {
   display: grid;
   gap: 16px;
 }
-.kube-console { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.kube-console .term-toolbar { flex-wrap: wrap; height: auto; min-height: 56px; padding-block: 8px; }
-.kube-console .term-host { height: 100%; width: 100%; }
-.kube-sidebar-cluster { cursor: pointer; }
-.kube-sidebar-cluster:hover { background: var(--hover); }
-.kube-cluster-row > .tree-server { padding-right: 38px; }
-.kube-cluster-row > .server-row-menu { right: 5px; }
+.kube-console {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.kube-console .term-toolbar {
+  flex-wrap: wrap;
+  height: auto;
+  min-height: 56px;
+  padding-block: 8px;
+}
+.kube-console .term-host {
+  height: 100%;
+  width: 100%;
+}
+.kube-sidebar-cluster {
+  cursor: pointer;
+}
+.kube-sidebar-cluster:hover {
+  background: var(--hover);
+}
+.kube-cluster-row > .tree-server {
+  padding-right: 38px;
+}
+.kube-cluster-row > .server-row-menu {
+  right: 5px;
+}
 .kube-page > * {
   min-width: 0;
 }
@@ -2113,7 +2152,7 @@ p {
 }
 .grid-2 {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 0 14px;
 }
 .check-grid {
@@ -2186,6 +2225,7 @@ p {
 /* ---------- Sign in ---------- */
 .auth {
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-items: center;
   padding: 16px;
@@ -2236,6 +2276,7 @@ p {
   display: grid;
   place-items: center;
   height: 100vh;
+  height: 100dvh;
   color: var(--muted);
 }
 
@@ -2280,6 +2321,7 @@ p {
     display: none;
   }
   .settings-nav .nav-item {
+    min-height: 44px;
     padding: 0;
     justify-content: center;
   }
@@ -2365,5 +2407,86 @@ p {
 }
 
 /* Keep operational sections readable across desktop and narrow settings layouts. */
-.operations-page > section { margin-bottom: 16px; }
-.operations-page .mono { overflow-wrap: anywhere; }
+.operations-page > section {
+  margin-bottom: 16px;
+}
+.operations-page .mono {
+  overflow-wrap: anywhere;
+}
+
+/* Keep drawer actions readable instead of shrinking server names to nothing. */
+.palette-server {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+}
+.palette-server-name {
+  flex: 1 0 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+}
+.batch-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 12px;
+}
+.batch-results > section {
+  min-width: 0;
+}
+.menu {
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.menu-item {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.menu-item svg {
+  flex: none;
+}
+.menu-sub {
+  position: fixed;
+}
+@media (max-width: 480px) {
+  .home-card {
+    padding: 24px 16px;
+  }
+  .qc {
+    flex-wrap: wrap;
+    gap: 8px 0;
+  }
+  .qc .select {
+    flex: 1 0 100%;
+    border-radius: 6px;
+  }
+  .qc > .input {
+    flex: 1;
+    border-radius: 6px 0 0 6px;
+    margin-left: 0;
+  }
+  .sftp-nav {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 56px;
+    padding: 8px;
+  }
+  .sftp-nav form {
+    order: 1;
+    flex: 1 0 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
