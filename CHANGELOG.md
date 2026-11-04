@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+No unreleased changes.
+
+## [0.4.0](https://github.com/nooblk-98/nexusssh/compare/v0.3.1...v0.4.0) - 2026-11-04
+
+Connect every AI client on a computer to NexusSSH with one command, manage clusters from a list with on-demand health checks, and deploy with a minimal compose file. The database schema is unchanged from v0.3.1; no migration runs.
+
 ### MCP
 
 - Add the `nexusssh-mcp` installer. `npx -y nexusssh-mcp@latest --url <endpoint>` prompts for an agent token, verifies it, and adds NexusSSH to Claude Code, Claude Desktop, Cursor, VS Code, Cline, Windsurf, Gemini CLI, Codex and opencode, backing up each file it changes. `uninstall` removes the entries again. Claude Desktop connects through the package's stdio bridge.
@@ -11,6 +17,18 @@
 ### Deployment
 
 - `docker-compose.yml` now sets only `APP_URL` and `REDIS_URL`. `SSH_ALLOWED_CIDRS` and `KUBERNETES_ALLOWED_CIDRS` now default to every address (`0.0.0.0/0,::/0`) instead of the private ranges; cloud metadata addresses stay blocked. Set them in `docker-compose.override.yml` to restrict destinations. This compose file needs an image from this release or later, because older images require `SSH_ALLOWED_CIDRS`. Every other setting already had the same default in the application, and the unused `ENCRYPTION_KEY_PROVIDER` and `LOG_LEVEL` entries are gone. The README lists the optional settings and how to set them in `docker-compose.override.yml`. If you set OIDC, backup, file history or other optional variables through your shell or `.env`, move them into that override file before you upgrade.
+
+### Kubernetes
+
+- **Settings → Kubernetes** lists clusters in a table with the API server, context, route and health. Each row has **Check now**, the header has **Check all**, and the health column shows when the cluster was last checked and, on hover, the last error.
+
+### Upgrade
+
+1. Back up the `nexusssh_data` and `nexusssh_secrets` volumes.
+2. Move any optional variables you set through your shell or `.env` into `docker-compose.override.yml`. To keep the previous destination limits, set `SSH_ALLOWED_CIDRS` and `KUBERNETES_ALLOWED_CIDRS` there to `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`.
+3. Replace your `docker-compose.yml` with the v0.4.0 file.
+4. Run `docker compose pull && docker compose up -d`. Your existing volumes are reused.
+5. Install the MCP server in your AI clients with `npx -y nexusssh-mcp@latest --url <endpoint>`.
 
 ## [0.3.1](https://github.com/nooblk-98/nexusssh/compare/v0.3.0...v0.3.1) - 2026-11-02
 
