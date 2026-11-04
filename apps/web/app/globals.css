@@ -1741,15 +1741,47 @@ p {
 .kube-page > * {
   min-width: 0;
 }
-.kube-cluster-table td {
-  vertical-align: top;
+.kube-cluster-list {
+  overflow-x: auto;
 }
-.kube-cluster-server {
-  max-width: 260px;
+.kube-cluster-table {
+  min-width: 1080px;
+  table-layout: fixed;
+}
+.kube-cluster-server-column {
+  width: 22%;
+}
+.kube-cluster-context-column {
+  width: 130px;
+}
+.kube-cluster-route-column {
+  width: 120px;
+}
+.kube-cluster-health-column {
+  width: 150px;
+}
+.kube-cluster-actions-column {
+  width: 240px;
+}
+.kube-cluster-table td {
+  padding: 12px;
+  vertical-align: top;
   overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+.kube-cluster-name {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.kube-cluster-name svg {
+  flex: none;
+  margin-top: 1px;
+}
+.kube-cluster-name b {
+  min-width: 0;
 }
 .kube-cluster-description {
-  max-width: 320px;
   margin-top: 4px;
   line-height: 1.5;
 }
@@ -1757,8 +1789,19 @@ p {
   margin-top: 4px;
 }
 .kube-cluster-actions {
-  gap: 2px;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: max-content max-content;
+  align-items: center;
+  gap: 6px 8px;
+}
+.kube-cluster-actions-secondary {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.kube-cluster-actions .btn-text {
+  padding-inline: 0;
 }
 .kube-cluster-heading h2 {
   color: var(--text-strong);

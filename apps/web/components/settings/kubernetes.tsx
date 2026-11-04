@@ -869,8 +869,16 @@ export function KubernetesClusters() {
           </div>
         </>
       ) : q.data?.length ? (
-        <div className="card table-card">
+        <div className="card table-card kube-cluster-list">
           <table className="table kube-cluster-table">
+            <colgroup>
+              <col />
+              <col className="kube-cluster-server-column" />
+              <col className="kube-cluster-context-column" />
+              <col className="kube-cluster-route-column" />
+              <col className="kube-cluster-health-column" />
+              <col className="kube-cluster-actions-column" />
+            </colgroup>
             <thead>
               <tr>
                 <th>Cluster</th>
@@ -885,7 +893,7 @@ export function KubernetesClusters() {
               {q.data.map((cluster) => (
                 <tr key={cluster.id}>
                   <td>
-                    <div className="row" style={{ gap: 8 }}>
+                    <div className="kube-cluster-name">
                       <KubernetesIcon size={18} />
                       <b style={{ fontWeight: 600 }}>{cluster.name}</b>
                     </div>
@@ -932,7 +940,7 @@ export function KubernetesClusters() {
                     </div>
                   </td>
                   <td>
-                    <div className="row kube-cluster-actions">
+                    <div className="kube-cluster-actions">
                       <Button
                         variant="text"
                         size="sm"
@@ -944,26 +952,30 @@ export function KubernetesClusters() {
                       <Button size="sm" onClick={() => connectCluster(cluster)}>
                         Open console
                       </Button>
-                      <Button
-                        variant="text"
-                        size="sm"
-                        onClick={() => open(cluster)}
-                      >
-                        Browse resources
-                      </Button>
-                      <IconButton
-                        label={`Edit ${cluster.name}`}
-                        onClick={() => setForm({ cluster })}
-                      >
-                        <Pencil size={15} />
-                      </IconButton>
-                      <IconButton
-                        label={`Remove ${cluster.name}`}
-                        danger
-                        onClick={() => void remove(cluster)}
-                      >
-                        <Trash2 size={15} />
-                      </IconButton>
+                      <div className="kube-cluster-actions-secondary">
+                        <Button
+                          variant="text"
+                          size="sm"
+                          onClick={() => open(cluster)}
+                        >
+                          Browse resources
+                        </Button>
+                        <IconButton
+                          label={`Edit ${cluster.name}`}
+                          size="sm"
+                          onClick={() => setForm({ cluster })}
+                        >
+                          <Pencil size={15} />
+                        </IconButton>
+                        <IconButton
+                          label={`Remove ${cluster.name}`}
+                          size="sm"
+                          danger
+                          onClick={() => void remove(cluster)}
+                        >
+                          <Trash2 size={15} />
+                        </IconButton>
+                      </div>
                     </div>
                   </td>
                 </tr>
