@@ -2,7 +2,15 @@
 
 ## Unreleased
 
-No unreleased changes.
+### MCP
+
+- Add the `nexusssh-mcp` installer. `npx -y nexusssh-mcp@latest --url <endpoint>` prompts for an agent token, verifies it, and adds NexusSSH to Claude Code, Claude Desktop, Cursor, VS Code, Cline, Windsurf, Gemini CLI, Codex and opencode, backing up each file it changes. `uninstall` removes the entries again. Claude Desktop connects through the package's stdio bridge.
+- **Settings → MCP Server** and the one-time token banner on **Settings → AI Agents** now show the install command for this deployment. The manual JSON configuration moved under **Configure a client manually**.
+- Publishing a GitHub release also publishes the installer to npm at the release version.
+
+### Deployment
+
+- `docker-compose.yml` now sets only `APP_URL` and `REDIS_URL`. `SSH_ALLOWED_CIDRS` now defaults in the application to the private ranges compose used to supply (`10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`), so this compose file needs an image from this release or later. Every other setting already had the same default in the application, and the unused `ENCRYPTION_KEY_PROVIDER` and `LOG_LEVEL` entries are gone. The README lists the optional settings and how to set them in `docker-compose.override.yml`. If you set OIDC, backup, file history or other optional variables through your shell or `.env`, move them into that override file before you upgrade.
 
 ## [0.3.1](https://github.com/nooblk-98/nexusssh/compare/v0.3.0...v0.3.1) - 2026-11-02
 

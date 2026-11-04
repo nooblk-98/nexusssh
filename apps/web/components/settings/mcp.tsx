@@ -36,6 +36,8 @@ const copy = (text: string) =>
   void copyText(text)
     .then(() => notify.success("Copied to clipboard."))
     .catch(notify.error);
+const installCommand = (endpoint: string) =>
+  `npx -y nexusssh-mcp@latest --url ${endpoint || "<endpoint>"}`;
 export function McpServer() {
   const q = useApi<Row>("settings");
   const endpoint = q.data?.endpoint || "";
@@ -52,6 +54,7 @@ export function McpServer() {
     null,
     2,
   );
+  const install = installCommand(endpoint);
   return (
     <div className="page" style={{ maxWidth: 860 }}>
       <PageHead
@@ -94,28 +97,51 @@ export function McpServer() {
             profiles, folders and other app administration.
           </li>
           <li>
-            Copy the token shown once after creation into your client’s secret
-            store.
+            Copy the token shown once after creation.
           </li>
           <li>
-            Point the client at the endpoint with the token as a bearer header.
+            Run the installer on the computer where your AI clients run. It
+            asks for the token, checks it, and adds NexusSSH to Claude Code,
+            Claude Desktop, Cursor, VS Code, Cline, Windsurf, Gemini CLI, Codex
+            and opencode. Restart the clients afterwards.
           </li>
         </ol>
         <div style={{ position: "relative" }}>
-          <code className="code">{config}</code>
+          <code className="code">{install}</code>
           <button
             className="btn btn-secondary btn-sm"
             style={{ position: "absolute", top: 8, right: 8 }}
-            onClick={() => copy(config)}
+            onClick={() => copy(install)}
           >
             <Copy size={13} /> Copy
           </button>
         </div>
         <p className="small muted" style={{ marginTop: 10 }}>
-          Client configuration formats vary; this shows the URL and header every
-          client needs. SSH credentials never leave this deployment — agents
-          only call the tools you grant, and changes can require human approval.
+          Requires Node.js 20 or newer. Existing client files are backed up
+          before they change. Remove the server again with{" "}
+          <span className="mono">npx nexusssh-mcp uninstall</span>. SSH
+          credentials never leave this deployment — agents only call the tools
+          you grant, and changes can require human approval.
         </p>
+        <details style={{ marginTop: 12 }}>
+          <summary className="small" style={{ cursor: "pointer" }}>
+            Configure a client manually
+          </summary>
+          <div style={{ position: "relative", marginTop: 10 }}>
+            <code className="code">{config}</code>
+            <button
+              className="btn btn-secondary btn-sm"
+              style={{ position: "absolute", top: 8, right: 8 }}
+              onClick={() => copy(config)}
+            >
+              <Copy size={13} /> Copy
+            </button>
+          </div>
+          <p className="small muted" style={{ marginTop: 10 }}>
+            Client configuration formats vary; this shows the URL and bearer
+            header every remote HTTP client needs.
+          </p>
+        </details>
         <div className="section-title">Tools</div>
         <div className="check-grid">
           {[
@@ -208,6 +234,27 @@ export function Agents() {
               onFocus={(e) => e.target.select()}
             />
             <button className="btn btn-secondary" onClick={() => copy(token)}>
+              <Copy size={15} /> Copy
+            </button>
+          </div>
+          <p className="small muted" style={{ margin: "10px 0 6px" }}>
+            Add it to your AI clients with this command, and paste the token
+            when asked:
+          </p>
+          <div className="input-group">
+            <input
+              readOnly
+              className="input mono"
+              value={installCommand(settings.data?.endpoint || "")}
+              style={{ fontSize: 11 }}
+              onFocus={(e) => e.target.select()}
+            />
+            <button
+              className="btn btn-secondary"
+              onClick={() =>
+                copy(installCommand(settings.data?.endpoint || ""))
+              }
+            >
               <Copy size={15} /> Copy
             </button>
           </div>

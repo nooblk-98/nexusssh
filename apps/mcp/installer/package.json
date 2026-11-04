@@ -1,0 +1,35 @@
+{
+  "name": "nexusssh-mcp",
+  "version": "0.3.1",
+  "description": "Connect Claude Code, Claude Desktop, Cursor, VS Code, Codex, Gemini CLI and other AI clients to a NexusSSH MCP server in one step",
+  "license": "UNLICENSED",
+  "author": "Lahiru S Liyanage",
+  "homepage": "https://github.com/nooblk-98/nexusssh#connect-an-ai-client-through-mcp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nooblk-98/nexusssh.git",
+    "directory": "apps/mcp/installer"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "nexusssh",
+    "ssh",
+    "kubernetes",
+    "claude",
+    "cursor",
+    "codex"
+  ],
+  "type": "module",
+  "bin": {
+    "nexusssh-mcp": "cli.mjs"
+  },
+  "files": [
+    "cli.mjs",
+    "clients.mjs",
+    "bridge.mjs"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}

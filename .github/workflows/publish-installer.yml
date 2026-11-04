@@ -1,0 +1,35 @@
+name: Publish MCP installer
+
+# Publishes apps/mcp/installer to npm as `nexusssh-mcp` at the release version.
+# Pre-releases go to the `next` dist-tag so `npx nexusssh-mcp@latest` stays stable.
+# Requires an npm automation token in the NPM_TOKEN repository secret.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  npm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/mcp/installer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Match the release version
+        if: github.event_name == 'release'
+        run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version --allow-same-version
+      - name: Smoke test
+        run: node cli.mjs --help && node cli.mjs list
+      - run: npm publish --provenance --access public --tag ${{ github.event.release.prerelease && 'next' || 'latest' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
