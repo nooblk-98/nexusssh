@@ -56,7 +56,7 @@ const schema = z.object({
   AUTH_AUDIENCE: z.string().min(1).default("nexusssh"),
   MCP_PUBLIC_URL: z.url().optional(),
   MCP_AUTH_ISSUER: z.url().optional(),
-  SSH_ALLOWED_CIDRS: z.string().min(1).default("10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"),
+  SSH_ALLOWED_CIDRS: z.string().min(1).default("0.0.0.0/0,::/0"),
   VPN_GATEWAY_URL: z.url().default("http://127.0.0.1:3003"),
   // "true" ignores networks added in Settings > Security and disables editing.
   SSH_ALLOWLIST_LOCKED: z

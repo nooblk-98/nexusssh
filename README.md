@@ -130,6 +130,7 @@ Installation secrets are generated on first start and kept in the `nexusssh_secr
 | Variable            | Default                                        | Purpose                                                                                                          |
 | ------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `APP_URL`           | Unset: serve whatever address the app is reached on | Public HTTPS address, such as `https://nexusssh.example.com`. Fixes the allowed browser origin and the MCP endpoint (`<APP_URL>/mcp`). |
+| `SSH_ALLOWED_CIDRS` | `0.0.0.0/0,::/0` (every address)              | Networks SSH targets may live in. Cloud metadata addresses are always blocked. Narrow it, for example to `10.0.0.0/8,192.168.0.0/16`, for shared or internet-facing installs. |
 | `HTTP_PORT`         | `8080`                                         | Host port the gateway publishes.                                                                                 |
 | `NEXUSSSH_IMAGE`    | `ghcr.io/nooblk-98/nexusssh:latest`            | Image tag to run.                                                                                                |
 
@@ -147,7 +148,6 @@ services:
 | Variable                                                                            | Default                                   | Purpose                                                                                                                       |
 | ----------------------------------------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `SETUP_TOKEN`                                                                       | Generated on first start                  | Token for creating the owner account. Read the generated one from `docker compose logs nexusssh`.                            |
-| `SSH_ALLOWED_CIDRS`                                                                 | `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` | Networks SSH targets may live in. Administrators can add more under **Settings → Security**. Narrow it for shared installs.  |
 | `KUBERNETES_ALLOWED_CIDRS`                                                          | `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` | Networks Kubernetes API servers may live in. See [Kubernetes](docs/KUBERNETES.md#network-access).                            |
 | `SSH_ALLOWLIST_LOCKED`                                                              | `false`                                   | `true` applies only `SSH_ALLOWED_CIDRS` and stops administrators from adding networks in the UI.                             |
 | `MCP_PUBLIC_URL`                                                                    | `<APP_URL>/mcp`                           | MCP endpoint address, when it differs from the one derived from `APP_URL`.                                                   |
