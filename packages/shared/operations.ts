@@ -88,7 +88,6 @@ schemas.system_logs = z
   .strict();
 for (const op of ["task_status", "task_cancel"])
   schemas[op] = z.object({ taskId: id }).strict();
-schemas.approval_get_status = z.object({ approvalId: id }).strict();
 Object.assign(schemas, kubernetesSchemas);
 export function parseOperation(op: string, args: unknown): any {
   if (!schemas[op]) throw new Error("Unknown operation");

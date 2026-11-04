@@ -9,7 +9,6 @@ import {
   Info,
   Plug,
   ScrollText,
-  ShieldCheck,
   ShieldHalf,
   SlidersHorizontal,
   User,
@@ -28,7 +27,7 @@ import {
   Teams,
   UsersPage,
 } from "./admin";
-import { Agents, Approvals, AuditLog, McpServer } from "./mcp";
+import { Agents, AuditLog, McpServer } from "./mcp";
 import { VpnProfiles } from "./vpn";
 import { Network } from "lucide-react";
 import { About } from "./about";
@@ -137,13 +136,6 @@ const sections: { label: string; pages: Page[] }[] = [
         icon: Bot,
         admin: true,
         render: () => <Agents />,
-      },
-      {
-        slug: "approvals",
-        label: "Approvals",
-        icon: ShieldCheck,
-        admin: true,
-        render: () => <Approvals />,
       },
       {
         slug: "audit",

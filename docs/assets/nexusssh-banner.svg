@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="460" viewBox="0 0 1200 460" role="img" aria-labelledby="title description">
   <title id="title">NexusSSH — Centralized SSH, Kubernetes and MCP</title>
-  <desc id="description">A self-hosted web workspace connects people and MCP clients to SSH servers and Kubernetes. Infrastructure credentials stay on the NexusSSH deployment, behind scoped access, approvals and audit.</desc>
+  <desc id="description">A self-hosted web workspace connects people and MCP clients to SSH servers and Kubernetes. Infrastructure credentials stay on the NexusSSH deployment, behind scoped access and audit.</desc>
   <defs>
     <linearGradient id="background" x2="1" y2="1"><stop stop-color="#07111f"/><stop offset="1" stop-color="#101f35"/></linearGradient>
     <linearGradient id="accent" x2="1" y2="1"><stop stop-color="#22d3ee"/><stop offset="1" stop-color="#6366f1"/></linearGradient>
@@ -29,7 +29,7 @@
     <circle cx="168" cy="404" r="2" fill="#38738a"/>
     <text x="184" y="408" font-size="11" letter-spacing="1.5" fill="#7f98b6">SCOPED ACCESS</text>
     <circle cx="318" cy="404" r="2" fill="#38738a"/>
-    <text x="334" y="408" font-size="11" letter-spacing="1.5" fill="#7f98b6">HUMAN APPROVALS</text>
+    <text x="334" y="408" font-size="11" letter-spacing="1.5" fill="#7f98b6">DIRECT EXECUTION</text>
 
     <g fill="none" stroke="#5f9aa8" stroke-width="1.6" marker-end="url(#arrow)">
       <path d="M789 124v22h91v26"/>
@@ -52,7 +52,7 @@
     <path d="m772 198 8 8-8 8m10 0h5" fill="none" stroke="#5eead4" stroke-width="2"/>
     <text x="807" y="214" font-size="24" font-weight="650" letter-spacing="-.5" fill="#f0fdfa">NexusSSH</text>
     <text x="763" y="244" font-size="14" fill="#b6d8df">Encrypted credentials</text>
-    <text x="763" y="267" font-size="13" fill="#7fa9b7">Policies · approvals · audit</text>
+    <text x="763" y="267" font-size="13" fill="#7fa9b7">Policies · grants · audit</text>
     <rect x="1006" y="193" width="70" height="23" rx="11.5" fill="#123d3d"/>
     <circle cx="1020" cy="205" r="3" fill="#5eead4"/>
     <text x="1030" y="209" font-size="10" font-weight="600" fill="#99f6e4">SCOPED</text>

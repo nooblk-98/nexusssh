@@ -1,7 +1,4 @@
-import {
-  kubernetesOperations,
-  kubernetesWriteOperations,
-} from "../kubernetes/policy.js";
+import { kubernetesOperations } from "../kubernetes/policy.js";
 export type Principal = {
   id: string;
   organizationId: string;
@@ -76,8 +73,8 @@ export function effectiveAgentScopes(
     ? [...administratorAgentScopes]
     : scopes.filter((scope) => scope !== WORKSPACE_ADMIN);
 }
-export function needsApproval(op: string) {
-  return kubernetesWriteOperations.includes(op);
+export function needsApproval(_op: string) {
+  return false;
 }
 export function permitted(
   p: Principal,

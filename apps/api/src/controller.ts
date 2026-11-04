@@ -1,5 +1,4 @@
 import { administratorAgentScopes, effectiveAgentScopes, isAgentAdministrator, administratorToken } from "../../../packages/policy-engine/index.js";
-import { kubernetesApprovals } from "./kubernetes-operations.js";
 import { kubernetesOperations, kubernetesReadOperations } from "../../../packages/kubernetes/policy.js";
 import {
   Controller,
@@ -48,9 +47,7 @@ import {
 import { authenticate, admin, human, workspace, internal } from "./auth.js";
 import {
   ACCEPT_NEW_HOST_KEYS,
-  APPROVAL_WEBHOOK,
   EXTRA_CIDRS,
-  approvalWebhook,
   acceptsNewHostKeys,
   sshLimits,
   workspaceCidrs,
@@ -575,13 +572,7 @@ export class AppController {
         agents: await db.agent.count({
           where: { organizationId: p.organizationId, revoked: false },
         }),
-        approvals: (await db.kubernetesApproval.count({ where: { organizationId: p.organizationId, status: "pending", expiresAt: { gt: new Date() } } })) + await db.approvalRequest.count({
-          where: {
-            organizationId: p.organizationId,
-            status: "pending",
-            expiresAt: { gt: new Date() },
-          },
-        }),
+        approvals: 0,
       },
       activity: await db.auditEvent.findMany({
         where: {
@@ -1447,56 +1438,16 @@ export class AppController {
   @Get("approvals") async approvals(@Req() req: Request) {
     const p = await authenticate(req);
     workspace(p);
-    const items = await db.approvalRequest.findMany({
-      where: {
-        organizationId: p.organizationId,
-        ...(["owner", "administrator"].includes(p.role)
-          ? {}
-          : { principalId: p.id }),
-      },
-      include: { server: { select: { name: true } } },
-      orderBy: { createdAt: "desc" },
-      take: 100,
-    });
-    const decoded = items.map(({ encryptedArguments, tokenId: _tokenId, ...row }) => ({
-      ...row,
-      args: unseal(encryptedArguments, config.ENCRYPTION_KEY, p.organizationId) as Record<string, unknown>,
-    }));
-    const batchIds = [...new Set(decoded.flatMap((item) => item.operation === "ssh_execute_many" && Array.isArray(item.args.serverIds) ? item.args.serverIds.filter((id): id is string => typeof id === "string") : []))];
-    const targets = batchIds.length ? await db.server.findMany({ where: { id: { in: batchIds }, organizationId: p.organizationId }, select: { id: true, name: true } }) : [];
-    const names = new Map(targets.map((server) => [server.id, server.name]));
-    const ssh = decoded.map((item) => ({
-      ...item,
-      ...(item.operation === "ssh_execute_many" && Array.isArray(item.args.serverIds) ? { targetNames: item.args.serverIds.map((id) => names.get(String(id)) ?? "Unavailable server"), targetCount: item.args.serverIds.length } : {}),
-    }));
-    return [...ssh, ...await kubernetesApprovals(p)].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 100);
+    return [];
   }
   @Post("approvals/:id") async decide(
     @Req() req: Request,
-    @Param("id") id: string,
-    @Body() body: unknown,
+    @Param("id") _id: string,
+    @Body() _body: unknown,
   ) {
     const p = await authenticate(req);
     admin(p);
-    const a = z
-      .object({ decision: z.enum(["approved", "rejected"]) })
-      .parse(body);
-    const result = await db.approvalRequest.updateMany({
-      where: {
-        id,
-        organizationId: p.organizationId,
-        status: "pending",
-        expiresAt: { gt: new Date() },
-      },
-      data: { status: a.decision, decidedBy: p.id },
-    });
-    if (result.count !== 1) {
-      human(p);
-      const kube = await db.kubernetesApproval.updateMany({ where: { id, organizationId: p.organizationId, status: "pending", expiresAt: { gt: new Date() } }, data: { status: a.decision, decidedBy: p.id } });
-      if (kube.count !== 1) throw new BadRequestException("Approval unavailable or expired");
-    }
-    await audit(p, "approval_" + a.decision, "success", undefined, id);
-    return { id, status: a.decision };
+    throw new BadRequestException("Approvals are no longer supported; authorized operations execute directly.");
   }
   @Get("audit") async logs(
     @Req() req: Request,
@@ -1639,7 +1590,7 @@ export class AppController {
       workspaceCidrs: await workspaceCidrs(p.organizationId),
       allowlistLocked: config.SSH_ALLOWLIST_LOCKED,
       ...(["owner", "administrator"].includes(p.role)
-        ? { approvalWebhook: await approvalWebhook(p.organizationId) }
+        ? { approvalWebhook: "" }
         : {}),
     };
   }
@@ -1675,10 +1626,7 @@ export class AppController {
         "success",
       );
     }
-    if (a.approvalWebhook !== undefined) {
-      await save(APPROVAL_WEBHOOK, a.approvalWebhook);
-      await audit(p, "approval_webhook_updated", "success");
-    }
+    // Legacy approvalWebhook input is accepted but ignored; notifications were removed.
     if (a.workspaceCidrs && config.SSH_ALLOWLIST_LOCKED)
       throw new ForbiddenException(
         "SSH destinations are locked by the deployment (SSH_ALLOWLIST_LOCKED)",

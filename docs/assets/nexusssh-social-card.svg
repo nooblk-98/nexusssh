@@ -52,6 +52,6 @@
     <text x="75" y="576" font-family="Consolas, monospace" font-size="19" fill="#c9d9e8">github.com/nooblk-98/nexusssh</text>
     <path d="m875 559 8 3v6c0 5-8 9-8 9s-8-4-8-9v-6z" fill="none" stroke="#5eead4" stroke-width="1.6"/>
     <path d="m871 567 3 3 5-6" fill="none" stroke="#5eead4" stroke-width="1.6"/>
-    <text x="900" y="574" font-size="17" fill="#9ebacd">Scoped access · Human approvals</text>
+    <text x="900" y="574" font-size="17" fill="#9ebacd">Scoped access · Direct execution</text>
   </g>
 </svg>

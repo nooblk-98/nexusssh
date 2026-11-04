@@ -34,6 +34,7 @@ export const kubernetesSchemas: Record<string, z.ZodObject<any>> = {
         .max(256 * 1024)
         .optional(),
       timeoutMs: z.number().int().min(1000).max(60000).default(30000),
+      // Compatibility only: ignored; each authorized call is a new execution.
       approvalId: z.uuid().optional(),
     })
     .strict(),
@@ -45,6 +46,7 @@ export const kubernetesSchemas: Record<string, z.ZodObject<any>> = {
       container: resourceName,
       command: z.array(z.string().min(1).max(8192)).min(1).max(64),
       timeoutMs: z.number().int().min(1000).max(60000).default(30000),
+      // Compatibility only: ignored; each authorized call is a new execution.
       approvalId: z.uuid().optional(),
     })
     .strict(),
@@ -61,9 +63,9 @@ export const kubernetesToolDescriptions: Record<string, string> = {
   kubernetes_pod_logs:
     "Read bounded container logs from a granted cluster, up to 1000 lines and 256 KB.",
   kubernetes_execute:
-    "Execute a kubectl command on a saved Kubernetes cluster using argv, optionally prefixed with kubectl, e.g. ['kubectl','get','pods','-n','apps'] or ['scale','deployment/api','--replicas=3']. Uses the same cluster command runner as the browser console. Supports version, get, describe, logs, scale, rollout restart, delete, patch, and apply -f - with an inline manifest. Use kubernetes_pod_exec for a command inside a container. No local shell, credential overrides, plugins, files, or URLs. Always requires exact single-use human approval, even for reads.",
+    "Execute a kubectl command on a saved Kubernetes cluster using argv, optionally prefixed with kubectl, e.g. ['kubectl','get','pods','-n','apps'] or ['scale','deployment/api','--replicas=3']. Uses the same cluster command runner as the browser console. Supports version, get, describe, logs, scale, rollout restart, delete, patch, and apply -f - with an inline manifest. Use kubernetes_pod_exec for a command inside a container. No local shell, credential overrides, plugins, files, or URLs. Executes immediately within the caller's grants; no human approval required.",
   kubernetes_pod_exec:
-    "Run an approved command argv inside one named pod/container, e.g. ['sh','-lc','id']. Returns bounded stdout, stderr, and exit code. No interactive TTY. Always requires exact single-use human approval. Timeout/cancellation may leave remote processes running; never retry automatically.",
+    "Run a command argv inside one named pod/container, e.g. ['sh','-lc','id']. Returns bounded stdout, stderr, and exit code. No interactive TTY. Executes immediately within the caller's grants; no human approval required. Timeout/cancellation may leave remote processes running; never retry automatically.",
   kubernetes_execution_status:
     "Inspect your Kubernetes command execution and its bounded result. Output expires after one hour; commands are never replayed.",
 };

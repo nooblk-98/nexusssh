@@ -65,17 +65,6 @@ const fixtures: Record<string, unknown> = {
       tokens: [{ scopes: "[]" }],
     },
   ],
-  approvals: [
-    {
-      id: "approval",
-      operation: "ssh_execute",
-      server,
-      args: { command: "systemctl status -- production-observability.service" },
-      createdAt,
-      expiresAt: "2099-01-01T00:00:00Z",
-      status: "pending",
-    },
-  ],
   audit: [
     {
       id: "event",
@@ -143,7 +132,6 @@ for (const theme of ["light", "dark"] as const) {
         "history",
         "security",
         "agents",
-        "approvals",
         "audit",
       ]) {
         await page.goto(`/settings/${slug}`);
