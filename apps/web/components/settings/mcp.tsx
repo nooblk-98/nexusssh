@@ -104,7 +104,7 @@ export function McpServer() {
             opencode. Restart the clients afterwards.
           </li>
         </ol>
-        <div style={{ position: "relative" }}>
+        <div className="mcp-code-block">
           <code className="code">{install}</code>
           <button
             className="btn btn-secondary btn-sm"
@@ -125,7 +125,7 @@ export function McpServer() {
           <summary className="small" style={{ cursor: "pointer" }}>
             Configure a client manually
           </summary>
-          <div style={{ position: "relative", marginTop: 10 }}>
+          <div className="mcp-code-block" style={{ marginTop: 10 }}>
             <code className="code">{config}</code>
             <button
               className="btn btn-secondary btn-sm"
@@ -268,7 +268,7 @@ export function Agents() {
       )}
       <div className="card table-card">
         {list.length ? (
-          <table className="table">
+          <table className="table settings-table-wide">
             <thead>
               <tr>
                 <th>Agent</th>
@@ -320,89 +320,93 @@ export function Agents() {
                       {a.revoked ? "Revoked" : "Active"}
                     </span>
                   </td>
-                  <td className="row" style={{ gap: 2 }}>
-                    <Button
-                      variant="text"
-                      size="sm"
-                      onClick={() => setActivity(a)}
-                    >
-                      Activity
-                    </Button>
-                    <Button
-                      variant="text"
-                      size="sm"
-                      disabled={a.revoked}
-                      onClick={() => {
-                        const scopes: string[] = [
-                          ...new Set<string>(
-                            a.tokens
-                              .filter((t: Row) => !t.revoked)
-                              .flatMap((t: Row) => JSON.parse(t.scopes)),
-                          ),
-                        ];
-                        setForm({
-                          id: a.id,
-                          name: a.name,
-                          level:
-                            a.level === "administrator"
-                              ? "administrator"
-                              : "custom",
-                          days: 30,
-                          serverIds: a.permissions.map((p: Row) => p.serverId),
-                          operations: scopes.filter((op) => ops.includes(op)),
-                          clusterIds: (a.clusterPermissions || []).map(
-                            (p: Row) => p.clusterId,
-                          ),
-                          clusterOperations: scopes.filter((op) =>
-                            settings.data?.kubernetesOperations?.includes(op),
-                          ),
-                          workspaceManagement:
-                            scopes.includes("workspace_manage"),
-                          perMinute: "",
-                          perDay: "",
-                        });
-                      }}
-                    >
-                      Access
-                    </Button>
-                    <Button
-                      variant="text"
-                      size="sm"
-                      disabled={a.revoked}
-                      onClick={() =>
-                        setLimits({
-                          agent: a,
-                          perMinute: a.maxCallsPerMinute
-                            ? String(a.maxCallsPerMinute)
-                            : "",
-                          perDay: a.maxCallsPerDay
-                            ? String(a.maxCallsPerDay)
-                            : "",
-                        })
-                      }
-                    >
-                      Limits
-                    </Button>
-                    <Button
-                      variant="text"
-                      size="sm"
-                      disabled={a.revoked}
-                      onClick={async () => {
-                        if (
-                          await confirmDialog(
-                            "Revoke Agent",
-                            `Revoke all access for ${a.name}? Its tokens stop working immediately.`,
-                            "Revoke",
-                            true,
+                  <td>
+                    <div className="settings-table-actions">
+                      <Button
+                        variant="text"
+                        size="sm"
+                        onClick={() => setActivity(a)}
+                      >
+                        Activity
+                      </Button>
+                      <Button
+                        variant="text"
+                        size="sm"
+                        disabled={a.revoked}
+                        onClick={() => {
+                          const scopes: string[] = [
+                            ...new Set<string>(
+                              a.tokens
+                                .filter((t: Row) => !t.revoked)
+                                .flatMap((t: Row) => JSON.parse(t.scopes)),
+                            ),
+                          ];
+                          setForm({
+                            id: a.id,
+                            name: a.name,
+                            level:
+                              a.level === "administrator"
+                                ? "administrator"
+                                : "custom",
+                            days: 30,
+                            serverIds: a.permissions.map(
+                              (p: Row) => p.serverId,
+                            ),
+                            operations: scopes.filter((op) => ops.includes(op)),
+                            clusterIds: (a.clusterPermissions || []).map(
+                              (p: Row) => p.clusterId,
+                            ),
+                            clusterOperations: scopes.filter((op) =>
+                              settings.data?.kubernetesOperations?.includes(op),
+                            ),
+                            workspaceManagement:
+                              scopes.includes("workspace_manage"),
+                            perMinute: "",
+                            perDay: "",
+                          });
+                        }}
+                      >
+                        Access
+                      </Button>
+                      <Button
+                        variant="text"
+                        size="sm"
+                        disabled={a.revoked}
+                        onClick={() =>
+                          setLimits({
+                            agent: a,
+                            perMinute: a.maxCallsPerMinute
+                              ? String(a.maxCallsPerMinute)
+                              : "",
+                            perDay: a.maxCallsPerDay
+                              ? String(a.maxCallsPerDay)
+                              : "",
+                          })
+                        }
+                      >
+                        Limits
+                      </Button>
+                      <Button
+                        variant="text"
+                        size="sm"
+                        disabled={a.revoked}
+                        onClick={async () => {
+                          if (
+                            await confirmDialog(
+                              "Revoke Agent",
+                              `Revoke all access for ${a.name}? Its tokens stop working immediately.`,
+                              "Revoke",
+                              true,
+                            )
                           )
-                        )
-                          await api("agents/" + a.id, {}, "DELETE")
-                            .then(() => refresh("agents"))
-                            .catch(notify.error);
-                      }}
-                    >
-                      Revoke
-                    </Button>
+                            await api("agents/" + a.id, {}, "DELETE")
+                              .then(() => refresh("agents"))
+                              .catch(notify.error);
+                        }}
+                      >
+                        Revoke
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -930,7 +934,7 @@ export function Approvals() {
       </PageHead>
       <div className="card table-card">
         {list.length ? (
-          <table className="table">
+          <table className="table settings-table-wide">
             <thead>
               <tr>
                 <th>Operation</th>
@@ -1113,7 +1117,13 @@ export function AuditLog() {
   const [filter, setFilter] = useState("");
   const [reference, setReference] = useState("");
   const q = useApi<Row[]>(
-    "audit?" + new URLSearchParams({ ...(filter.trim() ? { action: filter.trim() } : {}), ...(/^[a-f0-9-]{36}$/i.test(reference.trim()) ? { requestId: reference.trim() } : {}) }),
+    "audit?" +
+      new URLSearchParams({
+        ...(filter.trim() ? { action: filter.trim() } : {}),
+        ...(/^[a-f0-9-]{36}$/i.test(reference.trim())
+          ? { requestId: reference.trim() }
+          : {}),
+      }),
     { interval: 30000 },
   );
   const list = q.data || [];
@@ -1156,9 +1166,13 @@ export function AuditLog() {
           onChange={setFilter}
           placeholder="Filter by action..."
         />
-        <SearchInput value={reference} onChange={setReference} placeholder="Find request reference..." />
+        <SearchInput
+          value={reference}
+          onChange={setReference}
+          placeholder="Find request reference..."
+        />
         {list.length ? (
-          <table className="table">
+          <table className="table settings-table-wide">
             <thead>
               <tr>
                 <th>Action</th>

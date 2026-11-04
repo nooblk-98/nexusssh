@@ -1053,48 +1053,50 @@ export function Security() {
         changed there; add more for this workspace below. Cloud metadata
         addresses such as 169.254.169.254 are always blocked.
       </p>
-      <table className="table" style={{ marginBottom: 14 }}>
-        <thead>
-          <tr>
-            <th>Network</th>
-            <th>Source</th>
-            <th style={{ width: 60 }} />
-          </tr>
-        </thead>
-        <tbody>
-          {(q.data?.deploymentCidrs || []).map((c: string) => (
-            <tr key={"d" + c}>
-              <td className="mono">{c}</td>
-              <td className="muted">Deployment (.env)</td>
-              <td />
+      <div className="settings-table-scroll" style={{ marginBottom: 14 }}>
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Network</th>
+              <th>Source</th>
+              <th style={{ width: 60 }} />
             </tr>
-          ))}
-          {workspace.map((c) => (
-            <tr key={"w" + c}>
-              <td className="mono">{c}</td>
-              <td className={q.data?.allowlistLocked ? "muted" : ""}>
-                Workspace{q.data?.allowlistLocked ? " (ignored)" : ""}
-              </td>
-              <td>
-                <IconButton
-                  label={"Remove " + c}
-                  disabled={!!q.data?.allowlistLocked}
-                  size="sm"
-                  danger
-                  onClick={() =>
-                    void save(
-                      { workspaceCidrs: workspace.filter((x) => x !== c) },
-                      "Destination removed.",
-                    )
-                  }
-                >
-                  <Trash2 size={15} />
-                </IconButton>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {(q.data?.deploymentCidrs || []).map((c: string) => (
+              <tr key={"d" + c}>
+                <td className="mono">{c}</td>
+                <td className="muted">Deployment (.env)</td>
+                <td />
+              </tr>
+            ))}
+            {workspace.map((c) => (
+              <tr key={"w" + c}>
+                <td className="mono">{c}</td>
+                <td className={q.data?.allowlistLocked ? "muted" : ""}>
+                  Workspace{q.data?.allowlistLocked ? " (ignored)" : ""}
+                </td>
+                <td>
+                  <IconButton
+                    label={"Remove " + c}
+                    disabled={!!q.data?.allowlistLocked}
+                    size="sm"
+                    danger
+                    onClick={() =>
+                      void save(
+                        { workspaceCidrs: workspace.filter((x) => x !== c) },
+                        "Destination removed.",
+                      )
+                    }
+                  >
+                    <Trash2 size={15} />
+                  </IconButton>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       {q.data?.allowlistLocked ? (
         <div className="alert info">
           Locked by the deployment (SSH_ALLOWLIST_LOCKED=true): only the .env

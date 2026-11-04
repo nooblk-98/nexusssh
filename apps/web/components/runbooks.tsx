@@ -162,7 +162,7 @@ export function RunbooksPage() {
     }
   }
   return (
-    <div className="page narrow">
+    <div className="page narrow runbooks-page">
       <PageHead
         title="Runbooks"
         sub="Versioned command templates for the multi-server approval workflow."
@@ -186,7 +186,7 @@ export function RunbooksPage() {
           hint="Use {{service}} outside quotes. Values are quoted automatically. Use a single line without command substitutions or heredocs."
         >
           <textarea
-            className="input mono"
+            className="textarea mono"
             rows={3}
             maxLength={4096}
             value={template}
@@ -218,7 +218,7 @@ export function RunbooksPage() {
       {books.data?.map((b) => (
         <section className="card card-pad" key={b.id}>
           <b>{b.name}</b>
-          <div className="row">
+          <div className="runbook-actions">
             {b.revisions.slice(0, 5).map((r) => (
               <Button
                 variant="secondary"
