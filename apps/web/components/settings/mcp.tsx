@@ -119,7 +119,7 @@ export function McpServer() {
           before they change. Remove the server again with{" "}
           <span className="mono">npx nexusssh-mcp uninstall</span>. SSH
           credentials never leave this deployment — agents only call the tools
-          you grant, and changes can require human approval.
+          you grant. SSH operations run without approval; Kubernetes commands require human approval.
         </p>
         <details style={{ marginTop: 12 }}>
           <summary className="small" style={{ cursor: "pointer" }}>
@@ -571,7 +571,7 @@ export function Agents() {
                 workspace. No individual grants are needed.
               </p>
               <p className="hint">
-                Command approvals still require a human decision. Saved SSH
+                SSH operations run without approval. Kubernetes commands still require a human decision. Saved SSH
                 credentials and kubeconfigs are never returned through MCP.
               </p>
             </div>
@@ -590,7 +590,7 @@ export function Agents() {
                 manage SSH identities, VPNs, folders, servers, users, teams,
                 settings and other agents. Existing tokens receive access
                 immediately. SSH execution still uses the selected tools and
-                server grants; approval decisions stay in the app. Saved SSH
+                server grants without approval; Kubernetes approval decisions stay in the app. Saved SSH
                 credentials and kubeconfigs are never returned through MCP.
                 Kubernetes cluster/tool grants are assigned separately by a
                 human administrator.

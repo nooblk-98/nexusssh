@@ -54,18 +54,7 @@ describe.runIf(enabled)(
       const data = await r.json();
       return { r, data };
     }
-    async function approve(op: string, args: any, auth?: string) {
-      const pending = await request("operations/" + op, args, auth);
-      expect(pending.data.status).toBe("approval_required");
-      expect(
-        (
-          await request("approvals/" + pending.data.approvalId, {
-            decision: "approved",
-          })
-        ).r.status,
-      ).toBe(201);
-      return { ...args, approvalId: pending.data.approvalId };
-    }
+
     function launch(file: string) {
       const p = spawn(process.execPath, ["--import", "tsx", file], {
         cwd: root,
@@ -510,11 +499,11 @@ describe.runIf(enabled)(
       expect((await request("teams")).data[0].members[0].user.id).toBe(user.id);
     });
     it("polls and cancels asynchronous jobs", async () => {
-      const args = await approve("ssh_execute", {
+      const args = {
         serverId,
         command: "sleep 20",
         async: true,
-      });
+      };
       const task = await request("operations/ssh_execute", args);
       expect(task.data.status).toBe("queued");
       await request("operations/task_cancel", { taskId: task.data.taskId });
@@ -528,29 +517,40 @@ describe.runIf(enabled)(
       expect(repeated.data.status).toBe("cancelled");
       expect(repeated.data.message).toBe("Task is already terminal");
     });
-    it("binds approval to exact arguments and consumes once under racing retries", async () => {
-      const args = await approve(
-        "ssh_execute",
-        { serverId, command: "printf nexus-verified" },
-        token,
-      );
-      expect(
-        (
-          await request(
-            "operations/ssh_execute",
-            { ...args, command: "id" },
-            token,
-          )
-        ).r.status,
-      ).toBe(403);
+    it("executes repeated SSH commands immediately without human approval", async () => {
+      const args = { serverId, command: "printf nexus-verified" };
       const results = await Promise.all([
         request("operations/ssh_execute", args, token),
         request("operations/ssh_execute", args, token),
       ]);
-      expect(results.map((x) => x.r.status).sort()).toEqual([201, 403]);
-      expect(results.find((x) => x.r.status === 201)?.data.stdout).toBe(
-        "nexus-verified",
-      );
+      for (const result of results) {
+        expect(result.r.status).toBe(201);
+        expect(result.data.stdout).toBe("nexus-verified");
+        expect(result.data.approvalId).toBeUndefined();
+      }
+    });
+    it("runs batches without approval while preserving batch scope and target checks", async () => {
+      const args = { serverIds: [serverId], command: "printf batch-no-approval" };
+      // This token has ssh_execute but not ssh_execute_many.
+      expect((await request("operations/ssh_execute_many", args, token)).r.status).toBe(403);
+      expect((await request("operations/ssh_execute_many", {
+        ...args, serverIds: [serverId, randomUUID()],
+      })).r.status).toBe(404);
+      const executed = await request("operations/ssh_execute_many", args);
+      expect(executed.r.status).toBe(201);
+      expect(executed.data.approvalId).toBeUndefined();
+      expect(executed.data.results).toEqual([
+        expect.objectContaining({
+          serverId, status: "success",
+          result: expect.objectContaining({ stdout: "batch-no-approval" }),
+        }),
+      ]);
+      // Legacy approval IDs cannot impersonate an old approval's principal.
+      const legacy = await request("operations/ssh_execute", {
+        serverId, command: "printf legacy-no-approval", approvalId: randomUUID(),
+      }, token);
+      expect(legacy.r.status).toBe(201);
+      expect(legacy.data.stdout).toBe("legacy-no-approval");
     });
     it("browses SFTP, writes atomically, downloads and rejects symlink escapes", async () => {
       const list = await request("operations/ssh_list_directory", {
@@ -560,11 +560,11 @@ describe.runIf(enabled)(
       expect(list.data.entries.some((f: any) => f.name === "example.txt")).toBe(
         true,
       );
-      const args = await approve("ssh_write_file", {
+      const args = {
         serverId,
         path: "/home/nexus/files/roundtrip.txt",
         content: "SFTP roundtrip",
-      });
+      };
       expect(
         (await request("operations/ssh_write_file", args)).data.atomic,
       ).toBe(true);
@@ -769,7 +769,7 @@ describe.runIf(enabled)(
         ],
       });
       expect(removed.data.removed).toBe(4);
-      // Agents keep using operations and approvals; the browser API is human only.
+      // Agents use granted operations without approval; the browser API is human only.
       expect(
         (await request(`sftp/${serverId}/list`, undefined, token)).r.status,
       ).toBe(403);
@@ -821,7 +821,7 @@ describe.runIf(enabled)(
         cookie = owner;
       }
     });
-    it("posts new approval requests to the configured webhook", async () => {
+    it("does not post SSH approval notifications to the configured webhook", async () => {
       const { createServer } = await import("node:http");
       const received: any[] = [];
       const hook = createServer((req, res) => {
@@ -849,11 +849,9 @@ describe.runIf(enabled)(
           serverId,
           path: "/home/nexus/files/webhook-check",
         });
-        expect(pending.data.status).toBe("approval_required");
-        for (let i = 0; i < 50 && !received.length; i++)
-          await new Promise((r) => setTimeout(r, 100));
-        expect(received[0].text).toContain("ssh_create_directory");
-        expect(received[0].text).toContain(pending.data.approvalId);
+        expect(pending.r.status).toBe(201);
+        expect(pending.data.approvalId).toBeUndefined();
+        expect(received).toEqual([]);
       } finally {
         await request("settings", { approvalWebhook: "" }, undefined, "PATCH");
         hook.close();
@@ -1330,9 +1328,12 @@ describe.runIf(enabled)(
           }),
         );
         expect(c.getProtocolEra()).toBe(mode === "auto" ? "modern" : "legacy");
-        expect(
-          (await c.listTools()).tools.some((t) => t.name === "ssh_execute"),
-        ).toBe(true);
+        const advertised = (await c.listTools()).tools;
+        for (const name of ["ssh_execute", "ssh_execute_many", "ssh_write_file", "service_restart"]) {
+          const tool = advertised.find((t) => t.name === name);
+          expect(tool?.description).not.toContain("Requires an exact, single-use human approval");
+          expect(tool?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
+        }
         const listed: any = await c.callTool({
           name: "servers_list",
           arguments: {},
@@ -1344,16 +1345,12 @@ describe.runIf(enabled)(
         });
         expect(info.isError).toBe(false);
         expect(JSON.parse(info.content[0].text).stdout).toContain("Linux");
-        const pending: any = await c.callTool({
+        const executed: any = await c.callTool({
           name: "ssh_execute",
           arguments: { serverId, command: "printf mcp-real-ssh" },
         });
-        const approvalId = JSON.parse(pending.content[0].text).approvalId;
-        await request("approvals/" + approvalId, { decision: "approved" });
-        const executed: any = await c.callTool({
-          name: "ssh_execute",
-          arguments: { serverId, command: "printf mcp-real-ssh", approvalId },
-        });
+        expect(executed.isError).toBe(false);
+        expect(JSON.parse(executed.content[0].text).approvalId).toBeUndefined();
         expect(JSON.parse(executed.content[0].text).stdout).toBe(
           "mcp-real-ssh",
         );

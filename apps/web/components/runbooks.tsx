@@ -125,8 +125,8 @@ export function RunbookPicker({
             Preview exact command
           </Button>
           <p className="small">
-            Review the generated command and targets below, then request
-            approval.
+            Review the generated command and targets below, then run
+            the command.
           </p>
         </>
       )}
@@ -165,7 +165,7 @@ export function RunbooksPage() {
     <div className="page narrow runbooks-page">
       <PageHead
         title="Runbooks"
-        sub="Versioned command templates for the multi-server approval workflow."
+        sub="Versioned command templates for the multi-server command workflow."
       />
       {error && (
         <div className="alert danger" role="alert">
@@ -212,7 +212,7 @@ export function RunbooksPage() {
         </Button>
         <p className="small">
           Saving the same name creates a new version. Runbooks do not grant
-          permissions or skip approvals.
+          permissions; execution uses your existing server access.
         </p>
       </section>
       {books.data?.map((b) => (

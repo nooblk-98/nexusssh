@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { readOperations, writeOperations } from "../policy-engine/index.js";
-import { canonical, hash } from "./crypto.js";
 import { kubernetesSchemas } from "../kubernetes/tools.js";
 const id = z.uuid(),
   path = z
@@ -13,6 +12,7 @@ const id = z.uuid(),
       "Absolute paths without traversal required",
     );
 const target = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.@-]{0,127}$/);
+// Keep legacy SSH approvalId inputs compatible; execution ignores them.
 const common = {
   serverId: id,
   approvalId: id.optional(),
@@ -98,18 +98,11 @@ export function executionArgs(args: Record<string, unknown>) {
   const { approvalId: _approval, async: _async, ...rest } = args;
   return rest;
 }
-export function batchApprovalDigest(serverIds: string[], command: string, timeoutMs: number) {
-  return hash(canonical({ serverIds: [...serverIds].sort(), command, timeoutMs }));
-}
-export function batchApprovalPayload(serverIds: string[], command: string, timeoutMs: number) {
-  const args = { serverIds: [...serverIds].sort(), command, timeoutMs };
-  return { args, digest: batchApprovalDigest(args.serverIds, command, timeoutMs) };
-}
 export function completedBatchResult(result: unknown) {
   if (!result || typeof result !== "object" || !("status" in result) || result.status !== "completed")
     throw new Error("Execution has not completed");
   return Object.fromEntries(Object.entries(result).map(([key, value]) => [key, typeof value === "string" ? value.slice(0, 16384) : value]));
 }
-export function batchTokenAllowed(approvedTokenId: string | null | undefined, token: { id: string; scopes: string[] } | null) {
-  return !!approvedTokenId && !!token && token.id === approvedTokenId && token.scopes.includes("ssh_execute_many") && token.scopes.includes("ssh_execute");
+export function batchTokenAllowed(originalTokenId: string | null | undefined, token: { id: string; scopes: string[] } | null) {
+  return !!originalTokenId && !!token && token.id === originalTokenId && token.scopes.includes("ssh_execute_many") && token.scopes.includes("ssh_execute");
 }
