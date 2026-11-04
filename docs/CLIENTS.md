@@ -1,5 +1,19 @@
 # Remote MCP clients
 
+## One-command install
+
+On the computer where your AI clients run (Node.js 20 or newer):
+
+```sh
+npx -y nexusssh-mcp@latest --url https://nexusssh.example.com/mcp
+```
+
+The installer prompts for the agent token without echoing it and verifies it with an MCP `initialize` request. It then writes the server into each detected client: Claude Code (through `claude mcp add --scope user` when the CLI is installed), Claude Desktop, Cursor, VS Code, VS Code Insiders, Cline, Windsurf, Gemini CLI, Codex, and opencode. Before it changes a file, it saves the original as `<file>.nexusssh.bak`. `npx nexusssh-mcp list` shows each client's configuration path, and `npx nexusssh-mcp uninstall` removes the entries again. The [installer README](../apps/mcp/installer/README.md) lists every option.
+
+Claude Desktop starts only local stdio servers from its configuration file. Its entry runs `npx nexusssh-mcp@<version> bridge`, which relays newline-delimited JSON-RPC to this endpoint over the legacy stateless transport. The bridge reads the token from `NEXUSSSH_TOKEN` in that entry.
+
+## Tested client
+
 The verified client is the official TypeScript client v2 over real HTTP sockets, in both `versionNegotiation: { mode: 'auto' }` (modern 2026-07-28) and `mode: 'legacy'` (stateless legacy). This server uses scoped machine bearer credentials. It does not implement an OAuth authorization server, dynamic client registration or browser consent redirects.
 
 ```ts
@@ -27,9 +41,9 @@ Use `async: true` for a queued operation; poll `task_status` with the task UUID.
 
 ## Product-specific clients
 
-Cursor and VS Code versions that support remote HTTP endpoints with custom Authorization headers can use this machine-token flow. Verify the exact configuration syntax in the client version you install; no product-specific configuration has been certified in this environment. Use a secret input or protected environment variable rather than committing a token to repository configuration.
+The installer writes each client's documented user-level format for remote HTTP servers with a custom `Authorization` header. Claude Code's entry has been checked to connect. The other formats follow each product's documentation and can change between versions, so if a client does not list the server, compare its entry with that client's current documentation. Keep tokens in user-level configuration rather than committing them to repository configuration.
 
-Claude-compatible clients differ by product and version. A client that requires a hosted OAuth consent flow and cannot send a machine bearer token cannot authenticate to this release directly.
+A client that requires a hosted OAuth consent flow and cannot send a machine bearer token or launch a local stdio server cannot authenticate to this release directly.
 
 ChatGPT remote MCP integrations are likewise not certified by these tests. Do not assume they accept arbitrary machine-token headers. If the selected product requires OAuth, an appropriate OAuth resource-server integration and issuer deployment must be implemented and tested first.
 

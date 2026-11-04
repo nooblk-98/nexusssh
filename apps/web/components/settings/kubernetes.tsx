@@ -521,7 +521,7 @@ export function KubernetesClusters() {
   const [namespaceDraft, setNamespaceDraft] = useState("default");
   const [cursors, setCursors] = useState<string[]>([]);
   const [pod, setPod] = useState<ResourceSummary | null>(null);
-  const [checking, setChecking] = useState(false);
+  const [checking, setChecking] = useState<string[]>([]);
   const [error, setError] = useState("");
   const query = new URLSearchParams();
   if (resources[resource].namespaced) query.set("namespace", namespace);
@@ -544,18 +544,32 @@ export function KubernetesClusters() {
     setError("");
   };
   const check = async (cluster: Cluster) => {
-    setChecking(true);
-    setError("");
+    setChecking((ids) => [...ids, cluster.id]);
+    if (selectedId === cluster.id) setError("");
     try {
       await api(`kubernetes/clusters/${cluster.id}/check`, {});
-      await refreshClusters();
-      notify.success("Kubernetes API connection verified.");
+      notify.success(`${cluster.name}: Kubernetes API connection verified.`);
     } catch (e) {
-      setError((e as Error).message);
-      await refreshClusters();
+      if (selectedId === cluster.id) setError((e as Error).message);
+      else notify.error(`${cluster.name}: ${(e as Error).message}`);
     } finally {
-      setChecking(false);
+      await refreshClusters();
+      setChecking((ids) => ids.filter((id) => id !== cluster.id));
     }
+  };
+  // Checks run together; each row's badge and error update from the refreshed list.
+  const checkAll = async () => {
+    const list = q.data || [];
+    setChecking(list.map((cluster) => cluster.id));
+    const results = await Promise.allSettled(
+      list.map((cluster) => api(`kubernetes/clusters/${cluster.id}/check`, {})),
+    );
+    await refreshClusters();
+    setChecking([]);
+    const failed = results.filter((r) => r.status === "rejected").length;
+    if (failed)
+      notify.error(`${failed} of ${list.length} clusters failed the check.`);
+    else notify.success(`All ${list.length} clusters are reachable.`);
   };
   const remove = async (cluster: Cluster) => {
     if (
@@ -585,6 +599,16 @@ export function KubernetesClusters() {
         title="Kubernetes"
         sub="Manage saved clusters and open a kubectl console."
       >
+        {!selected && !!q.data?.length && (
+          <Button
+            variant="secondary"
+            disabled={checking.length > 0}
+            onClick={() => void checkAll()}
+          >
+            <RotateCw size={15} />{" "}
+            {checking.length > 1 ? "Checking…" : "Check all"}
+          </Button>
+        )}
         <Button variant="outline" onClick={() => setForm({})}>
           <Plus size={16} /> Add cluster
         </Button>
@@ -642,10 +666,12 @@ export function KubernetesClusters() {
             <div className="row">
               <Button
                 variant="outline"
-                disabled={checking}
+                disabled={checking.includes(selected.id)}
                 onClick={() => void check(selected)}
               >
-                {checking ? "Checking…" : "Test connection"}
+                {checking.includes(selected.id)
+                  ? "Checking…"
+                  : "Test connection"}
               </Button>
               <IconButton
                 label={`Edit ${selected.name}`}
@@ -843,67 +869,107 @@ export function KubernetesClusters() {
           </div>
         </>
       ) : q.data?.length ? (
-        <div className="kube-clusters">
-          {q.data.map((cluster) => (
-            <section
-              key={cluster.id}
-              className="card card-pad kube-cluster-card"
-            >
-              <div className="row">
-                <KubernetesIcon size={22} />
-                <h2 className="grow ellipsis" title={cluster.name}>
-                  {cluster.name}
-                </h2>
-                <IconButton
-                  label={`Edit ${cluster.name}`}
-                  onClick={() => setForm({ cluster })}
-                >
-                  <Pencil size={15} />
-                </IconButton>
-                <IconButton
-                  label={`Remove ${cluster.name}`}
-                  danger
-                  onClick={() => void remove(cluster)}
-                >
-                  <Trash2 size={15} />
-                </IconButton>
-              </div>
-              <p className="small muted">{cluster.server}</p>
-              <p className="small">
-                Context: {cluster.context} · {cluster.namespace}
-              </p>
-              <p className="small muted">
-                Route:{" "}
-                {cluster.bastionId
-                  ? "SSH bastion"
-                  : cluster.vpnProfileId
-                    ? "WireGuard"
-                    : "Direct"}
-                {cluster.bastionId && cluster.vpnProfileId
-                  ? " via WireGuard"
-                  : ""}
-              </p>
-              {cluster.description && (
-                <p className="small muted">{cluster.description}</p>
-              )}
-              <div className="row">
-                <span className={`badge ${statusColor(cluster.status)}`}>
-                  {cluster.status === "connected"
-                    ? cluster.version || "Connected"
-                    : cluster.status === "error"
-                      ? "Check failed"
-                      : "Not checked"}
-                </span>
-                <span className="grow" />
-                <Button size="sm" onClick={() => connectCluster(cluster)}>
-                  Open console
-                </Button>
-                <Button variant="text" size="sm" onClick={() => open(cluster)}>
-                  Browse resources
-                </Button>
-              </div>
-            </section>
-          ))}
+        <div className="card table-card">
+          <table className="table kube-cluster-table">
+            <thead>
+              <tr>
+                <th>Cluster</th>
+                <th>API server</th>
+                <th>Context</th>
+                <th>Route</th>
+                <th>Health</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {q.data.map((cluster) => (
+                <tr key={cluster.id}>
+                  <td>
+                    <div className="row" style={{ gap: 8 }}>
+                      <KubernetesIcon size={18} />
+                      <b style={{ fontWeight: 600 }}>{cluster.name}</b>
+                    </div>
+                    {cluster.description && (
+                      <div className="small muted kube-cluster-description">
+                        {cluster.description}
+                      </div>
+                    )}
+                  </td>
+                  <td className="mono small kube-cluster-server">
+                    {cluster.server}
+                  </td>
+                  <td className="small">
+                    {cluster.context}
+                    <div className="muted">{cluster.namespace}</div>
+                  </td>
+                  <td className="small">
+                    {cluster.bastionId
+                      ? "SSH bastion"
+                      : cluster.vpnProfileId
+                        ? "WireGuard"
+                        : "Direct"}
+                    {cluster.bastionId && cluster.vpnProfileId
+                      ? " via WireGuard"
+                      : ""}
+                  </td>
+                  <td>
+                    <span
+                      className={`badge ${statusColor(cluster.status)}`}
+                      title={cluster.lastError || undefined}
+                    >
+                      {checking.includes(cluster.id)
+                        ? "Checking…"
+                        : cluster.status === "connected"
+                          ? cluster.version || "Connected"
+                          : cluster.status === "error"
+                            ? "Check failed"
+                            : "Not checked"}
+                    </span>
+                    <div className="small muted">
+                      {cluster.lastCheckedAt
+                        ? `Checked ${timeAgo(cluster.lastCheckedAt)}`
+                        : "Never checked"}
+                    </div>
+                  </td>
+                  <td>
+                    <div className="row kube-cluster-actions">
+                      <Button
+                        variant="text"
+                        size="sm"
+                        disabled={checking.includes(cluster.id)}
+                        onClick={() => void check(cluster)}
+                      >
+                        <RotateCw size={13} /> Check now
+                      </Button>
+                      <Button size="sm" onClick={() => connectCluster(cluster)}>
+                        Open console
+                      </Button>
+                      <Button
+                        variant="text"
+                        size="sm"
+                        onClick={() => open(cluster)}
+                      >
+                        Browse resources
+                      </Button>
+                      <IconButton
+                        label={`Edit ${cluster.name}`}
+                        onClick={() => setForm({ cluster })}
+                      >
+                        <Pencil size={15} />
+                      </IconButton>
+                      <IconButton
+                        label={`Remove ${cluster.name}`}
+                        danger
+                        onClick={() => void remove(cluster)}
+                      >
+                        <Trash2 size={15} />
+                      </IconButton>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       ) : (
         !q.error && (

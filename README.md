@@ -3,10 +3,11 @@
 <img src="docs/assets/nexusssh-banner.svg" alt="NexusSSH — a centralized web-based SSH and Kubernetes manager with MCP support. Infrastructure credentials stay on your deployment." width="1200" />
 
 [![Verification](https://img.shields.io/github/actions/workflow/status/nooblk-98/nexusssh/checks.yml?branch=development&style=flat-square&label=checks)](https://github.com/nooblk-98/nexusssh/actions/workflows/checks.yml)
-[![Release](https://img.shields.io/badge/release-v0.3.0-0f766e?style=flat-square)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.4.0-0f766e?style=flat-square)](CHANGELOG.md)
 [![Container image](https://img.shields.io/badge/ghcr.io-nexusssh-2088ff?style=flat-square&logo=docker&logoColor=white)](https://github.com/nooblk-98/nexusssh/pkgs/container/nexusssh)
 [![Self-hosted](https://img.shields.io/badge/deployment-self--hosted-0f766e?style=flat-square)](#getting-started)
 [![MCP support](https://img.shields.io/badge/MCP-supported-2563eb?style=flat-square)](#connect-an-ai-client-through-mcp)
+[![npm](https://img.shields.io/npm/v/nexusssh-mcp?style=flat-square&label=npx%20nexusssh-mcp&color=cb3837)](https://www.npmjs.com/package/nexusssh-mcp)
 [![Kubernetes support](https://img.shields.io/badge/Kubernetes-supported-6366f1?style=flat-square)](docs/KUBERNETES.md)
 
 ⭐ If NexusSSH is useful to you, star the repository. It helps others find it.
@@ -99,7 +100,7 @@ This pulls the prebuilt image from GitHub Container Registry and starts two cont
 | Image tag                                 | Built from                                       |
 | ----------------------------------------- | ------------------------------------------------ |
 | `ghcr.io/nooblk-98/nexusssh:latest`       | The newest stable release (default)              |
-| `ghcr.io/nooblk-98/nexusssh:v0.3.0`       | A specific release, also published as `0.3.0`    |
+| `ghcr.io/nooblk-98/nexusssh:v0.4.0`       | A specific release, also published as `0.4.0`    |
 | `ghcr.io/nooblk-98/nexusssh:0.3`          | The newest patch release of a minor version      |
 | `ghcr.io/nooblk-98/nexusssh:development`  | The `development` branch, for early testing      |
 | `ghcr.io/nooblk-98/nexusssh:sha-<commit>` | An exact commit, for pinning and rollback        |
@@ -120,7 +121,50 @@ Installation secrets are generated on first start and kept in the `nexusssh_secr
 > Back up both volumes. Losing the encryption key makes saved credentials unrecoverable, and `docker compose down -v` deletes them.
 
 > [!WARNING]
-> The app serves plain HTTP on port `8080`. For a shared or internet-facing installation, put a TLS-terminating reverse proxy in front, set a stable `APP_URL`, and narrow `SSH_ALLOWED_CIDRS` by following the [deployment guide](docs/DEPLOYMENT.md).
+> The app serves plain HTTP on port `8080`. For a shared or internet-facing installation, put a TLS-terminating reverse proxy in front, set a stable `APP_URL`, and restrict `SSH_ALLOWED_CIDRS` and `KUBERNETES_ALLOWED_CIDRS` by following the [deployment guide](docs/DEPLOYMENT.md).
+
+### Optional settings
+
+`docker-compose.yml` sets only what the container needs. Set these from your shell or a `.env` file next to it:
+
+| Variable            | Default                                        | Purpose                                                                                                          |
+| ------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `APP_URL`           | Unset: serve whatever address the app is reached on | Public HTTPS address, such as `https://nexusssh.example.com`. Fixes the allowed browser origin and the MCP endpoint (`<APP_URL>/mcp`). |
+| `HTTP_PORT`         | `8080`                                         | Host port the gateway publishes.                                                                                 |
+| `NEXUSSSH_IMAGE`    | `ghcr.io/nooblk-98/nexusssh:latest`            | Image tag to run.                                                                                                |
+
+Everything else is optional and has a working default. Cloud metadata addresses such as `169.254.169.254` are always refused, whatever the allowlists say. To set any of these, create a `docker-compose.override.yml` beside `docker-compose.yml`. Docker Compose merges it automatically, and replacing `docker-compose.yml` on upgrade leaves it in place:
+
+```yaml
+services:
+  nexusssh:
+    environment:
+      OIDC_ISSUER: https://login.example.com
+      OIDC_CLIENT_ID: nexusssh
+      OIDC_CLIENT_SECRET: change-me
+```
+
+| Variable                                                                            | Default                                   | Purpose                                                                                                                       |
+| ----------------------------------------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `SETUP_TOKEN`                                                                       | Generated on first start                  | Token for creating the owner account. Read the generated one from `docker compose logs nexusssh`.                            |
+| `SSH_ALLOWED_CIDRS`                                                                 | `0.0.0.0/0,::/0` (every address)          | Restricts the networks SSH targets may live in, for example `10.0.0.0/8,192.168.0.0/16`. Administrators can add networks under **Settings → Security**. |
+| `KUBERNETES_ALLOWED_CIDRS`                                                          | `0.0.0.0/0,::/0` (every address)          | Restricts the networks Kubernetes API servers may live in. See [Kubernetes](docs/KUBERNETES.md#network-access).               |
+| `SSH_ALLOWLIST_LOCKED`                                                              | `false`                                   | `true` applies only `SSH_ALLOWED_CIDRS` and stops administrators from adding networks in the UI.                             |
+| `MCP_PUBLIC_URL`                                                                    | `<APP_URL>/mcp`                           | MCP endpoint address, when it differs from the one derived from `APP_URL`.                                                   |
+| `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`                               | Unset                                     | Single sign-on. Requires an HTTPS `APP_URL`. See [Operations](docs/OPERATIONS.md).                                            |
+| `OIDC_LABEL`                                                                        | `Single sign-on`                          | Sign-in button text.                                                                                                          |
+| `SFTP_FILE_HISTORY`                                                                 | `false`                                   | `true` keeps encrypted editor history, up to 10 versions per path.                                                           |
+| `SFTP_HISTORY_DAYS`                                                                 | `30`                                      | How long file history is kept.                                                                                                |
+| `SFTP_MAX_FILE_BYTES`                                                               | `10737418240` (10 GiB)                    | Largest file accepted by an SFTP upload.                                                                                      |
+| `BACKUP_DIRECTORY`, `BACKUP_ENCRYPTION_KEY`                                         | Unset                                     | Scheduled encrypted backups. The key is a separate 32-byte hex value. See `infrastructure/compose/backup.yml`.               |
+| `BACKUP_INTERVAL_HOURS`, `BACKUP_RETAIN_COUNT`                                      | `24`, `14`                                | Backup schedule and how many archives to keep.                                                                                |
+| `BACKUP_UPLOAD_URL`, `BACKUP_WEBHOOK_URL`                                           | Unset                                     | HTTPS endpoint each backup is `PUT` to, and a completion or failure webhook.                                                  |
+| `SSH_CONNECT_TIMEOUT`, `SSH_IDLE_TIMEOUT`                                           | `10000`, `300000` ms                      | SSH connect and idle timeouts.                                                                                                |
+| `SSH_MAX_SESSIONS`, `SSH_WORKER_CONCURRENCY`, `SSH_HEALTH_CONCURRENCY`              | `20`, `4`, `4`                            | Open sessions, concurrent SSH operations, and concurrent reachability checks.                                                |
+| `SSH_OUTPUT_LIMIT`                                                                  | `1048576` bytes                           | Largest command output returned to a caller.                                                                                  |
+| `AUDIT_RETENTION_DAYS`                                                              | `90`                                      | How long audit records are kept.                                                                                              |
+
+The [deployment guide](docs/DEPLOYMENT.md) covers each setting in detail.
 
 ## Connect an AI client through MCP
 
@@ -128,7 +172,16 @@ NexusSSH is the controlled execution layer between your AI client and your infra
 
 1. Save and verify your connections in NexusSSH.
 2. Under **Settings → AI Agents**, register an agent. Choose **Administrator** for the whole workspace, or **Custom** to pick its servers, clusters, and tools.
-3. Copy the token, which is shown once, into your client's secret store and add the server:
+3. Copy the token, which is shown once. Then, on the computer where your AI clients run, install the MCP server into all of them with one command:
+
+   ```sh
+   npx -y nexusssh-mcp@latest --url https://nexusssh.example.com/mcp
+   ```
+
+   Use the endpoint shown under **Settings → MCP Server**. The installer asks for the token without echoing it and checks it against the endpoint. It then adds NexusSSH to every client it detects: Claude Code, Claude Desktop, Cursor, VS Code, Cline, Windsurf, Gemini CLI, Codex, and opencode. Restart the clients afterwards. It needs Node.js 20 or newer, backs up each file before changing it, and `npx nexusssh-mcp uninstall` removes the server again. See the [installer guide](apps/mcp/installer/README.md) for options such as `--clients` and `--yes`.
+
+   <details>
+   <summary>Configure a client manually</summary>
 
    ```json
    {
@@ -141,6 +194,8 @@ NexusSSH is the controlled execution layer between your AI client and your infra
      }
    }
    ```
+
+   </details>
 
 4. Ask your assistant to inspect disk usage, list Kubernetes resources, or read pod logs. Commands and mutations return an approval request. Approve it under **Settings → Approvals**, and the agent retries the exact approved operation.
 

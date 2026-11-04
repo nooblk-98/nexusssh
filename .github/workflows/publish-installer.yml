@@ -1,0 +1,100 @@
+name: Publish MCP installer
+
+# Publishes apps/mcp/installer to npm as `nexusssh-mcp`:
+# - A push to main that changes the installer publishes the package.json version
+#   as `latest` when it is newer than the published one; bump it to ship an update.
+# - A push to development that changes the installer publishes
+#   `<version>-dev.<run>` as `next`, so `npx nexusssh-mcp@next` tests it early.
+# - A GitHub release publishes the release version (`next` for pre-releases).
+# A version that is already on npm is skipped, never overwritten.
+#
+# Authenticates with npm trusted publishing when it is configured for this
+# workflow on npmjs.com, otherwise with an automation token in NPM_TOKEN.
+on:
+  push:
+    branches: [main, development]
+    paths:
+      - apps/mcp/installer/**
+      - .github/workflows/publish-installer.yml
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-installer
+  cancel-in-progress: false
+
+jobs:
+  npm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/mcp/installer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or newer.
+      - run: npm install -g npm@11
+      - name: Choose version and dist-tag
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref_name }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+          RUN: ${{ github.run_number }}
+        run: |
+          current=$(node -p "require('./package.json').version")
+          latest=$(npm view nexusssh-mcp dist-tags.latest 2>/dev/null || true)
+          tag=latest
+          if [ "$EVENT" = release ]; then
+            version="${REF#v}"
+            [ "$PRERELEASE" = true ] && tag=next
+          elif [ "$REF" = development ]; then
+            version="$current-dev.$RUN"
+            tag=next
+          else
+            version="$current"
+          fi
+          newer=$(node -e '
+            const core = (v) => (v || "0.0.0").split("-")[0].split(".").map(Number);
+            const [a, b] = [core(process.argv[1]), core(process.argv[2])];
+            const i = a.findIndex((x, k) => x !== b[k]);
+            console.log(i >= 0 && a[i] > b[i]);' "$version" "$latest")
+          publish=true
+          if [ -n "$(npm view "nexusssh-mcp@$version" version 2>/dev/null)" ]; then
+            publish=false
+            reason="nexusssh-mcp@$version is already on npm."
+          elif [ "$tag" = latest ] && [ "$newer" != true ]; then
+            publish=false
+            reason="$version is not newer than the published latest ($latest). Bump apps/mcp/installer/package.json to publish."
+          fi
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+          if [ "$publish" = true ]; then
+            echo "### Publishing \`nexusssh-mcp@$version\` as \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::notice::Skipped: $reason"
+            echo "### Skipped: $reason" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Set the package version
+        if: steps.plan.outputs.publish == 'true'
+        run: npm version "${{ steps.plan.outputs.version }}" --no-git-tag-version --allow-same-version
+      - name: Smoke test
+        if: steps.plan.outputs.publish == 'true'
+        run: node cli.mjs --help && node cli.mjs list
+      - name: Publish
+        if: steps.plan.outputs.publish == 'true'
+        run: npm publish --provenance --access public --tag "${{ steps.plan.outputs.tag }}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
