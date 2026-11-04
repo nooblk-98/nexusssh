@@ -2,7 +2,11 @@
 
 ## Unreleased
 
-No unreleased changes.
+### Fixed
+
+- Keep the latest SFTP directory selected when navigation requests finish out of order; cancel superseded listings and listings for closed tabs without reporting cancellation as an error.
+- Cancel in-flight browser API queries when their last view unmounts, using React Query's existing cancellation signal.
+- Improve shared status badge text contrast in light and dark themes without changing the palette families.
 
 ## [0.4.0](https://github.com/nooblk-98/nexusssh/compare/v0.3.1...v0.4.0) - 2026-11-04
 

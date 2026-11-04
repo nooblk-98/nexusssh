@@ -101,7 +101,7 @@ This pulls the prebuilt image from GitHub Container Registry and starts two cont
 | ----------------------------------------- | ------------------------------------------------ |
 | `ghcr.io/nooblk-98/nexusssh:latest`       | The newest stable release (default)              |
 | `ghcr.io/nooblk-98/nexusssh:v0.4.0`       | A specific release, also published as `0.4.0`    |
-| `ghcr.io/nooblk-98/nexusssh:0.3`          | The newest patch release of a minor version      |
+| `ghcr.io/nooblk-98/nexusssh:0.4`          | The newest patch release of a minor version      |
 | `ghcr.io/nooblk-98/nexusssh:development`  | The `development` branch, for early testing      |
 | `ghcr.io/nooblk-98/nexusssh:sha-<commit>` | An exact commit, for pinning and rollback        |
 

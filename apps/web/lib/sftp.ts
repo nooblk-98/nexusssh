@@ -18,9 +18,12 @@ const q = (params: Record<string, string | string[]>) => {
 export const sftp = (serverId: string) => {
   const base = `sftp/${serverId}/`;
   return {
-    list: (path?: string) =>
+    list: (path?: string, signal?: AbortSignal) =>
       api<{ path: string; root: string; entries: Entry[]; truncated: boolean }>(
         base + "list?" + q(path ? { path } : {}),
+        undefined,
+        undefined,
+        signal,
       ),
     search: (path: string, term: string) =>
       api<{ matches: { path: string; directory: boolean; size: number }[] }>(

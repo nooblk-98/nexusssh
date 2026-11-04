@@ -54,7 +54,7 @@ export function useApi<T = Row[]>(
 ) {
   return useQuery<T>({
     queryKey: [path],
-    queryFn: () => api<T>(path),
+    queryFn: ({ signal }) => api<T>(path, undefined, undefined, signal),
     enabled,
     refetchInterval: interval || false,
   });
