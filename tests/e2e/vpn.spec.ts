@@ -60,7 +60,10 @@ test("import, select, edit and delete a WireGuard VPN profile", async ({
     path: "test-results/vpn-desktop.png",
     fullPage: true,
   });
-  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Settings", exact: true })
+    .getByRole("button", { name: "Back to workspace", exact: true })
+    .click();
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await page.getByRole("menuitem", { name: "Server", exact: true }).click();
   await page.getByRole("button", { name: "Advanced Settings" }).click();
