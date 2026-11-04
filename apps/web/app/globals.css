@@ -1741,17 +1741,25 @@ p {
 .kube-page > * {
   min-width: 0;
 }
-.kube-clusters {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr));
-  gap: 16px;
+.kube-cluster-table td {
+  vertical-align: top;
 }
-.kube-cluster-card {
-  display: grid;
-  align-content: start;
-  gap: 14px;
+.kube-cluster-server {
+  max-width: 260px;
+  overflow-wrap: anywhere;
 }
-.kube-cluster-card h2,
+.kube-cluster-description {
+  max-width: 320px;
+  margin-top: 4px;
+  line-height: 1.5;
+}
+.kube-cluster-table .badge + .small {
+  margin-top: 4px;
+}
+.kube-cluster-actions {
+  gap: 2px;
+  flex-wrap: wrap;
+}
 .kube-cluster-heading h2 {
   color: var(--text-strong);
   font-size: 16px;
@@ -1759,7 +1767,6 @@ p {
   overflow-wrap: anywhere;
   min-width: 0;
 }
-.kube-cluster-card p,
 .kube-connection p {
   overflow-wrap: anywhere;
   line-height: 1.7;

@@ -96,14 +96,12 @@ export function McpServer() {
             clusters and tools. Enable Workspace management for keys, VPN
             profiles, folders and other app administration.
           </li>
+          <li>Copy the token shown once after creation.</li>
           <li>
-            Copy the token shown once after creation.
-          </li>
-          <li>
-            Run the installer on the computer where your AI clients run. It
-            asks for the token, checks it, and adds NexusSSH to Claude Code,
-            Claude Desktop, Cursor, VS Code, Cline, Windsurf, Gemini CLI, Codex
-            and opencode. Restart the clients afterwards.
+            Run the installer on the computer where your AI clients run. It asks
+            for the token, checks it, and adds NexusSSH to Claude Code, Claude
+            Desktop, Cursor, VS Code, Cline, Windsurf, Gemini CLI, Codex and
+            opencode. Restart the clients afterwards.
           </li>
         </ol>
         <div style={{ position: "relative" }}>
