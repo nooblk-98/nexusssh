@@ -1,8 +1,8 @@
 name: Verification
-# One run per commit on the single self-hosted runner: pushes are verified only
-# on long-lived branches, and feature branches are verified through their pull
-# request. Release tags point at a commit main already verified, so they are
-# not checked again; publish.yml builds release images on its own.
+# One run per commit: pushes are verified only on long-lived branches, and
+# feature branches are verified through their pull request. Release tags point
+# at a commit main already verified, so they are not checked again; publish.yml
+# builds release images on its own.
 on:
   push:
     branches: [main, development]
@@ -15,45 +15,47 @@ permissions:
 concurrency:
   group: verification-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+# The three jobs run in parallel on GitHub-hosted runners; wall time is the
+# slowest of them instead of their sum.
 jobs:
-  test:
-    # Never execute untrusted fork code on the persistent host.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    timeout-minutes: 60
-    runs-on: [self-hosted, Linux, X64, nexusssh]
+  static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      # No Actions cache: the persistent host keeps ~/.npm and the Go module
-      # and build caches between jobs, and the cache service round trip costs
-      # more than it saves.
       - uses: actions/setup-node@v4
-        with: {node-version: 24}
+        with: {node-version: 24, cache: npm}
       - run: npm ci
       - run: docker compose config --quiet
       - run: python3 tests/recovery_bundle_test.py
-      - name: Build commit image
-        run: docker build --build-arg APP_REVISION="$GITHUB_SHA" -f infrastructure/docker/Dockerfile -t "nexusssh:${GITHUB_SHA}" .
       - uses: actions/setup-go@v5
-        with: {go-version-file: services/vpn-gateway/go.mod, cache: false}
+        with: {go-version-file: services/vpn-gateway/go.mod, cache-dependency-path: services/vpn-gateway/go.sum}
       - run: go test -race ./...
         working-directory: services/vpn-gateway
-      - run: npm run setup && npm run db:generate && npm run db:migrate
+      - run: npm run setup && npm run db:generate
       - run: npm run lint && npm run typecheck && npm run build
-      - run: docker compose -f tests/fixtures/compose.yml up -d --build
-      - run: npm test
-        env: {RUN_INTEGRATION: '1'}
-      # Browser tests run against a native stack that can reach the SSH fixture.
-      - run: npx playwright install chromium
-      - run: sed -i 's#^SSH_ALLOWED_CIDRS=.*#SSH_ALLOWED_CIDRS=127.0.0.1/32#; s#^REDIS_URL=.*#REDIS_URL=redis://127.0.0.1:26379#' .env
-      - run: |
-          (npm run dev > dev.log 2>&1 &)
-          curl -sf --retry 60 --retry-connrefused --retry-delay 3 http://127.0.0.1:3001/api/health
-          curl -sf --retry 60 --retry-connrefused --retry-delay 3 -o /dev/null http://localhost:3000
-      - run: npx playwright test
-        env: {E2E_URL: 'http://localhost:3000', E2E_SSH: '1'}
-      # Rollback archives are kept only for main, and only after every check
-      # passes; artifact storage limits must never fail verification. A release
-      # tag's archive is the one saved for its commit on main.
+
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build commit image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile
+          build-args: APP_REVISION=${{ github.sha }}
+          tags: nexusssh:${{ github.sha }}
+          # Only main keeps a rollback archive, so only main loads the image.
+          load: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          cache-from: type=gha,scope=verification-amd64
+          cache-to: type=gha,mode=max,scope=verification-amd64
+      # Rollback archives are kept only for main; artifact storage limits must
+      # never fail verification. A release tag's archive is the one saved for
+      # its commit on main. publish needs every job, so a failed check still
+      # fails the run.
       - name: Save rollback reference
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
@@ -69,14 +71,33 @@ jobs:
             image-manifest.txt
             nexusssh-image.tar.gz
           retention-days: 7
+
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 24, cache: npm}
+      - run: npm ci
+      - run: npm run setup && npm run db:generate && npm run db:migrate
+      - run: docker compose -f tests/fixtures/compose.yml up -d --build
+      - run: npm test
+        env: {RUN_INTEGRATION: '1'}
+      # Browser tests run against a native stack that can reach the SSH fixture.
+      - run: npx playwright install --with-deps chromium
+      - run: sed -i 's#^SSH_ALLOWED_CIDRS=.*#SSH_ALLOWED_CIDRS=127.0.0.1/32#; s#^REDIS_URL=.*#REDIS_URL=redis://127.0.0.1:26379#' .env
+      - run: |
+          (npm run dev > dev.log 2>&1 &)
+          curl -sf --retry 60 --retry-connrefused --retry-delay 3 http://127.0.0.1:3001/api/health
+          curl -sf --retry 60 --retry-connrefused --retry-delay 3 -o /dev/null http://localhost:3000
+      - run: npx playwright test
+        env: {E2E_URL: 'http://localhost:3000', E2E_SSH: '1'}
       - if: failure()
         run: tail -n 200 dev.log
-      - if: always()
-        run: |
-          docker compose -f tests/fixtures/compose.yml down --remove-orphans
-          docker compose --project-directory . -f infrastructure/compose/vpn-dev.yml down --remove-orphans
+
   publish:
-    needs: test
+    needs: [static, image, test]
     # Releases publish their own images; see publish.yml.
     if: github.event_name == 'push' && github.ref == 'refs/heads/development'
     permissions:
@@ -85,7 +106,7 @@ jobs:
     uses: ./.github/workflows/publish.yml
   # Deploy after the image is published, so the deployment can pull it.
   deploy:
-    needs: [test, publish]
+    needs: [static, image, test, publish]
     if: github.event_name == 'push' && github.ref == 'refs/heads/development'
     uses: ./.github/workflows/deploy.yml
     secrets: inherit

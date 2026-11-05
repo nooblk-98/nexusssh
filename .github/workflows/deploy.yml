@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: [self-hosted, Linux, X64, nexusssh]
+    runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
       - name: Trigger deployment webhook
