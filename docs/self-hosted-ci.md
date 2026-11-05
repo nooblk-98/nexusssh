@@ -5,6 +5,18 @@ All executable jobs in `.github/workflows/` target
 `runs-on`. There is no GitHub-hosted fallback. ARM64 images use QEMU on the
 x64 machine. A single runner executes jobs serially.
 
+To keep the queue short, Verification runs once per commit:
+
+- Pushes are verified only on `main` and `development`; feature branches are
+  verified through their pull request. Use **Run workflow** to verify any other
+  branch by hand.
+- Release tags are not verified again; they point at a commit `main` already
+  verified. `publish.yml` still builds and publishes release images.
+- A new push to a pull request cancels its older run. Pushes to `main` and
+  `development` are never cancelled.
+- Node and Go use the host's persistent caches (`~/.npm`, Go module and build
+  caches) instead of the Actions cache service.
+
 ## Current host
 
 - Repository: `nooblk-98/nexusssh`
