@@ -108,8 +108,9 @@ The helper verifies the backup, replaces the file atomically, and never silently
 ## Upgrade
 
 CI builds an image tagged with the exact source commit on every run. For pushes to
-`main` and tags that pass all checks, it retains the compressed Docker archive and
-`image-manifest.txt` as a seven-day workflow artifact. The
+`main` that pass all checks, it retains the compressed Docker archive and
+`image-manifest.txt` as a seven-day workflow artifact. Release tags are cut from
+`main`, so use the archive from the `main` run for the tagged commit. The
 manifest includes Docker's immutable image ID. To deploy that exact build,
 download the artifact, check the loaded image ID against the manifest, run
 `docker load -i nexusssh-image.tar.gz`, and set `NEXUSSSH_IMAGE` to the recorded
