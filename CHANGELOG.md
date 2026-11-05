@@ -16,6 +16,7 @@ AI agents now run every granted SSH and Kubernetes operation without waiting for
 
 ### Fixed
 
+- Retry gateway-reported VPN DNS and TCP connection failures once on the same tunnel, allowing a slow first WireGuard handshake to complete without manually retrying the SSH terminal. Policy and authentication failures remain immediate, and SSH commands are never replayed.
 - Settings pages, the Kubernetes cluster table, the command palette and the connect dialog lay out correctly on narrow and mobile screens, and dialogs and menus handle keyboard focus and accessible names consistently.
 - Keep delayed Kubernetes connection-check errors attached to their originating cluster instead of showing them in another cluster’s resource view.
 - Refresh only cluster metadata after connection checks, avoiding unrelated resource and pod-log reloads. Use Refresh resources to reload resource data explicitly.
