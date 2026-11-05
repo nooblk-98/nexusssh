@@ -75,3 +75,38 @@ README re-read: corrected the stale minor-image example from `0.3` to `0.4`; ins
 - `CI=1 E2E_URL=http://127.0.0.1:3100 npx playwright test ui-responsive settings-layout sidebar kubernetes- review-lifecycle --output=/tmp/nexus-final-results`: **26 passed**. Initial overlapping browser runs collided in Playwright's output directory; the final run was sequential in a separate temporary output directory.
 - `git diff --check`: passed. Local Markdown link targets in README, Changelog, Status, Operations, this review and the installer README all exist. External links and deployment commands were reviewed, not executed against production.
 - Deleted fully merged `fix/responsive-ui-audit`, `fix/remove-all-approvals` and `fix/remove-ssh-approvals` branches locally/remotely after checking their tips against merged PRs #10/#9/#8 and ancestry in development. Preserved main/development and PR records.
+
+## 2026-11-05 follow-up: primary actions and cluster checks
+
+Baseline: `development` at `cbc90f71ef271119578b3424404d82824b264c99`.
+
+### Design system preflight
+
+- `apps/web/app/globals.css`: semantic slate/blue light and zinc/blue dark palettes, 8/12/16/24px spacing conventions, mostly 6–8px radii, `--shadow`/`--shadow-lg`, primary-token focus ring. No independent spacing/radius token scale.
+- `components/ui.tsx`: Button/IconButton, Field/Check/SearchInput, Drawer/Dialog, promise-based `confirmDialog`/`promptDialog`, menus and toasts; `notify` is in `lib/api.ts`.
+- Settings retain `components/settings/layout.tsx`, `page-head.tsx`, and `card`, `table-card`, `badge`, `btn` conventions. Existing dynamic imports already defer terminal/SFTP/editor/Kubernetes console and Monaco. Reused installed React Query's exact query-key invalidation and React refs; no custom request framework or dependencies.
+
+### Changes and evidence
+
+- Light primary blue uses existing palette shades `#2563eb` / hover `#1d4ed8`. Primary-button text contrast improves **3.68 → 5.17:1** (hover **5.17 → 6.70:1**). Dark stays unchanged at **6.97:1**, hover **9.82:1**. The shared token also improves blue action/link text. This is not a complete contrast certification of all UI colours.
+- Connection checks invalidate only cluster metadata rather than every Kubernetes query. With the resource browser open, one check previously triggered **2 extra resource GETs; now 0**. Initial browse plus check: **4 → 2 resource GETs**. Explicit resource/log refresh and broad invalidation after profile mutations remain unchanged. No server-side latency or throughput claim is made.
+- A delayed failure for cluster Alpha no longer appears as an inline error while browsing Beta. The response checks the current selection rather than the selection captured when the request began; a notification names Alpha instead.
+- `tests/e2e/review-checks.spec.ts` reproduced all three baseline failures and now covers contrast (normal/hover, both themes), focus/visibility/overflow, request counts and the delayed-check race.
+
+Matching synthetic Chromium renders at **1440 × 900**, local fonts ready, animations disabled. The before render uses development's original stylesheet; the static cluster-list markup is unchanged by this patch. Only the displayed pair is retained.
+
+| Primary actions, light | Before | After |
+| --- | --- | --- |
+| Cluster list | ![Before](2026-11-05/primary-light-before.png) | ![After](2026-11-05/primary-light-after.png) |
+
+### Verification and limitations
+
+- `npm run lint`, `npm run typecheck`: passed.
+- `npx vitest run tests/unit`: **28 files / 202 tests passed**, with disposable environment values only. Initial run rejected a too-short synthetic SESSION_SECRET; rerun used the required length.
+- `CI=1 E2E_URL=http://127.0.0.1:3100 npx playwright test ui-responsive settings-layout sidebar kubernetes- review-lifecycle review-checks --output=/tmp/nexus-final`: **30 passed**. Includes home/all 16 settings routes, widths 320/390/768/1024/1440, both themes, populated table containment, sidebar and overlay keyboard behavior, cancellation and delayed-response regressions.
+- `CI=1 E2E_URL=http://127.0.0.1:3100 npx playwright test kubernetes.spec review-checks --output=/tmp/nexus-additional`: **7 passed** (33 unique browser tests across both runs).
+- `git diff --check`: passed. Local Markdown path targets in README, Changelog, Status, Kubernetes, this review and installer README all exist. External links and production deployment commands were reviewed, not executed.
+- README re-read top to bottom: features now mention on-demand cluster checks; release badge, commands, installer and deployment settings unchanged. Kubernetes guide, Status and Changelog synchronized. No installer/API/schema/security/deployment behavior changed; no dependencies or unrelated restructuring.
+- Removed fully merged PR #11's local/remote branch after verifying its tip against the PR and development ancestry. Preserved PR records and main/development.
+
+This is a focused follow-up, not exhaustive verification of every route × state × overlay combination. The inherited route sweep uses mostly empty fixtures, with separate populated tables and Kubernetes workflows. Terminal/editor split-view interactions, every error/loading state, a full AA/tap-target inventory, live SSH/SFTP/cluster connectivity, real devices and backend throughput are not certified. Backend inspection retained existing bounded cluster/resource lists and expiring result storage; no unmeasured backend optimization was made. Remaining query-count/default-inheritance work noted on 4 November is still a follow-up.

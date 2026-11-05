@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   FileText,
@@ -503,6 +503,8 @@ function PodLogs({
 export function KubernetesClusters() {
   const q = useApi<Cluster[]>("kubernetes/clusters");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
   const selected = q.data?.find((cluster) => cluster.id === selectedId);
   const [form, setForm] = useState<{
     cluster?: Cluster;
@@ -550,10 +552,10 @@ export function KubernetesClusters() {
       await api(`kubernetes/clusters/${cluster.id}/check`, {});
       notify.success(`${cluster.name}: Kubernetes API connection verified.`);
     } catch (e) {
-      if (selectedId === cluster.id) setError((e as Error).message);
+      if (selectedIdRef.current === cluster.id) setError((e as Error).message);
       else notify.error(`${cluster.name}: ${(e as Error).message}`);
     } finally {
-      await refreshClusters();
+      await queryClient.invalidateQueries({ queryKey: ["kubernetes/clusters"] });
       setChecking((ids) => ids.filter((id) => id !== cluster.id));
     }
   };
@@ -564,7 +566,7 @@ export function KubernetesClusters() {
     const results = await Promise.allSettled(
       list.map((cluster) => api(`kubernetes/clusters/${cluster.id}/check`, {})),
     );
-    await refreshClusters();
+    await queryClient.invalidateQueries({ queryKey: ["kubernetes/clusters"] });
     setChecking([]);
     const failed = results.filter((r) => r.status === "rejected").length;
     if (failed)
