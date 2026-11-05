@@ -58,6 +58,15 @@ This does not convert an external cloud login plugin into a static token.
 For those contexts, provide a restricted service-account token or a client
 certificate instead. Token expiration is handled by replacing the kubeconfig.
 
+## Connection checks
+
+Use **Check now** on a cluster row, **Check all** above the list, or **Test connection**
+inside the resource browser to verify connectivity. Checks refresh cluster health
+metadata without reloading resource lists or pod logs. Use **Refresh resources**
+or **Refresh logs** to reload those views. If you switch clusters during a check,
+a late failure is reported with the original cluster name, not as an error on
+the newly selected cluster.
+
 ## Network access
 
 The API endpoint must be reachable from the NexusSSH deployment. Its IP

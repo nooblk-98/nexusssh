@@ -31,7 +31,7 @@ It also ships with a built-in [Model Context Protocol (MCP)](https://modelcontex
 | **Centralized workspace**  | Nested folders for servers and clusters, search, tags, favorites, recent connections, split views, a command palette, and saved workspace presets.          |
 | **Browser SSH**            | Interactive terminals with pinned host keys, session resume, snippets, search, command suggestions, and broadcast input across sessions.                     |
 | **Remote files**           | SFTP browsing, resumable uploads with progress, and a Monaco editor with change previews, conflict detection, and optional encrypted file history.            |
-| **Kubernetes**             | Kubeconfig import with context and namespace selection, a cluster command console, resource browsing, and pod logs.                                          |
+| **Kubernetes**             | Kubeconfig import with context and namespace selection, a cluster command console, on-demand connection checks, resource browsing, and pod logs.                                          |
 | **AI access through MCP**  | Per-agent server, cluster, and tool grants, approval-free SSH commands and mutations, approval-free Kubernetes commands, call limits, token revocation, and per-agent activity.                |
 | **Private infrastructure** | Reach targets through saved WireGuard profiles, an SSH bastion, or both. The same routes serve browser sessions and MCP operations.                          |
 | **Team access**            | Users, teams, operation grants, TOTP MFA with recovery codes, and optional OIDC single sign-on.                                                              |

@@ -1,6 +1,6 @@
 # Verification and remaining work
 
-Source review updated: 4 November 2026. This page describes implemented behavior and the limits of local verification; it is not a production-readiness declaration.
+Source review updated: 5 November 2026. This page describes implemented behavior and the limits of local verification; it is not a production-readiness declaration.
 
 ## Verification
 
@@ -11,6 +11,8 @@ Local checks cover TypeScript, ESLint, the native production build, unit suites 
 The unit suites include real database migrations and encrypted storage, authorization/direct-execution boundaries, Kubernetes command planning, VPN parsing, task recovery, SFTP conflict/history protection, request-context isolation, SSO browser/state binding and local MFA enforcement. Browser fixtures validate UI behavior; Linux/OpenSSH integration fixtures separately exercise the actual remote transports when enabled.
 
 The [4 November follow-up UI review](ui-review/README.md#2026-11-04-follow-up-request-lifecycle-and-status-contrast) adds browser regressions for stale SFTP directory responses, cancellation when leaving Operations, and computed AA contrast for readiness badges. Its performance measurement is browser request cancellation, not a backend throughput benchmark.
+
+The [5 November review](ui-review/README.md#2026-11-05-follow-up-primary-actions-and-cluster-checks) adds primary-action contrast checks in both themes, a delayed cluster-check regression, and request-count coverage showing that connection checks no longer reload unrelated resource lists.
 
 ## Phase status
 

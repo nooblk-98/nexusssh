@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Keep delayed Kubernetes connection-check errors attached to their originating cluster instead of showing them in another cluster’s resource view.
+- Refresh only cluster metadata after connection checks, avoiding unrelated resource and pod-log reloads. Use Refresh resources to reload resource data explicitly.
+- Improve light-theme primary action and link contrast using the existing blue palette; dark-theme colours are unchanged.
+
 - Keep the latest SFTP directory selected when navigation requests finish out of order; cancel superseded listings and listings for closed tabs without reporting cancellation as an error.
 - Cancel in-flight browser API queries when their last view unmounts, using React Query's existing cancellation signal.
 - Improve shared status badge text contrast in light and dark themes without changing the palette families.
