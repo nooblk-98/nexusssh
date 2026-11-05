@@ -14,8 +14,8 @@ export function CommandPalette({ servers, canManage, onClose, onCheck }: { serve
     <div className="drawer-section">Actions</div>
     {canManage && (!query || "new server".includes(query.toLowerCase())) && <Button variant="secondary" onClick={() => act(() => openServerDrawer({}))}>New server</Button>}
     <div className="drawer-section">Servers</div>
-    {matches.map((server) => <div key={server.id} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 8 }}>
-      <span className="grow ellipsis" title={server.host}>{server.name}</span>
+    {matches.map((server) => <div key={server.id} className="palette-server">
+      <span className="palette-server-name" title={server.host}>{server.name}</span>
       <Button size="sm" onClick={() => act(() => connectServer(server))}>Connect</Button>
       {canManage && <Button size="sm" variant="secondary" onClick={() => act(() => openServerDrawer({ server }))}>Details</Button>}
       <Button size="sm" variant="secondary" onClick={() => act(() => onCheck(server))}>Test</Button>

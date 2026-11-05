@@ -4,6 +4,32 @@
 
 No unreleased changes.
 
+## [0.5.0](https://github.com/nooblk-98/nexusssh/compare/v0.4.0...v0.5.0) - 2026-11-05
+
+AI agents now run every granted SSH and Kubernetes operation without waiting for human approval, and the web interface works better on small screens and with assistive technology. The database schema is unchanged from v0.4.0; no migration runs.
+
+### Changed
+
+- SSH shell commands, batch commands, file and service changes, and Kubernetes commands from MCP agents now run as soon as they pass authorization. They no longer create or consume human approvals. Token scopes, server and cluster grants, call budgets, destination allowlists, host-key checks and worker re-authorization still apply to every call.
+- **Settings → Approvals**, the approval badge in the sidebar and the **Approval Notifications** webhook setting are removed. The `approvals_list` MCP tool remains for compatibility and always returns an empty list.
+- MCP tool annotations still mark SSH and Kubernetes write operations as destructive, so clients that prompt before destructive tools keep doing so.
+
+### Fixed
+
+- Settings pages, the Kubernetes cluster table, the command palette and the connect dialog lay out correctly on narrow and mobile screens, and dialogs and menus handle keyboard focus and accessible names consistently.
+- Keep delayed Kubernetes connection-check errors attached to their originating cluster instead of showing them in another cluster’s resource view.
+- Refresh only cluster metadata after connection checks, avoiding unrelated resource and pod-log reloads. Use Refresh resources to reload resource data explicitly.
+- Improve light-theme primary action and link contrast using the existing blue palette; dark-theme colours are unchanged.
+- Keep the latest SFTP directory selected when navigation requests finish out of order; cancel superseded listings and listings for closed tabs without reporting cancellation as an error.
+- Cancel in-flight browser API queries when their last view unmounts, using React Query's existing cancellation signal.
+- Improve shared status badge text contrast in light and dark themes without changing the palette families.
+
+### Upgrade
+
+1. Back up the `nexusssh_data` and `nexusssh_secrets` volumes.
+2. Review the tool grants of your MCP agents. Every granted command now runs without a human check, so remove write and command tools from agents that should only read.
+3. Run `docker compose pull && docker compose up -d`. The `docker-compose.yml` file is unchanged from v0.4.0, and your existing volumes are reused.
+
 ## [0.4.0](https://github.com/nooblk-98/nexusssh/compare/v0.3.1...v0.4.0) - 2026-11-04
 
 Connect every AI client on a computer to NexusSSH with one command, manage clusters from a list with on-demand health checks, and deploy with a minimal compose file. The database schema is unchanged from v0.3.1; no migration runs.

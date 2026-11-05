@@ -148,7 +148,7 @@ test("import a direct cluster, browse paginated resources, read logs, edit metad
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await page
     .getByRole("navigation", { name: "Settings", exact: true })
-    .getByRole("button", { name: "Back", exact: true })
+    .getByRole("button", { name: "Back to workspace", exact: true })
     .click();
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await page

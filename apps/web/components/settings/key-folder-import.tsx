@@ -116,18 +116,18 @@ export function KeyFolderImport() {
     await refresh("identities", "servers");
   };
 
-  return <div className="card" style={{ padding: 20, marginBottom: 20 }}>
+  return <div className="card card-pad key-folder-import">
     <h3>Import keys by tag folder</h3>
     <p>Select a directory whose immediate subfolders each contain one private key. Each folder name must exactly match one workspace tag. The key becomes a new encrypted identity and is assigned to servers with that tag.</p>
-    <input type="file" multiple aria-label="Choose key directory" {...{ webkitdirectory: "" }} onChange={(event) => void select(event.currentTarget.files)} disabled={busy || loadingPreview || tags.isLoading || identities.isLoading} />
+    <input className="vpn-file-input" type="file" multiple aria-label="Choose key directory" {...{ webkitdirectory: "" }} onChange={(event) => void select(event.currentTarget.files)} disabled={busy || loadingPreview || tags.isLoading || identities.isLoading} />
     {loadingPreview && <p role="status">Loading all servers for preview…</p>}
     {message && <p role="alert">{message}</p>}
     {!!entries.length && <>
-      <table className="table"><thead><tr><th>Folder</th><th>Key file</th><th>Passphrase</th><th>Matching servers</th><th>Status</th></tr></thead><tbody>
+      <div className="settings-table-scroll"><table className="table"><thead><tr><th>Folder</th><th>Key file</th><th>Passphrase</th><th>Matching servers</th><th>Status</th></tr></thead><tbody>
         {entries.map((entry, index) => <tr key={entry.folder}><td>{entry.folder}</td><td>{entry.file.name}</td><td><input type="password" className="input" aria-label={`Passphrase for ${entry.folder}`} autoComplete="off" value={entry.passphrase} disabled={busy || !!entry.identityId} onChange={(event) => { const value = event.target.value; setEntries((current) => current.map((item, i) => i === index ? { ...item, passphrase: value } : item)); setConfirmed(false); }} /></td><td>{entry.servers.length}: {entry.servers.map((server) => server.name).join(", ")}</td><td>{entry.error || entry.status || "Ready"}{entry.identityId && entry.status !== "Complete" ? ` (${entry.assigned}/${entry.servers.length} assigned)` : ""}</td></tr>)}
-      </tbody></table>
+      </tbody></table></div>
       <p>Import may partly succeed. Keep this page open to retry remaining assignments. If you leave it, inspect identities and server assignments before selecting the folder again; existing imported names are blocked to avoid duplicates.</p>
-      <label><input type="checkbox" checked={confirmed} disabled={busy || entries.some((entry) => !!entry.error)} onChange={(event) => setConfirmed(event.target.checked)} /> Confirm creation and assignment for the servers shown</label>
+      <label className="check"><input type="checkbox" checked={confirmed} disabled={busy || entries.some((entry) => !!entry.error)} onChange={(event) => setConfirmed(event.target.checked)} /> Confirm creation and assignment for the servers shown</label>
       <div><Button disabled={!confirmed || busy || entries.some((entry) => !!entry.error) || entries.every((entry) => entry.status === "Complete")} onClick={() => void run()}>{busy ? "Importing…" : entries.some((entry) => !!entry.identityId) ? "Retry remaining" : "Import keys"}</Button></div>
     </>}
   </div>;

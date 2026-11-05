@@ -54,7 +54,7 @@ export function useApi<T = Row[]>(
 ) {
   return useQuery<T>({
     queryKey: [path],
-    queryFn: () => api<T>(path),
+    queryFn: ({ signal }) => api<T>(path, undefined, undefined, signal),
     enabled,
     refetchInterval: interval || false,
   });
@@ -65,17 +65,9 @@ export async function refresh(...keys: string[]): Promise<void> {
     keys.map((k) => queryClient.invalidateQueries({ queryKey: [k] })),
   );
 }
-// Runs a policy-checked SSH operation. Operations that need a human decision
-// come back as approval_required; callers show that instead of a result.
+// Execute directly after server-side authorization.
 export async function operation<T = Row>(op: string, args: Row): Promise<T> {
-  const result = await api<Row>("operations/" + op, args);
-  if (result.status === "approval_required") {
-    void refresh("approvals");
-    throw new Error(
-      "Approval required. An administrator can approve it under Settings → Approvals, then retry.",
-    );
-  }
-  return result as T;
+  return api<T>("operations/" + op, args);
 }
 // navigator.clipboard is also limited to secure origins; fall back to a
 // temporary textarea so Copy works over plain HTTP too.

@@ -28,7 +28,7 @@ The **Workspace presets** toolbar button saves named layouts to the signed-in ac
 
 Administrators create encrypted, immutable template versions under **Settings → Runbooks**. Saving the same name creates a version. Use single-line templates such as `systemctl status -- {{service}}`, with parameters outside quotes. Values are shell-quoted automatically. Heredocs and command substitutions are rejected. Administrators must choose commands with appropriate argument behavior; use `--` where supported and avoid `eval`, interpreters or programs that execute parameter text.
 
-In **Run command on servers**, choose a template/version, supply parameters and preview the exact command. Review targets and request approval. Existing single-use approvals, permission checks, timeouts, cancellation and per-server results apply. Template changes do not alter pending approvals. Limits: 100 versions per runbook, with 50 recent versions selectable in lists.
+In **Run command on servers**, choose a template/version, supply parameters and preview the exact command. Review targets and run the command directly, without human approval. Permission checks, timeouts, cancellation and per-server results still apply. Template changes do not alter commands already queued. Limits: 100 versions per runbook, with 50 recent versions selectable in lists.
 
 ## Generic OIDC sign-in
 
@@ -79,3 +79,5 @@ This refuses an existing destination, authenticates/decrypts the archive and ver
 ## Request references
 
 API errors expose `X-Correlation-ID`; **Audit Log** can filter by this request reference. It follows queued SSH jobs into worker requests, audit records and structured metadata logs. Existing business correlation IDs for tasks/approvals are preserved separately. Bodies, credentials, authorization codes and remote output are excluded from these logs.
+
+Browser readiness polling stops when the Operations view unmounts; any outstanding status fetch is cancelled. This does not cancel server-side backups or other mutations.

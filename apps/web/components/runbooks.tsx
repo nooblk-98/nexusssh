@@ -125,8 +125,8 @@ export function RunbookPicker({
             Preview exact command
           </Button>
           <p className="small">
-            Review the generated command and targets below, then request
-            approval.
+            Review the generated command and targets below, then run
+            the command.
           </p>
         </>
       )}
@@ -162,10 +162,10 @@ export function RunbooksPage() {
     }
   }
   return (
-    <div className="page narrow">
+    <div className="page narrow runbooks-page">
       <PageHead
         title="Runbooks"
-        sub="Versioned command templates for the multi-server approval workflow."
+        sub="Versioned command templates for the multi-server command workflow."
       />
       {error && (
         <div className="alert danger" role="alert">
@@ -186,7 +186,7 @@ export function RunbooksPage() {
           hint="Use {{service}} outside quotes. Values are quoted automatically. Use a single line without command substitutions or heredocs."
         >
           <textarea
-            className="input mono"
+            className="textarea mono"
             rows={3}
             maxLength={4096}
             value={template}
@@ -212,13 +212,13 @@ export function RunbooksPage() {
         </Button>
         <p className="small">
           Saving the same name creates a new version. Runbooks do not grant
-          permissions or skip approvals.
+          permissions; execution uses your existing server access.
         </p>
       </section>
       {books.data?.map((b) => (
         <section className="card card-pad" key={b.id}>
           <b>{b.name}</b>
-          <div className="row">
+          <div className="runbook-actions">
             {b.revisions.slice(0, 5).map((r) => (
               <Button
                 variant="secondary"

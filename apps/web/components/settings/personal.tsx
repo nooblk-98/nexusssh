@@ -68,7 +68,7 @@ export function Account({ me }: { me: Row }) {
           </IconButton>
         </p>
       ) : (
-        <div className="row" style={{ maxWidth: 420 }}>
+        <div className="row account-name-edit" style={{ maxWidth: 420 }}>
           <input
             autoFocus
             className="input"

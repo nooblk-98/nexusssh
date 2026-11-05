@@ -1,6 +1,6 @@
 import { authorize, serverVisibility } from "./server-access.js";
 export { authorize, serverVisibility } from "./server-access.js";
-import { kubernetesOperation, kubernetesApprovalStatus } from "./kubernetes-operations.js";
+import { kubernetesOperation } from "./kubernetes-operations.js";
 import { kubernetesOperations } from "../../../packages/kubernetes/policy.js";
 import {
   ForbiddenException,
@@ -24,13 +24,11 @@ import {
 import {
   parseOperation,
   executionArgs,
-  batchApprovalPayload,
   completedBatchResult,
   batchTokenAllowed,
 } from "../../../packages/shared/operations.js";
 import {
   effectiveAgentScopes,
-  needsApproval,
   type Principal,
 } from "../../../packages/policy-engine/index.js";
 import {
@@ -112,37 +110,6 @@ export async function listServersPage(p: Principal, q: {
     })),
     nextCursor: page.length > 100 ? page[99].id : null,
   };
-}
-// Optional webhook (Slack, Discord, Teams or any JSON endpoint) told about
-// new approval requests so they are not left waiting unseen.
-export const APPROVAL_WEBHOOK = "notify.approvalWebhook";
-export async function approvalWebhook(org: string) {
-  const row = await db.systemSetting.findUnique({
-    where: {
-      organizationId_key: { organizationId: org, key: APPROVAL_WEBHOOK },
-    },
-  });
-  return row?.value || "";
-}
-async function announceApproval(
-  p: Principal,
-  op: string,
-  serverName: string,
-  approvalId: string,
-) {
-  const url = await approvalWebhook(p.organizationId);
-  if (!url) return;
-  const who =
-    p.kind === "agent"
-      ? (await db.agent.findUnique({ where: { id: p.id } }))?.name + " (agent)"
-      : (await db.user.findUnique({ where: { id: p.id } }))?.name;
-  const text = `NexusSSH: ${who} requests approval for ${op} on ${serverName} (${approvalId}). Review it under Settings > Approvals.`;
-  await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, content: text }),
-    signal: AbortSignal.timeout(5000),
-  }).catch(() => {});
 }
 // SSH destinations allowed for a workspace: the deployment's SSH_ALLOWED_CIDRS
 // plus networks administrators add under Settings > Security.
@@ -316,53 +283,13 @@ async function executeMany(p: Principal, input: unknown, signal?: AbortSignal) {
   const ids: string[] = [...a.serverIds].sort();
   if (Math.ceil(ids.length / 3) * (a.timeoutMs + config.SSH_CONNECT_TIMEOUT) > 180000)
     throw new BadRequestException("Batch timeout is too long for this number of servers; reduce timeoutMs or serverIds");
-  const { args: normalized, digest } = batchApprovalPayload(ids, a.command, a.timeoutMs);
-  let subject = p;
-  if (a.approvalId) {
-    const approval = await db.approvalRequest.findFirst({ where: { id: a.approvalId, organizationId: p.organizationId, operation: "ssh_execute_many", status: "approved", consumedAt: null, expiresAt: { gt: new Date() }, argumentDigest: digest } });
-    if (!approval) throw new ForbiddenException("Approval is missing, expired, mismatched, or already consumed");
-    if (approval.principalId === p.id && p.kind === "agent" && !batchTokenAllowed(approval.tokenId, p.tokenId ? { id: p.tokenId, scopes: p.scopes } : null))
-      throw new ForbiddenException("The requesting agent token is no longer the approved token");
-    if (approval.principalId !== p.id) {
-      if (p.kind !== "user" || !["owner", "administrator"].includes(p.role))
-        throw new ForbiddenException("Only an administrator may execute another principal's approved batch");
-      const agent = await db.agent.findFirst({ where: { id: approval.principalId, organizationId: p.organizationId, revoked: false, owner: { disabled: false } }, include: { owner: true, tokens: { where: { id: approval.tokenId ?? "", revoked: false, expiresAt: { gt: new Date() } } } } });
-      if (agent) {
-        const token = agent.tokens[0];
-        const scopes: string[] = token ? effectiveAgentScopes(agent.level, JSON.parse(token.scopes), agent.owner.role) : [];
-        if (!batchTokenAllowed(approval.tokenId, token ? { id: token.id, scopes } : null)) throw new ForbiddenException("The originally approved agent token is no longer active for batch execution");
-        subject = { id: agent.id, organizationId: p.organizationId, kind: "agent", role: agent.level, scopes, tokenId: token.id, ownerId: agent.ownerId };
-      } else {
-        if (approval.tokenId) throw new ForbiddenException("The originally approved agent is unavailable");
-        const user = await db.user.findFirst({ where: { id: approval.principalId, organizationId: p.organizationId, disabled: false } });
-        if (!user) throw new ForbiddenException("Requesting principal is unavailable");
-        subject = { id: user.id, organizationId: p.organizationId, kind: "user", role: user.role, scopes: [] };
-      }
-    }
-  }
+  // Execute as the caller; approvals never substitute another principal.
+  const subject = p;
   if (subject.kind === "agent" && !subject.scopes.includes("ssh_execute_many"))
     throw new ForbiddenException({ code: "operation_not_in_token_scope", message: "Batch execution is not in the agent token scope" });
-  // Check every target before creating or consuming the exact-set approval.
-  const servers = await Promise.all(ids.map((id) => authorize(subject, id, "ssh_execute")));
-  if (!a.approvalId) {
-    const approval = await db.approvalRequest.create({ data: {
-      organizationId: subject.organizationId, principalId: subject.id, tokenId: subject.tokenId ?? null, serverId: ids[0],
-      operation: "ssh_execute_many", argumentDigest: digest,
-      encryptedArguments: seal(normalized, config.ENCRYPTION_KEY, subject.organizationId),
-      expiresAt: new Date(Date.now() + 600000),
-    } });
-    await audit(subject, "ssh_execute_many", "approval_pending", ids[0], approval.id);
-    void announceApproval(subject, "ssh_execute_many", servers.map((s) => s.name).join(", "), approval.id);
-    return { status: "approval_required", approvalId: approval.id, expiresAt: approval.expiresAt };
-  }
+  // Authorize every target before reserving quota or queueing any command.
+  await Promise.all(ids.map((id) => authorize(subject, id, "ssh_execute")));
   const createBatch = async (tx: Prisma.TransactionClient) => {
-    const used = await tx.approvalRequest.updateMany({
-      where: { id: a.approvalId, organizationId: subject.organizationId, principalId: subject.id, tokenId: subject.tokenId ?? null,
-        serverId: ids[0], operation: "ssh_execute_many", argumentDigest: digest,
-        status: "approved", consumedAt: null, expiresAt: { gt: new Date() } },
-      data: { status: "consumed", consumedAt: new Date() },
-    });
-    if (used.count !== 1) throw new ForbiddenException("Approval is missing, expired, mismatched, or already consumed");
     const batch = await tx.batchDispatch.create({ data: { organizationId: subject.organizationId, principalId: subject.id } });
     const taskIds: string[] = [];
     for (const serverId of ids) {
@@ -388,7 +315,6 @@ async function executeMany(p: Principal, input: unknown, signal?: AbortSignal) {
     await tx.backgroundTask.updateMany({ where: { batchId: batch.batchId, status: "queued" }, data: { status: "failed" } });
     await tx.commandExecution.updateMany({ where: { id: { in: batch.taskIds }, status: "queued" }, data: { status: "failed" } });
     await tx.auditEvent.updateMany({ where: { correlationId: batch.batchId, action: "ssh_execute_many", status: "queued" }, data: { status: "failed" } });
-    await tx.approvalRequest.updateMany({ where: { id: a.approvalId, status: "consumed", principalId: subject.id }, data: { status: "approved", consumedAt: null } });
     return true;
   });
   let job;
@@ -426,18 +352,6 @@ async function singleOperation(
 ): Promise<any> {
   const a = parseOperation(op, input);
   if (op === "servers_list") return listServersPage(p, a);
-  if (op === "approval_get_status") {
-    const row = await db.approvalRequest.findFirst({
-      where: {
-        id: a.approvalId,
-        principalId: p.id,
-        organizationId: p.organizationId,
-      },
-      select: { id: true, status: true, expiresAt: true, consumedAt: true },
-    });
-    if (!row) return kubernetesApprovalStatus(p, a.approvalId);
-    return row;
-  }
   if (op === "task_status" || op === "task_cancel") {
     const t = await db.backgroundTask.findFirst({
       where: {
@@ -510,51 +424,6 @@ async function singleOperation(
     };
   const normalized = executionArgs(a),
     digest = hash(canonical(normalized));
-  if (needsApproval(op)) {
-    if (!a.approvalId) {
-      const approval = await db.approvalRequest.create({
-        data: {
-          organizationId: p.organizationId,
-          principalId: p.id,
-          serverId: server.id,
-          operation: op,
-          argumentDigest: digest,
-          encryptedArguments: seal(
-            normalized,
-            config.ENCRYPTION_KEY,
-            p.organizationId,
-          ),
-          expiresAt: new Date(Date.now() + 600000),
-        },
-      });
-      await audit(p, op, "approval_pending", server.id, approval.id);
-      void announceApproval(p, op, server.name, approval.id);
-      return {
-        status: "approval_required",
-        approvalId: approval.id,
-        expiresAt: approval.expiresAt,
-      };
-    }
-    // An atomic compare-and-swap consumes the exact grant once, before any remote effect.
-    const used = await db.approvalRequest.updateMany({
-      where: {
-        id: a.approvalId,
-        organizationId: p.organizationId,
-        principalId: p.id,
-        serverId: server.id,
-        operation: op,
-        argumentDigest: digest,
-        status: "approved",
-        consumedAt: null,
-        expiresAt: { gt: new Date() },
-      },
-      data: { status: "consumed", consumedAt: new Date() },
-    });
-    if (used.count !== 1)
-      throw new ForbiddenException(
-        "Approval is missing, expired, mismatched, or already consumed",
-      );
-  }
   const createTask = async (
     tx: Pick<typeof db, "backgroundTask" | "commandExecution">,
   ) => {

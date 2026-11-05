@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   FileText,
@@ -503,6 +503,8 @@ function PodLogs({
 export function KubernetesClusters() {
   const q = useApi<Cluster[]>("kubernetes/clusters");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
   const selected = q.data?.find((cluster) => cluster.id === selectedId);
   const [form, setForm] = useState<{
     cluster?: Cluster;
@@ -550,10 +552,10 @@ export function KubernetesClusters() {
       await api(`kubernetes/clusters/${cluster.id}/check`, {});
       notify.success(`${cluster.name}: Kubernetes API connection verified.`);
     } catch (e) {
-      if (selectedId === cluster.id) setError((e as Error).message);
+      if (selectedIdRef.current === cluster.id) setError((e as Error).message);
       else notify.error(`${cluster.name}: ${(e as Error).message}`);
     } finally {
-      await refreshClusters();
+      await queryClient.invalidateQueries({ queryKey: ["kubernetes/clusters"] });
       setChecking((ids) => ids.filter((id) => id !== cluster.id));
     }
   };
@@ -564,7 +566,7 @@ export function KubernetesClusters() {
     const results = await Promise.allSettled(
       list.map((cluster) => api(`kubernetes/clusters/${cluster.id}/check`, {})),
     );
-    await refreshClusters();
+    await queryClient.invalidateQueries({ queryKey: ["kubernetes/clusters"] });
     setChecking([]);
     const failed = results.filter((r) => r.status === "rejected").length;
     if (failed)
@@ -869,8 +871,16 @@ export function KubernetesClusters() {
           </div>
         </>
       ) : q.data?.length ? (
-        <div className="card table-card">
+        <div className="card table-card kube-cluster-list">
           <table className="table kube-cluster-table">
+            <colgroup>
+              <col />
+              <col className="kube-cluster-server-column" />
+              <col className="kube-cluster-context-column" />
+              <col className="kube-cluster-route-column" />
+              <col className="kube-cluster-health-column" />
+              <col className="kube-cluster-actions-column" />
+            </colgroup>
             <thead>
               <tr>
                 <th>Cluster</th>
@@ -885,7 +895,7 @@ export function KubernetesClusters() {
               {q.data.map((cluster) => (
                 <tr key={cluster.id}>
                   <td>
-                    <div className="row" style={{ gap: 8 }}>
+                    <div className="kube-cluster-name">
                       <KubernetesIcon size={18} />
                       <b style={{ fontWeight: 600 }}>{cluster.name}</b>
                     </div>
@@ -932,7 +942,7 @@ export function KubernetesClusters() {
                     </div>
                   </td>
                   <td>
-                    <div className="row kube-cluster-actions">
+                    <div className="kube-cluster-actions">
                       <Button
                         variant="text"
                         size="sm"
@@ -944,26 +954,30 @@ export function KubernetesClusters() {
                       <Button size="sm" onClick={() => connectCluster(cluster)}>
                         Open console
                       </Button>
-                      <Button
-                        variant="text"
-                        size="sm"
-                        onClick={() => open(cluster)}
-                      >
-                        Browse resources
-                      </Button>
-                      <IconButton
-                        label={`Edit ${cluster.name}`}
-                        onClick={() => setForm({ cluster })}
-                      >
-                        <Pencil size={15} />
-                      </IconButton>
-                      <IconButton
-                        label={`Remove ${cluster.name}`}
-                        danger
-                        onClick={() => void remove(cluster)}
-                      >
-                        <Trash2 size={15} />
-                      </IconButton>
+                      <div className="kube-cluster-actions-secondary">
+                        <Button
+                          variant="text"
+                          size="sm"
+                          onClick={() => open(cluster)}
+                        >
+                          Browse resources
+                        </Button>
+                        <IconButton
+                          label={`Edit ${cluster.name}`}
+                          size="sm"
+                          onClick={() => setForm({ cluster })}
+                        >
+                          <Pencil size={15} />
+                        </IconButton>
+                        <IconButton
+                          label={`Remove ${cluster.name}`}
+                          size="sm"
+                          danger
+                          onClick={() => void remove(cluster)}
+                        >
+                          <Trash2 size={15} />
+                        </IconButton>
+                      </div>
                     </div>
                   </td>
                 </tr>

@@ -7,13 +7,11 @@ import {
   Plus,
   RotateCw,
   ScrollText,
-  ShieldCheck,
 } from "lucide-react";
 import {
   api,
   copyText,
   notify,
-  operation,
   refresh,
   saveFile,
   timeAgo,
@@ -104,7 +102,7 @@ export function McpServer() {
             opencode. Restart the clients afterwards.
           </li>
         </ol>
-        <div style={{ position: "relative" }}>
+        <div className="mcp-code-block">
           <code className="code">{install}</code>
           <button
             className="btn btn-secondary btn-sm"
@@ -119,13 +117,13 @@ export function McpServer() {
           before they change. Remove the server again with{" "}
           <span className="mono">npx nexusssh-mcp uninstall</span>. SSH
           credentials never leave this deployment — agents only call the tools
-          you grant, and changes can require human approval.
+          you grant. SSH and Kubernetes operations run without approval.
         </p>
         <details style={{ marginTop: 12 }}>
           <summary className="small" style={{ cursor: "pointer" }}>
             Configure a client manually
           </summary>
-          <div style={{ position: "relative", marginTop: 10 }}>
+          <div className="mcp-code-block" style={{ marginTop: 10 }}>
             <code className="code">{config}</code>
             <button
               className="btn btn-secondary btn-sm"
@@ -268,7 +266,7 @@ export function Agents() {
       )}
       <div className="card table-card">
         {list.length ? (
-          <table className="table">
+          <table className="table settings-table-wide">
             <thead>
               <tr>
                 <th>Agent</th>
@@ -320,89 +318,93 @@ export function Agents() {
                       {a.revoked ? "Revoked" : "Active"}
                     </span>
                   </td>
-                  <td className="row" style={{ gap: 2 }}>
-                    <Button
-                      variant="text"
-                      size="sm"
-                      onClick={() => setActivity(a)}
-                    >
-                      Activity
-                    </Button>
-                    <Button
-                      variant="text"
-                      size="sm"
-                      disabled={a.revoked}
-                      onClick={() => {
-                        const scopes: string[] = [
-                          ...new Set<string>(
-                            a.tokens
-                              .filter((t: Row) => !t.revoked)
-                              .flatMap((t: Row) => JSON.parse(t.scopes)),
-                          ),
-                        ];
-                        setForm({
-                          id: a.id,
-                          name: a.name,
-                          level:
-                            a.level === "administrator"
-                              ? "administrator"
-                              : "custom",
-                          days: 30,
-                          serverIds: a.permissions.map((p: Row) => p.serverId),
-                          operations: scopes.filter((op) => ops.includes(op)),
-                          clusterIds: (a.clusterPermissions || []).map(
-                            (p: Row) => p.clusterId,
-                          ),
-                          clusterOperations: scopes.filter((op) =>
-                            settings.data?.kubernetesOperations?.includes(op),
-                          ),
-                          workspaceManagement:
-                            scopes.includes("workspace_manage"),
-                          perMinute: "",
-                          perDay: "",
-                        });
-                      }}
-                    >
-                      Access
-                    </Button>
-                    <Button
-                      variant="text"
-                      size="sm"
-                      disabled={a.revoked}
-                      onClick={() =>
-                        setLimits({
-                          agent: a,
-                          perMinute: a.maxCallsPerMinute
-                            ? String(a.maxCallsPerMinute)
-                            : "",
-                          perDay: a.maxCallsPerDay
-                            ? String(a.maxCallsPerDay)
-                            : "",
-                        })
-                      }
-                    >
-                      Limits
-                    </Button>
-                    <Button
-                      variant="text"
-                      size="sm"
-                      disabled={a.revoked}
-                      onClick={async () => {
-                        if (
-                          await confirmDialog(
-                            "Revoke Agent",
-                            `Revoke all access for ${a.name}? Its tokens stop working immediately.`,
-                            "Revoke",
-                            true,
+                  <td>
+                    <div className="settings-table-actions">
+                      <Button
+                        variant="text"
+                        size="sm"
+                        onClick={() => setActivity(a)}
+                      >
+                        Activity
+                      </Button>
+                      <Button
+                        variant="text"
+                        size="sm"
+                        disabled={a.revoked}
+                        onClick={() => {
+                          const scopes: string[] = [
+                            ...new Set<string>(
+                              a.tokens
+                                .filter((t: Row) => !t.revoked)
+                                .flatMap((t: Row) => JSON.parse(t.scopes)),
+                            ),
+                          ];
+                          setForm({
+                            id: a.id,
+                            name: a.name,
+                            level:
+                              a.level === "administrator"
+                                ? "administrator"
+                                : "custom",
+                            days: 30,
+                            serverIds: a.permissions.map(
+                              (p: Row) => p.serverId,
+                            ),
+                            operations: scopes.filter((op) => ops.includes(op)),
+                            clusterIds: (a.clusterPermissions || []).map(
+                              (p: Row) => p.clusterId,
+                            ),
+                            clusterOperations: scopes.filter((op) =>
+                              settings.data?.kubernetesOperations?.includes(op),
+                            ),
+                            workspaceManagement:
+                              scopes.includes("workspace_manage"),
+                            perMinute: "",
+                            perDay: "",
+                          });
+                        }}
+                      >
+                        Access
+                      </Button>
+                      <Button
+                        variant="text"
+                        size="sm"
+                        disabled={a.revoked}
+                        onClick={() =>
+                          setLimits({
+                            agent: a,
+                            perMinute: a.maxCallsPerMinute
+                              ? String(a.maxCallsPerMinute)
+                              : "",
+                            perDay: a.maxCallsPerDay
+                              ? String(a.maxCallsPerDay)
+                              : "",
+                          })
+                        }
+                      >
+                        Limits
+                      </Button>
+                      <Button
+                        variant="text"
+                        size="sm"
+                        disabled={a.revoked}
+                        onClick={async () => {
+                          if (
+                            await confirmDialog(
+                              "Revoke Agent",
+                              `Revoke all access for ${a.name}? Its tokens stop working immediately.`,
+                              "Revoke",
+                              true,
+                            )
                           )
-                        )
-                          await api("agents/" + a.id, {}, "DELETE")
-                            .then(() => refresh("agents"))
-                            .catch(notify.error);
-                      }}
-                    >
-                      Revoke
-                    </Button>
+                            await api("agents/" + a.id, {}, "DELETE")
+                              .then(() => refresh("agents"))
+                              .catch(notify.error);
+                        }}
+                      >
+                        Revoke
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -567,7 +569,7 @@ export function Agents() {
                 workspace. No individual grants are needed.
               </p>
               <p className="hint">
-                Command approvals still require a human decision. Saved SSH
+                SSH and Kubernetes operations run without approval. Saved SSH
                 credentials and kubeconfigs are never returned through MCP.
               </p>
             </div>
@@ -586,7 +588,7 @@ export function Agents() {
                 manage SSH identities, VPNs, folders, servers, users, teams,
                 settings and other agents. Existing tokens receive access
                 immediately. SSH execution still uses the selected tools and
-                server grants; approval decisions stay in the app. Saved SSH
+                server and cluster grants without approval. Saved SSH
                 credentials and kubeconfigs are never returned through MCP.
                 Kubernetes cluster/tool grants are assigned separately by a
                 human administrator.
@@ -697,7 +699,7 @@ export function Agents() {
               <p className="hint">
                 Choose saved clusters and tools separately from SSH grants.
                 Existing agents have no cluster access until assigned here.
-                Commands always require a human approval.
+                Commands execute immediately within the granted permissions.
               </p>
               {clusters.error ? (
                 <p role="alert" className="hint">
@@ -910,210 +912,17 @@ function AgentActivity({ agent, close }: { agent: Row; close: () => void }) {
   );
 }
 
-export function Approvals() {
-  const q = useApi<Row[]>("approvals", { interval: 15000 });
-  const [batchResults, setBatchResults] = useState<Record<string, Row[]>>({});
-  const list = q.data || [];
-  const decide = (id: string, decision: "approved" | "rejected") =>
-    void api("approvals/" + id, { decision })
-      .then(() => refresh("approvals"))
-      .catch(notify.error);
-  return (
-    <div className="page">
-      <PageHead
-        title="Approvals"
-        sub="Changes requested by agents and users wait here for a human decision"
-      >
-        <Button variant="outline" onClick={() => void q.refetch()}>
-          <RotateCw size={16} /> Refresh
-        </Button>
-      </PageHead>
-      <div className="card table-card">
-        {list.length ? (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Operation</th>
-                <th>Target</th>
-                <th>Arguments</th>
-                <th>Requested</th>
-                <th>Status</th>
-                <th style={{ width: 210 }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {list.map((a) => {
-                const expired =
-                  ["pending", "approved"].includes(a.status) &&
-                  new Date(a.expiresAt) < new Date();
-                return (
-                  <tr key={a.id}>
-                    <td className="mono small">{a.operation}</td>
-                    <td
-                      title={
-                        a.operation === "ssh_execute_many"
-                          ? (a.targetNames || []).join(", ")
-                          : undefined
-                      }
-                    >
-                      {a.operation === "ssh_execute_many"
-                        ? `${a.targetCount || 0} servers: ${(a.targetNames || []).join(", ")}`
-                        : a.cluster?.name || a.server?.name}
-                    </td>
-                    <td
-                      className={
-                        "mono small" + (a.clusterId ? "" : " ellipsis")
-                      }
-                      style={{ maxWidth: 320 }}
-                      title={JSON.stringify(a.args, null, 2)}
-                    >
-                      {a.clusterId ? (
-                        <details>
-                          <summary>Review command and arguments</summary>
-                          <pre
-                            style={{
-                              whiteSpace: "pre-wrap",
-                              overflowWrap: "anywhere",
-                              maxHeight: 320,
-                              overflow: "auto",
-                            }}
-                          >
-                            {JSON.stringify(a.args, null, 2)}
-                          </pre>
-                        </details>
-                      ) : (
-                        JSON.stringify(a.args)
-                      )}
-                    </td>
-                    <td>{timeAgo(a.createdAt)}</td>
-                    <td>
-                      <span
-                        className={
-                          "badge " +
-                          (expired
-                            ? ""
-                            : a.status === "approved"
-                              ? "green"
-                              : a.status === "rejected"
-                                ? "red"
-                                : "amber")
-                        }
-                      >
-                        {expired ? "expired" : a.status}
-                      </span>
-                    </td>
-                    <td>
-                      {a.status === "pending" && !expired && (
-                        <span className="row" style={{ gap: 6 }}>
-                          <Button
-                            size="sm"
-                            onClick={() => decide(a.id, "approved")}
-                          >
-                            Approve
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => decide(a.id, "rejected")}
-                          >
-                            Reject
-                          </Button>
-                        </span>
-                      )}
-                      {a.clusterId && a.status === "approved" && !expired && (
-                        <span className="hint">
-                          Requester can resume with this approval.
-                        </span>
-                      )}
-                      {!a.clusterId &&
-                        a.status === "approved" &&
-                        !expired &&
-                        !a.consumedAt && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            title="Run the approved operation now with your own permissions"
-                            onClick={() =>
-                              void operation(a.operation, {
-                                ...a.args,
-                                approvalId: a.id,
-                              })
-                                .then((result) => {
-                                  if (
-                                    a.operation === "ssh_execute_many" &&
-                                    Array.isArray(result.results)
-                                  ) {
-                                    setBatchResults((previous) => ({
-                                      ...previous,
-                                      [a.id]: result.results,
-                                    }));
-                                    const succeeded = result.results.filter(
-                                      (entry: Row) =>
-                                        entry.status === "success",
-                                    ).length;
-                                    notify.info(
-                                      `${succeeded} succeeded, ${result.results.length - succeeded} failed.`,
-                                    );
-                                  } else notify.success("Operation completed.");
-                                  void refresh("approvals");
-                                })
-                                .catch(notify.error)
-                            }
-                          >
-                            Execute
-                          </Button>
-                        )}
-                      {batchResults[a.id] && (
-                        <details className="small">
-                          <summary>Batch results</summary>
-                          {batchResults[a.id].map((entry: Row) => (
-                            <div
-                              key={entry.serverId}
-                              className="mono small"
-                              style={{
-                                whiteSpace: "pre-wrap",
-                                wordBreak: "break-word",
-                              }}
-                            >
-                              {entry.serverId}: {entry.status}
-                              {entry.error ? ` — ${entry.error}` : ""}
-                              {entry.taskId ? ` (task ${entry.taskId})` : ""}
-                              {entry.result?.stdout
-                                ? `\n${entry.result.stdout}`
-                                : ""}
-                              {entry.result?.stderr
-                                ? `\n${entry.result.stderr}`
-                                : ""}
-                            </div>
-                          ))}
-                        </details>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        ) : (
-          <Empty
-            icon={<ShieldCheck size={52} strokeWidth={1.5} />}
-            title="No Approval Requests"
-            tall
-          >
-            Requests for file changes, service control and other sensitive
-            operations appear here.
-          </Empty>
-        )}
-      </div>
-    </div>
-  );
-}
-
 export function AuditLog() {
   const [filter, setFilter] = useState("");
   const [reference, setReference] = useState("");
   const q = useApi<Row[]>(
-    "audit?" + new URLSearchParams({ ...(filter.trim() ? { action: filter.trim() } : {}), ...(/^[a-f0-9-]{36}$/i.test(reference.trim()) ? { requestId: reference.trim() } : {}) }),
+    "audit?" +
+      new URLSearchParams({
+        ...(filter.trim() ? { action: filter.trim() } : {}),
+        ...(/^[a-f0-9-]{36}$/i.test(reference.trim())
+          ? { requestId: reference.trim() }
+          : {}),
+      }),
     { interval: 30000 },
   );
   const list = q.data || [];
@@ -1156,9 +965,13 @@ export function AuditLog() {
           onChange={setFilter}
           placeholder="Filter by action..."
         />
-        <SearchInput value={reference} onChange={setReference} placeholder="Find request reference..." />
+        <SearchInput
+          value={reference}
+          onChange={setReference}
+          placeholder="Find request reference..."
+        />
         {list.length ? (
-          <table className="table">
+          <table className="table settings-table-wide">
             <thead>
               <tr>
                 <th>Action</th>

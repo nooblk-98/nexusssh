@@ -3,7 +3,7 @@
 <img src="docs/assets/nexusssh-banner.svg" alt="NexusSSH — a centralized web-based SSH and Kubernetes manager with MCP support. Infrastructure credentials stay on your deployment." width="1200" />
 
 [![Verification](https://img.shields.io/github/actions/workflow/status/nooblk-98/nexusssh/checks.yml?branch=development&style=flat-square&label=checks)](https://github.com/nooblk-98/nexusssh/actions/workflows/checks.yml)
-[![Release](https://img.shields.io/badge/release-v0.4.0-0f766e?style=flat-square)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.5.0-0f766e?style=flat-square)](CHANGELOG.md)
 [![Container image](https://img.shields.io/badge/ghcr.io-nexusssh-2088ff?style=flat-square&logo=docker&logoColor=white)](https://github.com/nooblk-98/nexusssh/pkgs/container/nexusssh)
 [![Self-hosted](https://img.shields.io/badge/deployment-self--hosted-0f766e?style=flat-square)](#getting-started)
 [![MCP support](https://img.shields.io/badge/MCP-supported-2563eb?style=flat-square)](#connect-an-ai-client-through-mcp)
@@ -22,7 +22,7 @@
 
 NexusSSH is a self-hosted workspace for your servers and Kubernetes clusters. Save your connections once, then open terminals, browse files, run cluster commands, and manage team access from a browser.
 
-It also ships with a built-in [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server, so AI assistants can work on your infrastructure **without ever receiving your SSH passwords, private keys, Kubernetes tokens, or kubeconfig files**. Credentials stay encrypted on your deployment. AI clients connect with scoped, expiring, revocable tokens, and NexusSSH runs only the operations you have granted them. Sensitive operations wait for human approval.
+It also ships with a built-in [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server, so AI assistants can work on your infrastructure **without ever receiving your SSH passwords, private keys, Kubernetes tokens, or kubeconfig files**. Credentials stay encrypted on your deployment. AI clients connect with scoped, expiring, revocable tokens, and NexusSSH runs only the operations you have granted them. SSH operations run immediately within those grants; Kubernetes commands also execute immediately within those grants.
 
 ## Features
 
@@ -31,8 +31,8 @@ It also ships with a built-in [Model Context Protocol (MCP)](https://modelcontex
 | **Centralized workspace**  | Nested folders for servers and clusters, search, tags, favorites, recent connections, split views, a command palette, and saved workspace presets.          |
 | **Browser SSH**            | Interactive terminals with pinned host keys, session resume, snippets, search, command suggestions, and broadcast input across sessions.                     |
 | **Remote files**           | SFTP browsing, resumable uploads with progress, and a Monaco editor with change previews, conflict detection, and optional encrypted file history.            |
-| **Kubernetes**             | Kubeconfig import with context and namespace selection, a cluster command console, resource browsing, and pod logs.                                          |
-| **AI access through MCP**  | Per-agent server, cluster, and tool grants, human approval for commands and mutations, call limits, token revocation, and per-agent activity.                |
+| **Kubernetes**             | Kubeconfig import with context and namespace selection, a cluster command console, on-demand connection checks, resource browsing, and pod logs.                                          |
+| **AI access through MCP**  | Per-agent server, cluster, and tool grants, approval-free SSH commands and mutations, approval-free Kubernetes commands, call limits, token revocation, and per-agent activity.                |
 | **Private infrastructure** | Reach targets through saved WireGuard profiles, an SSH bastion, or both. The same routes serve browser sessions and MCP operations.                          |
 | **Team access**            | Users, teams, operation grants, TOTP MFA with recovery codes, and optional OIDC single sign-on.                                                              |
 | **Operations**             | Versioned runbooks, staged connection diagnostics, readiness checks, a searchable audit log, and optional scheduled encrypted backups with restore rehearsal. |
@@ -76,8 +76,8 @@ It also ships with a built-in [Model Context Protocol (MCP)](https://modelcontex
       <p align="center"><b>Command palette</b><br/><sub>Press <kbd>Ctrl</kbd>+<kbd>K</kbd> to connect, inspect, or test any server.</sub></p>
     </td>
     <td width="50%" valign="top">
-      <a href="docs/assets/screenshots/security-settings.png"><img src="docs/assets/screenshots/security-settings.png" alt="Security settings for host key policy, allowed SSH destinations, and approval notifications" /></a>
-      <p align="center"><b>Connection safeguards</b><br/><sub>Host key policy, destination allowlists, and approval notifications.</sub></p>
+      <a href="docs/assets/screenshots/security-settings.png"><img src="docs/assets/screenshots/security-settings.png" alt="Security settings for host key policy and allowed SSH destinations" /></a>
+      <p align="center"><b>Connection safeguards</b><br/><sub>Host key policy and destination allowlists.</sub></p>
     </td>
   </tr>
 </table>
@@ -100,8 +100,8 @@ This pulls the prebuilt image from GitHub Container Registry and starts two cont
 | Image tag                                 | Built from                                       |
 | ----------------------------------------- | ------------------------------------------------ |
 | `ghcr.io/nooblk-98/nexusssh:latest`       | The newest stable release (default)              |
-| `ghcr.io/nooblk-98/nexusssh:v0.4.0`       | A specific release, also published as `0.4.0`    |
-| `ghcr.io/nooblk-98/nexusssh:0.3`          | The newest patch release of a minor version      |
+| `ghcr.io/nooblk-98/nexusssh:v0.5.0`       | A specific release, also published as `0.5.0`    |
+| `ghcr.io/nooblk-98/nexusssh:0.4`          | The newest patch release of a minor version      |
 | `ghcr.io/nooblk-98/nexusssh:development`  | The `development` branch, for early testing      |
 | `ghcr.io/nooblk-98/nexusssh:sha-<commit>` | An exact commit, for pinning and rollback        |
 
@@ -197,10 +197,10 @@ NexusSSH is the controlled execution layer between your AI client and your infra
 
    </details>
 
-4. Ask your assistant to inspect disk usage, list Kubernetes resources, or read pod logs. Commands and mutations return an approval request. Approve it under **Settings → Approvals**, and the agent retries the exact approved operation.
+4. Ask your assistant to inspect disk usage, list Kubernetes resources, or read pod logs. SSH and Kubernetes commands and file/service mutations execute immediately when permitted, without approval requests.
 
 > [!NOTE]
-> Use a client that supports remote HTTP MCP with bearer authentication. Clients that require an OAuth consent flow can't authenticate to this release. Browser OIDC sign-in is separate from MCP authentication. See the [MCP client guide](docs/CLIENTS.md) for the tested flow, approvals, and async tasks.
+> Use a client that supports remote HTTP MCP with bearer authentication. Clients that require an OAuth consent flow can't authenticate to this release. Browser OIDC sign-in is separate from MCP authentication. See the [MCP client guide](docs/CLIENTS.md) for the tested flow and async tasks.
 
 ## How it works
 
@@ -220,7 +220,7 @@ flowchart LR
   V --> T[Servers and clusters]
 ```
 
-The API checks every request against the caller's grants, consumes an exact human approval when one is required, and queues only a task ID. The worker rechecks authorization before it receives an in-memory SSH configuration. Execution records keep metadata and argument digests, not raw output. Read the [architecture](docs/ARCHITECTURE.md) and [security](docs/SECURITY.md) notes for the full model.
+The API checks every request against the caller's grants, executes authorized commands without approval, and queues only a task ID. The worker rechecks authorization before it receives an in-memory SSH configuration. Execution records keep metadata and argument digests, not raw output. Read the [architecture](docs/ARCHITECTURE.md) and [security](docs/SECURITY.md) notes for the full model.
 
 ## Local development
 
@@ -258,7 +258,7 @@ REST route documentation is served at `/api/docs` on every installation.
 | ------------------------------------ | ------------------------------------------------------------------------- |
 | [Deployment](docs/DEPLOYMENT.md)     | Hosting, HTTPS, persistent volumes, upgrades, and recovery                |
 | [Operations](docs/OPERATIONS.md)     | OIDC, encrypted backups, file history, diagnostics, presets, and runbooks |
-| [MCP clients](docs/CLIENTS.md)       | Client setup, authentication, tools, approvals, and task handling         |
+| [MCP clients](docs/CLIENTS.md)       | Client setup, authentication, tools and task handling         |
 | [Kubernetes](docs/KUBERNETES.md)     | Kubeconfig imports, consoles, commands, and private routes                |
 | [VPN and bastions](docs/VPN.md)      | WireGuard configuration and combined connection paths                     |
 | [Folders](docs/FOLDERS.md)           | Organizing servers and clusters                                           |

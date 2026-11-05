@@ -26,7 +26,7 @@ cluster** action preselects that folder. Search matches cluster names, contexts
 and folder paths; matching entries are revealed inside collapsed folders.
 Deleting a folder moves its direct clusters to the top level without deleting
 connections or credentials. Folder assignment only organizes the cluster; its
-VPN/bastion selection, command approvals and MCP grants remain the same.
+VPN/bastion selection and MCP grants remain enforced; commands require no approval.
 SSH folder defaults do not apply to cluster connections. MCP cluster creation
 accepts an optional `groupId` from the same workspace, and cluster discovery
 includes that non-secret folder ID.
@@ -57,6 +57,15 @@ kubectl config view --raw --minify --flatten > nexusssh-kubeconfig.yaml
 This does not convert an external cloud login plugin into a static token.
 For those contexts, provide a restricted service-account token or a client
 certificate instead. Token expiration is handled by replacing the kubeconfig.
+
+## Connection checks
+
+Use **Check now** on a cluster row, **Check all** above the list, or **Test connection**
+inside the resource browser to verify connectivity. Checks refresh cluster health
+metadata without reloading resource lists or pod logs. Use **Refresh resources**
+or **Refresh logs** to reload those views. If you switch clusters during a check,
+a late failure is reported with the original cluster name, not as an error on
+the newly selected cluster.
 
 ## Network access
 
@@ -146,9 +155,8 @@ Commands use the saved encrypted connection and its WireGuard/bastion route,
 with the same destination and TLS checks. Running commands prevent connection
 or credential changes. Command outcomes are audited without storing the
 entered command or its output. MCP agents use `kubernetes_execute` and
-`kubernetes_pod_exec` with explicit grants or Administrator access and the
-existing single-use human approval flow; they cannot use the browser endpoint
-to bypass approvals or retrieve saved credentials.
+`kubernetes_pod_exec` with explicit grants or Administrator access and no approval step; they cannot use the browser endpoint
+to retrieve saved credentials.
 
 ## Optional resource browsing and logs
 
@@ -243,8 +251,8 @@ can use granted connections without receiving the saved connection credentials.
 | `kubernetes_cluster_check` | Check the saved cluster's Kubernetes version. |
 | `kubernetes_resources_list` | Read a summarized resource page; pass `nextCursor` as `cursor` to continue. Omit namespace to use the saved default or use `*` for all namespaces. |
 | `kubernetes_pod_logs` | Read bounded current/previous logs for one namespace, pod and container. |
-| `kubernetes_execute` | Request an approved kubectl-style command using an argv array. |
-| `kubernetes_pod_exec` | Request an approved command inside one named pod and container. |
+| `kubernetes_execute` | Execute a kubectl-style command using an argv array. |
+| `kubernetes_pod_exec` | Execute a command inside one named pod and container. |
 | `kubernetes_execution_status` | Retrieve your command execution's status and encrypted saved result. |
 
 For Custom agents, each tool requires both its token scope and a grant on the
@@ -252,26 +260,13 @@ selected cluster. Administrator automatically enables all tools and clusters. Gr
 discovery and `kubernetes_execution_status` for later result retrieval, alongside
 the desired command tools. Kubernetes RBAC on the uploaded identity still applies.
 
-### Approval and results
+### Direct execution and results
 
-Both command tools always require a human approval, including `get` commands.
-Call the tool without `approvalId` first. It returns `approval_required`, an
-`approvalId`, and an expiry. An administrator reviews the exact cluster,
-namespace, argv, container, timeout and optional inline manifest in **Approvals**
-and approves or rejects the request. Poll `approval_get_status` with that ID,
-then repeat the original tool call with identical arguments plus `approvalId`.
-The requester resumes execution; the approval screen does not run the command
-under another user's identity.
-
-Approvals last 10 minutes, are single use, and are bound to the original token,
-workspace, cluster credentials, saved route, operation and exact arguments. A changed command,
-rotated kubeconfig, VPN or bastion credentials, changed route or host fingerprint,
-revoked token/grant, expired approval or consumed approval
-cannot be used. The app never automatically retries a command.
+Both command tools execute immediately after token and cluster/tool authorization, including `get` commands. No approval request, polling, or retry-with-approval step is needed. A legacy `approvalId` is accepted but ignored and cannot change the execution principal or grants. Every repeated request is a new execution; the app never automatically retries a command.
 
 Executions return an `executionId`, status and result. Results are encrypted at
 rest and available to the requesting principal/token for one hour while its
-grants remain valid. Arguments are encrypted in approval records; audit events
+grants remain valid. No approval records are created; audit events
 and agent activity contain metadata rather than output or credentials. Expired
 output is removed by hourly maintenance; metadata uses `AUDIT_RETENTION_DAYS`.
 Pending executions after an API restart become `interrupted` and are not replayed.
@@ -309,7 +304,7 @@ local files, remote manifest URLs, arbitrary API paths, kustomize, watch/follow,
 multi-document manifests, CRDs, bulk deletes, port forwarding or interactive
 terminal flags. Granting the command tool can expose raw resource content,
 including Secrets when the cluster identity permits them; each exact command
-still requires human approval. Use the summarized read tools for routine browsing.
+requires the appropriate cluster/tool grant but no human approval. Use the summarized read tools for routine browsing.
 
 ### Commands inside pods
 

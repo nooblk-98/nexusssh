@@ -527,6 +527,7 @@ export default function TerminalView({
               autoFocus
               className="input"
               placeholder="Find in terminal"
+              aria-label="Find in terminal"
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value);

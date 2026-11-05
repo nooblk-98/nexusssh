@@ -55,7 +55,10 @@ test("first-run setup, login, workspace, settings and responsive layout", async 
   await expect(
     page.getByRole("heading", { name: "Two-Factor Authentication" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Back" }).click();
+  await page
+    .getByRole("navigation", { name: "Settings", exact: true })
+    .getByRole("button", { name: "Back to workspace", exact: true })
+    .click();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(
     page.getByRole("heading", { name: "Quick Connect" }),

@@ -65,8 +65,6 @@ vi.mock("../../packages/kubernetes/exec.js", () => ({
 }));
 import {
   kubernetesOperation,
-  kubernetesApprovalStatus,
-  kubernetesApprovals,
   recoverKubernetesExecutions,
   expireKubernetesResults,
 } from "../../apps/api/src/kubernetes-operations.js";
@@ -201,14 +199,8 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
     clusterId: cluster,
     command: ["scale", "deploy/api", "--replicas=2"],
   });
-  async function approved(op = "kubernetes_execute", value = args()) {
-    const pending = await call(op, value);
-    expect(pending.status).toBe("approval_required");
-    await db().kubernetesApproval.update({
-      where: { id: pending.approvalId },
-      data: { status: "approved", decidedBy: owner },
-    });
-    return { ...value, approvalId: pending.approvalId };
+  async function commandArgs(_op = "kubernetes_execute", value = args()) {
+    return value;
   }
   beforeAll(async () => {
     const root = resolve("data");
@@ -387,51 +379,24 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
     ).rejects.toThrow();
     expect(fixture.request).not.toHaveBeenCalled();
   });
-  it("never executes before approval, encrypts exact args, consumes once, and encrypts results", async () => {
-    const pending = await call("kubernetes_execute", args());
-    const row = await db().kubernetesApproval.findUniqueOrThrow({
-      where: { id: pending.approvalId },
-    });
-    expect(row.encryptedArguments).not.toContain("replicas");
-    expect(
-      unseal(
-        row.encryptedArguments,
-        fixture.key,
-        `${org}:kubernetes-approval:${row.id}`,
-      ),
-    ).toMatchObject(args());
-    expect(fixture.request).not.toHaveBeenCalled();
-    await expect(
-      call("kubernetes_execute", { ...args(), approvalId: row.id }),
-    ).rejects.toThrow(/Approval/);
-    await db().kubernetesApproval.update({
-      where: { id: row.id },
-      data: { status: "approved" },
-    });
-    const result = await call("kubernetes_execute", {
-      ...args(),
-      approvalId: row.id,
-    });
+  it("executes immediately, records encrypted results, and creates no approval requests", async () => {
+    const result = await call("kubernetes_execute", args());
     expect(result.status).toBe("completed");
+    expect(result.approvalId).toBeUndefined();
+    expect(await db().kubernetesApproval.count()).toBe(0);
+    expect(await db().notification.count()).toBe(0);
     expect(fixture.request).toHaveBeenCalledTimes(1);
-    expect(fixture.request.mock.calls[0][4]).toMatchObject({
-      method: "PATCH",
-      body: '{"spec":{"replicas":2}}',
-    });
-    await expect(
-      call("kubernetes_execute", { ...args(), approvalId: row.id }),
-    ).rejects.toThrow(/consumed/);
-    const saved = await db().kubernetesExecution.findUniqueOrThrow({
-      where: { id: result.executionId },
-    });
+    expect(fixture.request.mock.calls[0][4]).toMatchObject({method: "PATCH", body: '{"spec":{"replicas":2}}'});
+    const saved = await db().kubernetesExecution.findUniqueOrThrow({where: {id: result.executionId}});
     expect(saved.encryptedResult).not.toContain("replicas");
-    expect(
-      await call("kubernetes_execution_status", { executionId: saved.id }),
-    ).toMatchObject({ status: "completed", result: { spec: { replicas: 2 } } });
+    expect(await call("kubernetes_execution_status", {executionId: saved.id})).toMatchObject({status: "completed", result: {spec: {replicas: 2}}});
+    const repeated = await call("kubernetes_execute", {...args(), approvalId: randomUUID()});
+    expect(repeated.status).toBe("completed");
+    expect(repeated.executionId).not.toBe(result.executionId);
   });
-  it("runs the console's version command through MCP with an exact single-use approval", async () => {
+  it("runs the console's version command through MCP without approval", async () => {
     const command = { clusterId: cluster, command: ["kubectl", "version"] };
-    const approvedCommand = await approved("kubernetes_execute", command);
+    const approvedCommand = await commandArgs("kubernetes_execute", command);
     expect(fixture.request).not.toHaveBeenCalled();
     fixture.request.mockResolvedValueOnce({ gitVersion: "v1.28.9+rke2r1" });
     expect(await call("kubernetes_execute", approvedCommand)).toMatchObject({
@@ -439,9 +404,7 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
       result: { gitVersion: "v1.28.9+rke2r1" },
     });
     expect(fixture.request.mock.calls[0][1]).toBe("/version");
-    await expect(call("kubernetes_execute", approvedCommand)).rejects.toThrow(
-      /consumed/,
-    );
+    expect((await call("kubernetes_execute", approvedCommand)).status).toBe("completed");
   });
   it("offers scoped resource pages, version checks and bounded previous-container logs", async () => {
     fixture.request.mockResolvedValueOnce({
@@ -488,63 +451,12 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
       await call("kubernetes_cluster_check", { clusterId: cluster }),
     ).toMatchObject({ version: "v1.34.0" });
   });
-  it("rejects changed command, target, timeout, token, expired grant and rotated kubeconfig", async () => {
-    const value = await approved();
-    for (const changes of [
-      { command: ["delete", "deploy/api"] },
-      { clusterId: otherCluster },
-      { timeoutMs: 10000 },
-    ])
-      await expect(
-        call("kubernetes_execute", { ...value, ...changes }),
-      ).rejects.toThrow();
-    const second = await db().agentToken.create({
-      data: {
-        agentId: agent,
-        tokenHash: randomUUID(),
-        issuer: "issuer",
-        audience: "audience",
-        scopes: JSON.stringify(kubernetesOperations),
-        expiresAt: new Date(Date.now() + 3600000),
-      },
-    });
-    await expect(
-      call("kubernetes_execute", value, { ...p, tokenId: second.id }),
-    ).rejects.toThrow(/Approval/);
-    await db().kubernetesApproval.update({
-      where: { id: value.approvalId },
-      data: { expiresAt: new Date(0) },
-    });
-    expect((await kubernetesApprovalStatus(p, value.approvalId)).status).toBe(
-      "expired",
-    );
-    await expect(call("kubernetes_execute", value)).rejects.toThrow(/Approval/);
-    const rotated = await approved();
-    const row = await db().kubernetesCluster.findUniqueOrThrow({
-      where: { id: cluster },
-    });
-    const secret = unseal(
-      row.encryptedConfig,
-      fixture.key,
-      `${org}:kubernetes:${cluster}`,
-    );
-    await db().kubernetesCluster.update({
-      where: { id: cluster },
-      data: {
-        encryptedConfig: seal(
-          secret,
-          fixture.key,
-          `${org}:kubernetes:${cluster}`,
-        ),
-      },
-    });
-    await expect(call("kubernetes_execute", rotated)).rejects.toThrow(
-      /Approval/,
-    );
+  it("rejects ungranted targets even without an approval system", async () => {
+    await expect(call("kubernetes_execute", {...args(), clusterId: otherCluster, approvalId: randomUUID()})).rejects.toThrow(/grant/);
     expect(fixture.request).not.toHaveBeenCalled();
   });
   it("rechecks live token, grants, agent role and owner before effects", async () => {
-    const value = await approved();
+    const value = await commandArgs();
     await db().agentToken.update({
       where: { id: token },
       data: { revoked: true },
@@ -578,17 +490,17 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
     await expect(call("kubernetes_execute", value)).rejects.toThrow();
     expect(fixture.request).not.toHaveBeenCalled();
   });
-  it("only admits one concurrent use of an approval", async () => {
-    const value = await approved();
+  it("treats concurrent command calls as separate authorized executions", async () => {
+    const value = await commandArgs();
     const results = await Promise.allSettled([
       call("kubernetes_execute", value),
       call("kubernetes_execute", value),
     ]);
-    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
-    expect(fixture.request).toHaveBeenCalledTimes(1);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(2);
+    expect(fixture.request).toHaveBeenCalledTimes(2);
   });
   it("withholds results when an agent's access is revoked during execution", async () => {
-    const value = await approved();
+    const value = await commandArgs();
     fixture.request.mockImplementationOnce(async () => {
       await db().kubernetesAgentPermission.deleteMany({
         where: { agentId: agent },
@@ -604,7 +516,7 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
       call("kubernetes_execution_status", { executionId: execution.id }),
     ).rejects.toThrow(/grant/);
   });
-  it("supports approved pod argv and marks interrupted commands without replaying", async () => {
+  it("supports direct pod argv and marks interrupted commands without replaying", async () => {
     const value: any = {
       clusterId: cluster,
       namespace: "apps",
@@ -612,20 +524,18 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
       container: "api",
       command: ["sh", "-lc", "id"],
     };
-    const approvedArgs = await approved("kubernetes_pod_exec", value);
+    const approvedArgs = await commandArgs("kubernetes_pod_exec", value);
     expect(await call("kubernetes_pod_exec", approvedArgs)).toMatchObject({
       status: "completed",
       result: { stdout: "uid=1000\n", exitCode: 0 },
     });
     expect(fixture.exec.mock.calls[0][1].command).toEqual(value.command);
-    const retry = await approved("kubernetes_pod_exec", value);
+    const retry = await commandArgs("kubernetes_pod_exec", value);
     fixture.exec.mockRejectedValueOnce(new Error("timeout"));
     expect(await call("kubernetes_pod_exec", retry)).toMatchObject({
       status: "interrupted",
     });
-    await expect(call("kubernetes_pod_exec", retry)).rejects.toThrow(
-      /consumed/,
-    );
+    // No implicit retry: the interrupted request made exactly one remote call.
     expect(fixture.exec).toHaveBeenCalledTimes(2);
   });
   it("budgets Kubernetes calls together with other MCP calls and strips expired results", async () => {
@@ -639,7 +549,7 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
       where: { id: agent },
       data: { maxCallsPerMinute: null },
     });
-    const result = await call("kubernetes_execute", await approved());
+    const result = await call("kubernetes_execute", await commandArgs());
     await db().kubernetesExecution.update({
       where: { id: result.executionId },
       data: { expiresAt: new Date(0) },
@@ -672,26 +582,10 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
       ).status,
     ).toBe("interrupted");
   });
-  it("hides command arguments from management agents and other tenants", async () => {
-    await approved();
-    expect(await kubernetesApprovals(p)).toEqual([]);
-    expect(
-      await kubernetesApprovals({
-        ...p,
-        kind: "user",
-        id: owner,
-        role: "owner",
-      }),
-    ).toHaveLength(1);
-    expect(
-      await kubernetesApprovals({
-        ...p,
-        kind: "user",
-        id: owner,
-        role: "owner",
-        organizationId: randomUUID(),
-      }),
-    ).toEqual([]);
+  it("does not create approval rows or expose a pending queue", async () => {
+    await call("kubernetes_execute", args());
+    expect(await db().kubernetesApproval.count()).toBe(0);
+    expect(await controller.approvals(req())).toEqual([]);
   });
   it("lets management agents submit kubeconfigs without exporting credentials or receiving cluster grants", async () => {
     await managementToken();
@@ -899,7 +793,7 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
     const command = { clusterId: created.id, command: ["get", "pods"] };
     await call(
       "kubernetes_execute",
-      await approved("kubernetes_execute", command),
+      await commandArgs("kubernetes_execute", command),
     );
     expect(fixture.request.mock.calls.at(-1)?.[4].route.bastion.host).toBe(
       "127.0.0.1",
@@ -913,14 +807,14 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
     };
     await call(
       "kubernetes_pod_exec",
-      await approved("kubernetes_pod_exec", pod),
+      await commandArgs("kubernetes_pod_exec", pod),
     );
     expect(fixture.exec.mock.calls.at(-1)?.[4]).toMatchObject({
       vpn: { id: refs.vpnId },
       bastion: { host: "127.0.0.1" },
     });
   });
-  it("invalidates pending approvals when routes, VPN configs or bastion credentials change", async () => {
+  it("uses current routes after VPN configs or bastion credentials change", async () => {
     const refs = await routeFixtures();
     const created = await clusterController.create(req(), {
       name: "Rotating route",
@@ -941,14 +835,14 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
       })
     ).encryptedConfig;
     const command = { clusterId: created.id, command: ["get", "pods"] };
-    const first = await approved("kubernetes_execute", command);
+    const first = await commandArgs("kubernetes_execute", command);
     await controller.rotateIdentity(req(), refs.identityId, {
       name: "Rotated jump identity",
       kind: "password",
       password: "rotated-bastion-password",
     });
-    await expect(call("kubernetes_execute", first)).rejects.toThrow(/Approval/);
-    const second = await approved("kubernetes_execute", command);
+    expect((await call("kubernetes_execute", first)).status).toBe("completed");
+    const second = await commandArgs("kubernetes_execute", command);
     const vpn = await db().vpnProfile.findUniqueOrThrow({
       where: { id: refs.vpnId },
     });
@@ -967,10 +861,8 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
         ),
       },
     });
-    await expect(call("kubernetes_execute", second)).rejects.toThrow(
-      /Approval/,
-    );
-    const third = await approved("kubernetes_execute", command);
+    expect((await call("kubernetes_execute", second)).status).toBe("completed");
+    const third = await commandArgs("kubernetes_execute", command);
     await clusterController.update(req(), created.id, { bastionId: null });
     expect(
       (
@@ -979,8 +871,8 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
         })
       ).encryptedConfig,
     ).toBe(original);
-    await expect(call("kubernetes_execute", third)).rejects.toThrow(/Approval/);
-    expect(fixture.request).not.toHaveBeenCalled();
+    expect((await call("kubernetes_execute", third)).status).toBe("completed");
+    expect(fixture.request).toHaveBeenCalledTimes(3);
   });
   it("rejects unavailable, nested, foreign and conflicting routes and protects active profile routes", async () => {
     const refs = await routeFixtures();
@@ -1156,7 +1048,7 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
           principal,
         )
       ).status,
-    ).toBe("approval_required");
+    ).toBe("completed");
     await expect(
       authorize(
         { ...principal, organizationId: randomUUID() },
@@ -1396,50 +1288,12 @@ describe("Kubernetes MCP grants, approvals and execution with SQLite", () => {
       ),
     ).toEqual(["system_info"]);
   });
-  it("shows cluster approvals in the existing queue and only accepts human decisions", async () => {
-    const pending = await call("kubernetes_execute", args());
-    const queue = await controller.approvals(req());
-    expect(queue.find((row) => row.id === pending.approvalId)).toMatchObject({
-      cluster: { name: "Allowed" },
-      args: args(),
-    });
-    await controller.decide(req(), pending.approvalId, {
-      decision: "approved",
-    });
-    await expect(
-      controller.decide(req(), pending.approvalId, { decision: "rejected" }),
-    ).rejects.toThrow(/unavailable/);
-    const second = await call("kubernetes_execute", args());
-    await db().agent.update({
-      where: { id: agent },
-      data: { level: "administrator" },
-    });
-    await db().agentToken.update({
-      where: { id: token },
-      data: {
-        tokenHash: hash("fixture-management-token"),
-        scopes: JSON.stringify([...kubernetesOperations, "workspace_manage"]),
-      },
-    });
-    const machineReq = {
-      headers: { authorization: "Bearer fixture-management-token" },
-      method: "POST",
-      originalUrl: `/api/approvals/${second.approvalId}`,
-    } as Request;
-    await expect(
-      controller.decide(machineReq, second.approvalId, {
-        decision: "approved",
-      }),
-    ).rejects.toThrow(/Human/);
-    expect(
-      (
-        await db().kubernetesApproval.findUniqueOrThrow({
-          where: { id: second.approvalId },
-        })
-      ).status,
-    ).toBe("pending");
+  it("disables legacy approval decisions and keeps management-only authorization", async () => {
+    await expect(controller.decide(req(), randomUUID(), {decision: "approved"})).rejects.toThrow(/no longer supported/);
+    await managementToken();
+    const request = machineReq("agents/" + agent + "/access", "PATCH");
     const updatedReq = {
-      ...machineReq,
+      ...request,
       method: "PATCH",
       originalUrl: `/api/agents/${agent}/access`,
     } as Request;
