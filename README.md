@@ -3,7 +3,7 @@
 <img src="docs/assets/nexusssh-banner.svg" alt="NexusSSH — a centralized web-based SSH and Kubernetes manager with MCP support. Infrastructure credentials stay on your deployment." width="1200" />
 
 [![Verification](https://img.shields.io/github/actions/workflow/status/nooblk-98/nexusssh/checks.yml?branch=development&style=flat-square&label=checks)](https://github.com/nooblk-98/nexusssh/actions/workflows/checks.yml)
-[![Release](https://img.shields.io/badge/release-v0.4.0-0f766e?style=flat-square)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.5.0-0f766e?style=flat-square)](CHANGELOG.md)
 [![Container image](https://img.shields.io/badge/ghcr.io-nexusssh-2088ff?style=flat-square&logo=docker&logoColor=white)](https://github.com/nooblk-98/nexusssh/pkgs/container/nexusssh)
 [![Self-hosted](https://img.shields.io/badge/deployment-self--hosted-0f766e?style=flat-square)](#getting-started)
 [![MCP support](https://img.shields.io/badge/MCP-supported-2563eb?style=flat-square)](#connect-an-ai-client-through-mcp)
@@ -100,7 +100,7 @@ This pulls the prebuilt image from GitHub Container Registry and starts two cont
 | Image tag                                 | Built from                                       |
 | ----------------------------------------- | ------------------------------------------------ |
 | `ghcr.io/nooblk-98/nexusssh:latest`       | The newest stable release (default)              |
-| `ghcr.io/nooblk-98/nexusssh:v0.4.0`       | A specific release, also published as `0.4.0`    |
+| `ghcr.io/nooblk-98/nexusssh:v0.5.0`       | A specific release, also published as `0.5.0`    |
 | `ghcr.io/nooblk-98/nexusssh:0.4`          | The newest patch release of a minor version      |
 | `ghcr.io/nooblk-98/nexusssh:development`  | The `development` branch, for early testing      |
 | `ghcr.io/nooblk-98/nexusssh:sha-<commit>` | An exact commit, for pinning and rollback        |
