@@ -2,7 +2,16 @@
 
 ## Unreleased
 
-No unreleased changes.
+### Fixed
+
+- Moving files or folders to another server no longer deletes symbolic links, sockets or device files it could not copy. Such moves are now refused before anything changes; copies still skip them, as archives do.
+- Pooled SFTP channels close only after a minute with no request in flight, so uploads, downloads and transfers longer than a minute are no longer cut off.
+- Terminal connections that are still starting count towards `SSH_MAX_SESSIONS`, so simultaneous connects can no longer exceed the limit.
+- A task cancelled just before its command finished is now reported as cancelled, without output, matching the stored task status.
+
+### Changed
+
+- Open terminals are revalidated in one batched pass every five seconds instead of separate database queries per shell. Sign-out, lost access and administrator termination still close a shell within that interval.
 
 ## [0.5.0](https://github.com/nooblk-98/nexusssh/compare/v0.4.0...v0.5.0) - 2026-11-05
 

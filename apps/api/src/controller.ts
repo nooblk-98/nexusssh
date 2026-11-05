@@ -2045,7 +2045,9 @@ export class AppController {
       t.serverId,
       id,
     );
-    return { ok: true };
+    // The persisted status is authoritative: a cancellation that committed
+    // before this finish wins, and the worker must not report success.
+    return { ok: true, status };
   }
   @Post("internal/tasks/:id/interrupt") async interruptTask(
     @Req() req: Request,

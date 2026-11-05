@@ -22,6 +22,7 @@ import { pipeline } from "node:stream/promises";
 import { z } from "zod";
 import { authenticate, human } from "./auth.js";
 import { replaceSftpFile } from "./sftp-replace.js";
+import { idleLease, releaseWithResponse, type IdleLease } from "./sftp-idle.js";
 import { audit, authorize, connection, sshLimits } from "./domain.js";
 import { config } from "../../../packages/shared/config.js";
 import {
@@ -41,7 +42,8 @@ import { fileVersion, withFileLock } from "../../../packages/shared/file-version
 // Interactive SFTP for signed-in people, alongside the interactive terminal:
 // the same per-operation permissions and audit, but no approval step (that
 // gate is for agents, which keep using /operations and MCP). One SFTP channel
-// per person and server is reused and closed after a minute without use.
+// per person and server is reused and closed after a minute with no request
+// in flight.
 const IDLE_MS = 60000;
 const EDIT_LIMIT = 5 * 1024 * 1024;
 const CHUNK_LIMIT = 8 * 1024 * 1024;
@@ -51,7 +53,7 @@ type Session = {
   sftp: SFTPWrapper;
   root: string;
   connectionDigest: string;
-  timer?: NodeJS.Timeout;
+  lease: IdleLease;
 };
 const pool = new Map<string, Promise<Session>>();
 async function session(p: Principal, serverId: string): Promise<Session> {
@@ -64,15 +66,12 @@ async function session(p: Principal, serverId: string): Promise<Session> {
       client.on("close", () => pool.delete(key));
       client.on("error", () => pool.delete(key));
       await markSshReachable(p.organizationId, serverId, c).catch(() => {});
-      return { client, sftp: await openSftp(client), root: c.fileRoot, connectionDigest: hash(canonical({ host: c.host, port: c.port, username: c.username, fingerprint: c.fingerprint, root: c.fileRoot })) };
+      return { client, sftp: await openSftp(client), root: c.fileRoot, connectionDigest: hash(canonical({ host: c.host, port: c.port, username: c.username, fingerprint: c.fingerprint, root: c.fileRoot })), lease: idleLease(() => client.end(), IDLE_MS) };
     })();
     pool.set(key, pending);
     pending.catch(() => pool.delete(key));
   }
-  const s = await pending;
-  clearTimeout(s.timer);
-  s.timer = setTimeout(() => s.client.end(), IDLE_MS);
-  return s;
+  return pending;
 }
 // Ends pooled channels for a server, e.g. after its address or credential changed.
 export function closeSftp(serverId: string) {
@@ -104,7 +103,11 @@ async function open(req: Request, serverId: string, op: string) {
   z.uuid().parse(serverId);
   await authorize(p, serverId, op);
   try {
-    return { p, ...(await session(p, serverId)) };
+    const s = await session(p, serverId);
+    // Held until the response closes, so the idle timer cannot end the
+    // channel under a transfer or streamed download that is still running.
+    releaseWithResponse(req.res, s.lease.acquire());
+    return { p, ...s };
   } catch (e) {
     failure(e);
   }
@@ -146,6 +149,11 @@ async function list(s: SFTPWrapper, dir: string): Promise<Entry[]> {
     directory: e.attrs.isDirectory(),
     symlink: e.attrs.isSymbolicLink(),
   }));
+}
+// Directories and regular files; links, sockets, FIFOs and devices are not.
+function copyable(entry: Entry) {
+  if (entry.symlink) return false;
+  return entry.directory || (entry.mode & 0o170000) === 0o100000;
 }
 // Depth-first walk that never follows symbolic links.
 async function* walk(
@@ -680,7 +688,18 @@ export class SftpController {
     if (a.toServerId === id) await authorize(src.p, id, "ssh_upload_file");
     try {
       const destDir = await safePath(dst.sftp, dst.root, a.toPath);
-      let copied = 0;
+      const rename = a.move && a.toServerId === id;
+      type Plan = {
+        from: string;
+        to: string;
+        stat?: any;
+        tree: { path: string; entry: Entry }[];
+      };
+      // Resolve and inspect every item before changing anything. A move to
+      // another server copies and then deletes the source, so anything that
+      // cannot be copied faithfully (symbolic links, sockets, devices) is
+      // refused up front instead of being skipped and then deleted.
+      const plans: Plan[] = [];
       for (const item of a.paths) {
         const from = await entryPath(src.sftp, src.root, item);
         const to = await safePath(
@@ -689,43 +708,62 @@ export class SftpController {
           posix.join(destDir, posix.basename(from)),
           true,
         );
-        if (a.move && a.toServerId === id) {
+        if (rename) {
+          plans.push({ from, to, tree: [] });
+          continue;
+        }
+        const stat = await invoke<any>(src.sftp, "lstat", from);
+        const tree: Plan["tree"] = [];
+        if (stat.isDirectory())
+          for await (const x of walk(src.sftp, from)) tree.push(x);
+        if (
+          a.move &&
+          (!(stat.isDirectory() || stat.isFile()) ||
+            tree.some((x) => !copyable(x.entry)))
+        )
+          throw new BadRequestException(
+            "Cannot move symbolic links or special files to another server; " +
+              "copy instead, or remove them from " + item + " first",
+          );
+        plans.push({ from, to, stat, tree });
+      }
+      let copied = 0;
+      const copyFile = async (f: string, t: string, mode: number) => {
+        const tmp = posix.join(posix.dirname(t), ".nexus-" + randomUUID());
+        await pipeline(
+          src.sftp.createReadStream(f),
+          dst.sftp.createWriteStream(tmp, {
+            flags: "wx",
+            mode: mode & 0o7777,
+          }),
+        );
+        await replace(dst.sftp, tmp, t);
+        copied++;
+      };
+      for (const { from, to, stat, tree } of plans) {
+        if (!stat) {
           await invoke(src.sftp, "rename", from, to);
           copied++;
           continue;
         }
-        const copyFile = async (f: string, t: string, mode: number) => {
-          const tmp = posix.join(posix.dirname(t), ".nexus-" + randomUUID());
-          await pipeline(
-            src.sftp.createReadStream(f),
-            dst.sftp.createWriteStream(tmp, {
-              flags: "wx",
-              mode: mode & 0o7777,
-            }),
-          );
-          await replace(dst.sftp, tmp, t);
-          copied++;
-        };
-        const stat = await invoke<any>(src.sftp, "lstat", from);
         if (stat.isDirectory()) {
           await invoke(dst.sftp, "mkdir", to, {
             mode: stat.mode & 0o7777,
           }).catch(() => {});
-          for await (const { path: full, entry } of walk(src.sftp, from)) {
+          for (const { path: full, entry } of tree) {
             const target = posix.join(to, posix.relative(from, full));
-            if (entry.symlink) continue;
-            if (entry.directory)
+            if (entry.directory && !entry.symlink)
               await invoke(dst.sftp, "mkdir", target, {
                 mode: entry.mode & 0o7777,
               }).catch(() => {});
-            else await copyFile(full, target, entry.mode);
+            // Copies skip links and special files, as archives do.
+            else if (copyable(entry)) await copyFile(full, target, entry.mode);
           }
         } else if (stat.isFile()) await copyFile(from, to, stat.mode);
         if (a.move) {
-          const all: { path: string; entry: Entry }[] = [];
-          if (stat.isDirectory())
-            for await (const x of walk(src.sftp, from)) all.push(x);
-          for (const x of all.reverse())
+          // Only what was copied is removed: the preflight above guarantees
+          // the tree holds nothing but directories and regular files.
+          for (const x of [...tree].reverse())
             await invoke(
               src.sftp,
               x.entry.directory && !x.entry.symlink ? "rmdir" : "unlink",
