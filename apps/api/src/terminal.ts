@@ -10,6 +10,7 @@ import { connect } from "../../../packages/ssh-core/index.js";
 import { config, sameOrigin } from "../../../packages/shared/config.js";
 import { db } from "../../../packages/database/index.js";
 import { markSshReachable } from "./connection-health.js";
+import { revalidateShells } from "./terminal-revalidate.js";
 import type { Principal } from "../../../packages/policy-engine/index.js";
 
 // A shell outlives its WebSocket for a short grace period so a page reload or
@@ -24,6 +25,9 @@ const OUTPUT_FRAME_BYTES = 64 * 1024;
 const HEARTBEAT_MS = 25000;
 const METRICS_MS = 30000;
 const METRICS_TIMEOUT_MS = 5000;
+// Sign-out, lost access or an administrator ending the session closes the
+// shell within this interval.
+const REVALIDATE_MS = 5000;
 const METRICS_OUTPUT_BYTES = 8192;
 const METRICS_COMMAND = "head -n 1 /proc/stat; cat /proc/meminfo; df -P /";
 const INITIAL_METRICS_COMMAND = "head -n 1 /proc/stat; sleep 1; head -n 1 /proc/stat; cat /proc/meminfo; df -P /";
@@ -41,7 +45,6 @@ type Shell = {
   replayBytes: number;
   grace?: NodeJS.Timeout;
   idle?: NodeJS.Timeout;
-  revalidate?: NodeJS.Timeout;
   metricsTimer?: NodeJS.Timeout;
   metricsChannel?: ClientChannel;
   metricsTimeout?: NodeJS.Timeout;
@@ -91,6 +94,34 @@ const frame = z.discriminatedUnion("type", [
 export function terminals(server: Server) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 65536 });
   const shells = new Map<string, Shell>();
+  // Startups between the capacity check and registration, so concurrent
+  // connects cannot all pass the check and overshoot SSH_MAX_SESSIONS.
+  let startups = 0;
+  // Ends shells whose user signed out, lost access, or whose session an
+  // administrator terminated: one batched pass for all shells per interval.
+  let revalidating = false;
+  const revalidation = setInterval(() => {
+    if (revalidating || !shells.size) return;
+    revalidating = true;
+    void revalidateShells([...shells.values()], {
+      authenticate,
+      authorize: (p, serverId) => authorize(p, serverId, "terminal"),
+      activeSessions: async (ids) =>
+        new Set(
+          (
+            await db.sSHSession.findMany({
+              where: { id: { in: ids }, status: "active" },
+              select: { id: true },
+            })
+          ).map((row) => row.id),
+        ),
+    })
+      .then((stale) => {
+        for (const shell of stale) end(shell, "Session terminated");
+      })
+      .catch(() => {})
+      .finally(() => (revalidating = false));
+  }, REVALIDATE_MS);
   const responsive = new WeakSet<WebSocket>();
   const heartbeat = setInterval(() => {
     for (const ws of wss.clients) {
@@ -168,7 +199,6 @@ export function terminals(server: Server) {
     shells.delete(shell.token);
     clearTimeout(shell.grace);
     clearTimeout(shell.idle);
-    clearInterval(shell.revalidate);
     stopMetrics(shell);
     flush(shell);
     shell.stream.close();
@@ -281,6 +311,11 @@ export function terminals(server: Server) {
   server.on("upgrade", async (req, socket, head) => {
     let ws: WebSocket | undefined;
     const starting: { client?: Client } = {};
+    let reserved = false;
+    const unreserve = () => {
+      if (reserved) startups--;
+      reserved = false;
+    };
     try {
       const url = new URL(req.url || "/", "http://localhost");
       if (url.pathname !== "/ws/terminal" || !sameOrigin(req.headers))
@@ -309,8 +344,10 @@ export function terminals(server: Server) {
         attach(existing, ws, authReq, true);
         return;
       }
-      if (shells.size >= config.SSH_MAX_SESSIONS)
+      if (shells.size + startups >= config.SSH_MAX_SESSIONS)
         throw new Error("Session capacity reached");
+      startups++;
+      reserved = true;
       const socketClosed = new Promise<void>((resolve) =>
         ws!.once("close", () => resolve()),
       );
@@ -362,25 +399,13 @@ export function terminals(server: Server) {
         replayBytes: 0,
         ended: false,
       };
+      unreserve();
       shells.set(shell.token, shell);
       stream.on("data", (d: Buffer) => output(shell, d));
       stream.stderr.on("data", (d: Buffer) => output(shell, d));
       stream.on("close", () => end(shell));
       stream.on("error", () => end(shell));
       client.on("close", () => end(shell));
-      // Ends the shell when its user signs out, loses access, or an
-      // administrator terminates the session.
-      shell.revalidate = setInterval(() => {
-        void authenticate(shell.authReq)
-          .then(async (fresh) => {
-            await authorize(fresh, id, "terminal");
-            const row = await db.sSHSession.findUnique({
-              where: { id: shell.sessionId },
-            });
-            if (row?.status !== "active") throw new Error("Session terminated");
-          })
-          .catch(() => end(shell, "Session terminated"));
-      }, 5000);
       attach(shell, ws, authReq, false);
     } catch (e) {
       starting.client?.end();
@@ -394,10 +419,13 @@ export function terminals(server: Server) {
         socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
         socket.destroy();
       }
+    } finally {
+      unreserve();
     }
   });
   const closeAll = () => {
     clearInterval(heartbeat);
+    clearInterval(revalidation);
     for (const shell of shells.values()) end(shell, "Server shutting down");
   };
   return Object.assign(wss, { closeAll });
