@@ -126,7 +126,15 @@ export async function prepareVpn(vpn: VpnRoute, gateway?: VpnGateway) {
     async resolve(host: string): Promise<string[]> {
       let r = await lookup(host);
       if (r.status === 404) {
+        await r.body?.cancel();
         await ensure(true);
+        r = await lookup(host);
+      }
+      // Device initialization does not imply a completed peer handshake. Let
+      // the existing WireGuard device finish warming up before surfacing a
+      // transient DNS timeout. The gateway bounds each lookup to ten seconds.
+      if (r.status === 502) {
+        await r.body?.cancel();
         r = await lookup(host);
       }
       if (r.status === 409)
@@ -167,6 +175,10 @@ export async function prepareVpn(vpn: VpnRoute, gateway?: VpnGateway) {
         await ensure(true);
         result = await connect(address, port);
       }
+      // A cold peer can take longer than the gateway's 15-second TCP budget.
+      // Retry only a failed VPN dial, once, retaining its in-flight handshake.
+      // Never replay SSH authentication/commands or retry policy/setup errors.
+      if (result.status === 502) result = await connect(address, port);
       if (result.status === 401)
         throw new VpnError(
           "VPN gateway rejected application authentication",
