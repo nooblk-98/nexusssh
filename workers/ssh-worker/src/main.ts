@@ -362,13 +362,19 @@ const batchWorker = new Worker(
     maxStalledCount: 0,
   },
 );
-worker.on("failed", (job, error) => {
-  if (job?.name === "batch")
+worker.on("failed", (job) => {
+  if (!job) return;
+  if (job.name === "batch") {
     void api(`batches/${job.data.batchId}/abort`, {}).catch(() => {});
-  if (job && error.message.includes("stalled more than allowable limit"))
-    void api(`tasks/${job.data.taskId}/interrupt`, {}).catch((cause) =>
-      console.error("Could not record interrupted task:", cause),
-    );
+    return;
+  }
+  // A job can fail before or after the API records its claim (a lost claim
+  // response, an interrupted finish call, or a stalled lock). Interrupting is
+  // idempotent and only changes a task that is still running, so it closes the
+  // window where the task would otherwise stay claimed forever.
+  void api(`tasks/${job.data.taskId}/interrupt`, {}).catch((cause) =>
+    console.error("Could not record interrupted task:", cause),
+  );
 });
 worker.on("error", (error) => console.error("Worker unavailable:", error.name));
 batchWorker.on("failed", (job) => {

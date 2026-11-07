@@ -13,6 +13,7 @@ import { correlationId as currentRequestId } from "../../../packages/shared/requ
 import type { Prisma } from "@prisma/client";
 import { reserveAgentCall, reserveAgentCalls } from "./agent-quota.js";
 import { resolveSettings, numericMetadata } from "./metadata.js";
+import { failClaimedTask, failQueuedTask } from "./task-lifecycle.js";
 import { db } from "../../../packages/database/index.js";
 import { config, redisConnection } from "../../../packages/shared/config.js";
 import {
@@ -461,11 +462,36 @@ async function singleOperation(
       ? await reserveAgentCall(p.id, createTask)
       : await db.$transaction(createTask);
   await audit(p, op, "queued", server.id, task.id);
-  const job = await queue.add(
-    "operation",
-    { taskId: task.id, requestId: currentRequestId() },
-    { jobId: task.id },
-  );
+  let job: Awaited<ReturnType<typeof queue.add>>;
+  try {
+    job = await queue.add(
+      "operation",
+      { taskId: task.id, requestId: currentRequestId() },
+      { jobId: task.id },
+    );
+  } catch {
+    // The task and audit rows were committed before queue.add. Without a job
+    // no worker can claim them, so release them instead of leaving a queued
+    // execution that never runs.
+    const failed = await failQueuedTask({
+      id: task.id,
+      organizationId: task.organizationId,
+      principalId: task.principalId,
+      operation: task.operation,
+    }).catch(() => false);
+    throw new BadRequestException(
+      failed
+        ? {
+            message: "Operation could not be queued; no command was started",
+            taskId: task.id,
+          }
+        : {
+            message:
+              "Operation state is uncertain; inspect the task status before retrying",
+            taskId: task.id,
+          },
+    );
+  }
   if (a.async) return { taskId: task.id, status: "queued" };
   const cancel = () => {
     void db.backgroundTask
@@ -538,16 +564,36 @@ export async function claimTask(id: string) {
     throw new ForbiddenException({ code: "operation_not_in_token_scope", message: "The original agent token no longer permits batch execution" });
   await authorize(p, t.serverId, t.operation);
   const lease = randomUUID();
+  const leaseHash = hash(lease);
   const updated = await db.backgroundTask.updateMany({
     where: { id, status: "queued", expiresAt: { gt: new Date() } },
-    data: { status: "running", leaseHash: hash(lease) },
+    data: { status: "running", leaseHash },
   });
   if (updated.count !== 1) throw new ForbiddenException("Task already claimed");
-  return {
-    lease,
-    connection: await connection(t.serverId, t.organizationId, undefined, !t.batchId),
-    limits: await sshLimits(t.organizationId),
-    operation: t.operation,
-    args: unseal(t.encryptedArguments, config.ENCRYPTION_KEY, t.organizationId),
-  };
+  try {
+    const target = await connection(
+      t.serverId,
+      t.organizationId,
+      undefined,
+      !t.batchId,
+    );
+    const limits = await sshLimits(t.organizationId);
+    const args = unseal(
+      t.encryptedArguments,
+      config.ENCRYPTION_KEY,
+      t.organizationId,
+    );
+    return { lease, connection: target, limits, operation: t.operation, args };
+  } catch (error) {
+    // Connection preparation can fail after the claim was recorded. Release
+    // the lease and persist a terminal state so the task cannot stay running.
+    await failClaimedTask({
+      id,
+      leaseHash,
+      organizationId: t.organizationId,
+      principalId: t.principalId,
+      operation: t.operation,
+    }).catch(() => {});
+    throw error;
+  }
 }
