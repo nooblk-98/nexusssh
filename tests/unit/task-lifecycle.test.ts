@@ -42,6 +42,8 @@ function store(overrides: Record<string, unknown> = {}) {
     user: { findFirst: vi.fn(async () => null) },
     agentToken: { findFirst: vi.fn(async () => token()) },
     agentPermission: { findUnique: vi.fn(async () => grant()) },
+    serverPermission: { findUnique: vi.fn(async () => grant()) },
+    teamPermission: { findMany: vi.fn(async () => []) },
     batchDispatch: { findUnique: vi.fn(async () => null) },
     ...overrides,
   } as any;
@@ -111,6 +113,45 @@ describe("live task access", () => {
     await expect(
       taskCancelled(task({ batchId: "batch-1" }), fake),
     ).resolves.toBe(true);
+  });
+
+  it("revalidates user roles and own/team grants", async () => {
+    const asUser = (role: string, permissions = grant(), teams: any[] = []) =>
+      store({
+        agent: { findUnique: vi.fn(async () => null) },
+        user: { findFirst: vi.fn(async () => ({ disabled: false, role })) },
+        serverPermission: {
+          findUnique: vi.fn(async () => permissions),
+        },
+        teamPermission: { findMany: vi.fn(async () => teams) },
+      });
+    await expect(
+      taskCancelled(task({ tokenId: null }), asUser("member")),
+    ).resolves.toBe(false);
+    await expect(
+      taskCancelled(
+        task({ tokenId: null }),
+        asUser("member", null, [grant(["ssh_read_file"])]),
+      ),
+    ).resolves.toBe(true);
+    await expect(
+      taskCancelled(
+        task({ tokenId: null }),
+        asUser("viewer", null, [grant(["ssh_execute"])]),
+      ),
+    ).resolves.toBe(true);
+    const owner = store({
+      agent: { findUnique: vi.fn(async () => null) },
+      user: {
+        findFirst: vi.fn(async () => ({ disabled: false, role: "owner" })),
+      },
+      serverPermission: { findUnique: vi.fn(async () => null) },
+      teamPermission: { findMany: vi.fn(async () => []) },
+    });
+    await expect(taskCancelled(task({ tokenId: null }), owner)).resolves.toBe(
+      false,
+    );
+    expect(owner.serverPermission.findUnique).not.toHaveBeenCalled();
   });
 
   it("stops revoked agents, expired tasks and missing users", async () => {

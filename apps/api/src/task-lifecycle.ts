@@ -44,9 +44,33 @@ export async function taskCancelled(t: TaskAccess, store: Store = db) {
   if (!agent) {
     const user = await store.user.findFirst({
       where: { id: t.principalId, organizationId: t.organizationId },
-      select: { disabled: true },
+      select: { disabled: true, role: true },
     });
-    return !user || user.disabled;
+    if (!user || user.disabled) return true;
+    if (["owner", "administrator"].includes(user.role)) return false;
+    if (user.role === "viewer" && !readOperations.includes(t.operation))
+      return true;
+    // A member or viewer keeps a task only while its own or a team grant
+    // still includes the operation. Owner and administrator roles bypass
+    // grants, matching authorize().
+    const [own, teams] = await Promise.all([
+      store.serverPermission.findUnique({
+        where: {
+          serverId_userId: { serverId: t.serverId, userId: t.principalId },
+        },
+        select: { operations: true },
+      }),
+      store.teamPermission.findMany({
+        where: {
+          serverId: t.serverId,
+          team: { members: { some: { userId: t.principalId } } },
+        },
+        select: { operations: true },
+      }),
+    ]);
+    return ![own, ...teams].some(
+      (grant) => grant && JSON.parse(grant.operations).includes(t.operation),
+    );
   }
   if (
     agent.organizationId !== t.organizationId ||
