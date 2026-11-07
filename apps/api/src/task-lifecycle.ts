@@ -142,8 +142,9 @@ export async function failClaimedTask(
       data: { status: "failed", leaseHash: null },
     });
     if (!changed.count) return false;
+    // Claiming only advances the task row; its execution can still be queued.
     await tx.commandExecution.updateMany({
-      where: { id: task.id, status: "running" },
+      where: { id: task.id, status: { in: ["queued", "running"] } },
       data: { status: "failed" },
     });
     await tx.auditEvent.updateMany({

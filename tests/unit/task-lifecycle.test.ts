@@ -191,6 +191,25 @@ function transactionStore(count = 1) {
 }
 
 describe("unstarted task cleanup", () => {
+  it("fails an execution still queued when connection preparation fails", async () => {
+    const { store: fake, tx } = transactionStore();
+    let executionStatus = "queued";
+    tx.commandExecution.updateMany.mockImplementation(async ({ where, data }: any) => {
+      const statuses = typeof where.status === "string" ? [where.status] : where.status.in;
+      if (!statuses.includes(executionStatus)) return { count: 0 };
+      executionStatus = data.status;
+      return { count: 1 };
+    });
+    await failClaimedTask({
+      id: "task-1",
+      organizationId: "org-1",
+      principalId: "agent-1",
+      operation: "ssh_execute",
+      leaseHash: "lease-hash",
+    }, fake);
+    expect(executionStatus).toBe("failed");
+  });
+
   it("releases a claim that failed after the running transition", async () => {
     const { store: fake, tx } = transactionStore();
     const identity = {
@@ -206,7 +225,7 @@ describe("unstarted task cleanup", () => {
       data: { status: "failed", leaseHash: null },
     });
     expect(tx.commandExecution.updateMany).toHaveBeenCalledWith({
-      where: { id: "task-1", status: "running" },
+      where: { id: "task-1", status: { in: ["queued", "running"] } },
       data: { status: "failed" },
     });
     expect(tx.auditEvent.updateMany).toHaveBeenCalledWith({
