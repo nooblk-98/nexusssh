@@ -8,8 +8,8 @@ name: Publish MCP installer
 # - A GitHub release publishes the release version (`next` for pre-releases).
 # A version that is already on npm is skipped, never overwritten.
 #
-# Self-hosted execution authenticates with the repository NPM_TOKEN secret.
-# npm trusted publishing and provenance require GitHub-hosted runners.
+# Authenticates with npm trusted publishing when it is configured for this
+# workflow on npmjs.com, otherwise with an automation token in NPM_TOKEN.
 on:
   push:
     branches: [main, development]
@@ -22,6 +22,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: publish-installer
@@ -29,7 +30,7 @@ concurrency:
 
 jobs:
   npm:
-    runs-on: [self-hosted, Linux, X64, nexusssh]
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -40,7 +41,7 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-      # Keep the npm publishing client current.
+      # Trusted publishing needs npm 11.5.1 or newer.
       - run: npm install -g npm@11
       - name: Choose version and dist-tag
         id: plan
@@ -94,11 +95,6 @@ jobs:
         run: node cli.mjs --help && node cli.mjs list
       - name: Publish
         if: steps.plan.outputs.publish == 'true'
-        run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "::error::Self-hosted publishing requires the NPM_TOKEN repository secret."
-            exit 1
-          fi
-          npm publish --access public --tag "${{ steps.plan.outputs.tag }}"
+        run: npm publish --provenance --access public --tag "${{ steps.plan.outputs.tag }}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

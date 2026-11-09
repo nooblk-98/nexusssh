@@ -12,7 +12,7 @@ import {
 } from "../../../packages/shared/management.js";
 export function buildMcp(token: string) {
   const server = new McpServer(
-    { name: "NexusSSH", version: "0.5.0" },
+    { name: "NexusSSH", version: "0.5.1" },
     { capabilities: { tools: {} } },
   );
   for (const [name, schema] of Object.entries(schemas)) {

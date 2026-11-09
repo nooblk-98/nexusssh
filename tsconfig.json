@@ -19,5 +19,5 @@
     "workers/**/*.ts",
     "infrastructure/scripts/**/*.ts"
   ],
-  "exclude": ["node_modules", "packages/ui"]
+  "exclude": ["node_modules"]
 }

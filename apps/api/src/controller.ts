@@ -82,6 +82,7 @@ async function preflightDefaults(tx: Prisma.TransactionClient, org: string, type
   return preflightAffected(tx, org, affected.map((server) => server.id), { type, id, value });
 }
 import { finishTask } from "./task-finish.js";
+import { taskCancelled } from "./task-lifecycle.js";
 import { saveFolder, deleteFolder } from "./folders.js";
 import { markSshReachable } from "./connection-health.js";
 import { readiness } from "./readiness.js";
@@ -1988,27 +1989,7 @@ export class AppController {
   ) {
     internal(req);
     const t = await db.backgroundTask.findUniqueOrThrow({ where: { id } });
-    const agent = await db.agent.findUnique({
-      where: { id: t.principalId },
-      include: { owner: true },
-    });
-    const user = agent
-      ? null
-      : await db.user.findUnique({ where: { id: t.principalId } });
-    const batchToken = t.batchId && agent && t.tokenId ? await db.agentToken.findFirst({ where: { id: t.tokenId, agentId: agent.id, revoked: false, expiresAt: { gt: new Date() } } }) : null;
-    const batchScopes: string[] = batchToken && agent ? effectiveAgentScopes(agent.level, JSON.parse(batchToken.scopes), agent.owner.role) : [];
-    return {
-      cancelled:
-        t.status === "cancelled" ||
-        t.status === "interrupted" ||
-        !!(t.batchId && (await db.batchDispatch.findUnique({ where: { id: t.batchId }, select: { status: true } }))?.status === "aborted") ||
-        !!agent?.revoked ||
-        !!agent?.owner.disabled ||
-        !!(agent?.level === "administrator" && !["owner", "administrator"].includes(agent.owner.role)) ||
-        !!(t.batchId && agent && !batchTokenAllowed(t.tokenId, batchToken ? { id: batchToken.id, scopes: batchScopes } : null)) ||
-        !!user?.disabled ||
-        t.expiresAt < new Date(),
-    };
+    return { cancelled: await taskCancelled(t) };
   }
   @Post("internal/tasks/:id/finish") async finish(
     @Req() req: Request,
@@ -2045,7 +2026,9 @@ export class AppController {
       t.serverId,
       id,
     );
-    return { ok: true };
+    // The persisted status is authoritative: a cancellation that committed
+    // before this finish wins, and the worker must not report success.
+    return { ok: true, status };
   }
   @Post("internal/tasks/:id/interrupt") async interruptTask(
     @Req() req: Request,

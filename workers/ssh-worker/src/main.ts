@@ -11,6 +11,7 @@ import {
   operate,
   type Connection,
 } from "../../../packages/ssh-core/index.js";
+import { finishedStatus } from "./finish-status.js";
 const headers = {
   "content-type": "application/json",
   "x-nexus-internal": config.INTERNAL_SECRET,
@@ -28,6 +29,8 @@ async function api(path: string, body?: unknown) {
   if (!response.ok) throw new Error("Internal API refused worker request");
   return response.json();
 }
+const CANCELLED_MESSAGE =
+  "Command was cancelled; remote side effects may have occurred";
 function redact(value: any, c: Connection): any {
   if (typeof value === "string") {
     let result = value;
@@ -189,7 +192,7 @@ async function runBatch(
           const state = await api(`tasks/${taskId}/status`);
           if (state.cancelled || abort.signal.aborted)
             throw new Error("Batch command was cancelled");
-          await api(`tasks/${taskId}/finish`, {
+          const finished = await api(`tasks/${taskId}/finish`, {
             lease: claim.lease,
             status: "completed",
             exitCode: result.exitCode,
@@ -197,6 +200,15 @@ async function runBatch(
             connectedHost: claim.connection.host,
             connectedPort: claim.connection.port,
           });
+          if (finishedStatus(finished, "completed") === "cancelled") {
+            results[index] = {
+              serverId: claim.args.serverId,
+              taskId,
+              status: "cancelled",
+              error: CANCELLED_MESSAGE,
+            };
+            continue;
+          }
           results[index] = {
             serverId: claim.args.serverId,
             taskId,
@@ -278,7 +290,7 @@ const worker = new Worker(
             claim.args,
             abort.signal,
           );
-          await api(`tasks/${id}/finish`, {
+          const finished = await api(`tasks/${id}/finish`, {
             lease: claim.lease,
             status: "completed",
             exitCode: result.exitCode,
@@ -286,6 +298,17 @@ const worker = new Worker(
             connectedHost: claim.connection.host,
             connectedPort: claim.connection.port,
           });
+          if (finishedStatus(finished, "completed") === "cancelled") {
+            // Cancellation won the race; drop the output so callers see the
+            // same terminal state the database recorded.
+            logEvent("task_cancelled", { taskId: id });
+            return {
+              serverId: claim.args.serverId,
+              executionId: id,
+              status: "cancelled",
+              error: CANCELLED_MESSAGE,
+            };
+          }
           logEvent("task_completed", { taskId: id });
           return {
             serverId: claim.args.serverId,
@@ -339,13 +362,19 @@ const batchWorker = new Worker(
     maxStalledCount: 0,
   },
 );
-worker.on("failed", (job, error) => {
-  if (job?.name === "batch")
+worker.on("failed", (job) => {
+  if (!job) return;
+  if (job.name === "batch") {
     void api(`batches/${job.data.batchId}/abort`, {}).catch(() => {});
-  if (job && error.message.includes("stalled more than allowable limit"))
-    void api(`tasks/${job.data.taskId}/interrupt`, {}).catch((cause) =>
-      console.error("Could not record interrupted task:", cause),
-    );
+    return;
+  }
+  // A job can fail before or after the API records its claim (a lost claim
+  // response, an interrupted finish call, or a stalled lock). Interrupting is
+  // idempotent and only changes a task that is still running, so it closes the
+  // window where the task would otherwise stay claimed forever.
+  void api(`tasks/${job.data.taskId}/interrupt`, {}).catch((cause) =>
+    console.error("Could not record interrupted task:", cause),
+  );
 });
 worker.on("error", (error) => console.error("Worker unavailable:", error.name));
 batchWorker.on("failed", (job) => {
