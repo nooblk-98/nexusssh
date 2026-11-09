@@ -129,7 +129,7 @@ Back up and verify restore before upgrading. Review migrations and dependency ch
 
 ## Configuration
 
-`APP_URL` is also the exact permitted browser Origin. `MCP_PUBLIC_URL` is the agent token audience. `MCP_AUTH_ISSUER` is the issuing authority recorded on machine credentials. `ENCRYPTION_KEY` is 32 random bytes in hexadecimal. `INTERNAL_SECRET` protects worker/MCP-to-API calls. `SETUP_TOKEN` protects first-owner enrollment. Browser sessions are opaque random database-backed credentials; `SESSION_SECRET`, `AUTH_AUDIENCE`, `ENCRYPTION_KEY_PROVIDER` and `LOG_LEVEL` are retained configuration slots, not implemented pluggable providers.
+`APP_URL` is also the exact permitted browser Origin. `MCP_PUBLIC_URL` is the agent token audience. `MCP_AUTH_ISSUER` is the issuing authority recorded on machine credentials. `ENCRYPTION_KEY` is 32 random bytes in hexadecimal. `INTERNAL_SECRET` protects worker/MCP-to-API calls. `SETUP_TOKEN` protects first-owner enrollment. Browser sessions are opaque, random, database-backed credentials. `SESSION_SECRET` and `AUTH_AUDIENCE` are retained configuration slots; the unused `ENCRYPTION_KEY_PROVIDER` and `LOG_LEVEL` settings were removed.
 
 `SSH_CONNECT_TIMEOUT`, `SSH_IDLE_TIMEOUT`, `SSH_MAX_SESSIONS`, and `SSH_OUTPUT_LIMIT` bound resources. `SSH_WORKER_CONCURRENCY` (default 4) sets how many interactive SSH operations run at once, and `SSH_HEALTH_CONCURRENCY` (default 4) how many reachability checks run at once. `AUDIT_RETENTION_DAYS` controls audit cleanup. Terminal transcripts are not recorded.
 

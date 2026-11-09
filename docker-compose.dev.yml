@@ -1,36 +1,15 @@
-name: nexusssh
-
+# Local override: builds the image from this checkout and binds it to loopback.
+# Use it with the base file:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 services:
   nexusssh:
-    image: ${NEXUSSSH_IMAGE:-ghcr.io/nooblk-98/nexusssh:development}
-    ports: ['${HTTP_PORT:-8080}:8080']
+    image: nexusssh:local
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile
+      args:
+        APP_REVISION: ${APP_REVISION:-unknown}
+    pull_policy: build
     environment:
-      APP_URL: ${APP_URL:-}
-      REDIS_URL: redis://redis:6379
-    volumes: [nexusssh_data:/app/data, nexusssh_secrets:/app/secrets]
-    restart: unless-stopped
-    init: true
-    security_opt: [no-new-privileges:true]
-    cap_drop: [ALL]
-    depends_on:
-      redis: {condition: service_healthy}
-    healthcheck:
-      test: [CMD, node, -e, "fetch('http://127.0.0.1:8080/api/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 15s
-      timeout: 5s
-      start_period: 60s
-      retries: 10
-  redis:
-    image: redis:7.4-alpine
-    command: [redis-server, --save, '', --appendonly, 'no', --maxmemory, 128mb, --maxmemory-policy, noeviction]
-    restart: unless-stopped
-    volumes: [redis_data:/data]
-    healthcheck:
-      test: [CMD, redis-cli, ping]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-volumes:
-  nexusssh_data:
-  nexusssh_secrets:
-  redis_data:
+      APP_URL: ${APP_URL:-http://localhost:8080}
+    ports: !override ['127.0.0.1:${HTTP_PORT:-8080}:8080']
