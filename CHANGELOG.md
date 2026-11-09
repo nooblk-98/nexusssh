@@ -6,7 +6,7 @@ No unreleased changes.
 
 ## [0.5.1](https://github.com/nooblk-98/nexusssh/compare/v0.5.0...v0.5.1) - 2026-11-09
 
-Maintenance release with correctness fixes for task lifecycle, SFTP transfers and terminal limits, plus dependency and repository hygiene. The database schema is unchanged from v0.5.0; no migration runs.
+Maintenance release with correctness fixes for task lifecycle, SFTP transfers, terminal limits and VPN cold starts, plus dependency and repository hygiene. The database schema is unchanged from v0.5.0; no migration runs.
 
 ### Fixed
 
