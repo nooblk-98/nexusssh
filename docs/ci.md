@@ -8,7 +8,7 @@ runners cost nothing and jobs run in parallel.
 
 Three jobs run side by side; publish and deploy need all three:
 
-- **static:** Compose config, recovery-bundle test, VPN gateway `go test -race`,
+- **static:** Base and development Compose config, recovery-bundle test, VPN gateway `go test -race`,
   lint, typecheck and build.
 - **image:** builds the commit's Docker image with the Actions layer cache. On
   pushes to `main` it also keeps a seven-day rollback archive (see

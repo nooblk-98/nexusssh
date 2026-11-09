@@ -91,8 +91,6 @@ export function saveFile(data: BlobPart, name: string, type = "text/plain") {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-export const base64ToBytes = (b64: string) =>
-  Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 export function formatBytes(n?: number) {
   if (n == null) return "";
   if (n < 1024) return n + " B";
