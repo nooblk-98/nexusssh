@@ -1,6 +1,6 @@
 {
   "name": "nexusssh-mcp",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Connect Claude Code, Claude Desktop, Cursor, VS Code, Codex, Gemini CLI and other AI clients to a NexusSSH MCP server in one step",
   "license": "UNLICENSED",
   "author": "Lahiru S Liyanage",

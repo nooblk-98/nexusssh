@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+No unreleased changes.
+
+## [0.5.1](https://github.com/nooblk-98/nexusssh/compare/v0.5.0...v0.5.1) - 2026-11-09
+
+Maintenance release with correctness fixes for task lifecycle, SFTP transfers and terminal limits, plus dependency and repository hygiene. The database schema is unchanged from v0.5.0; no migration runs.
+
 ### Fixed
 
 - The development compose override builds the image from the checkout and binds to loopback only again, as documented, instead of duplicating the base file and failing validation.
@@ -14,6 +20,11 @@
 
 - Removed unused frontend dependencies, the unused `jose` and `@eslint/js` packages, a dead browser helper and a never-referenced banner asset. `.env.example` and the deployment guide now match the settings the application reads.
 - Open terminals are revalidated in one batched pass every five seconds instead of separate database queries per shell. Sign-out, lost access and administrator termination still close a shell within that interval.
+
+### Upgrade
+
+1. Back up the `nexusssh_data` and `nexusssh_secrets` volumes.
+2. Run `docker compose pull && docker compose up -d`. The database schema and compose files are unchanged from v0.5.0, and your existing volumes are reused.
 
 ## [0.5.0](https://github.com/nooblk-98/nexusssh/compare/v0.4.0...v0.5.0) - 2026-11-05
 
