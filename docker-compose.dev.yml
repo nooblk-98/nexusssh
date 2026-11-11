@@ -18,7 +18,9 @@ services:
         APP_REVISION: ${APP_REVISION:-unknown}
     pull_policy: build
     environment:
-      APP_URL: ${APP_URL:-http://localhost:8080}
+      # Empty by default, so the app answers on whatever address it is reached at
+      # (localhost, a LAN IP, a proxy hostname). Set it to pin one HTTPS origin.
+      APP_URL: ${APP_URL:-}
       # The bundled redis service below; the API, MCP and SSH worker all queue through it.
       REDIS_URL: redis://redis:6379
     ports: !override ['${DEV_BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-8080}:8080']
