@@ -1,5 +1,4 @@
-# Local development stack: builds the image from this checkout, runs its own
-# Redis, and binds the published port to loopback.
+# Development stack: builds the image from this checkout and runs its own Redis.
 #
 # It is a complete stack, so it also works on its own. That matters for Git
 # stacks (Portainer and similar) that can only point at a single compose file:
@@ -23,7 +22,9 @@ services:
       APP_URL: ${APP_URL:-}
       # The bundled redis service below; the API, MCP and SSH worker all queue through it.
       REDIS_URL: redis://redis:6379
-    ports: !override ['${DEV_BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-8080}:8080']
+    # Published on every interface, like the base file, so the app is reachable
+    # from other machines. Set DEV_BIND_ADDRESS=127.0.0.1 to keep it local.
+    ports: !override ['${DEV_BIND_ADDRESS:-0.0.0.0}:${HTTP_PORT:-8080}:8080']
     volumes: [nexusssh_data:/app/data, nexusssh_secrets:/app/secrets]
     restart: unless-stopped
     init: true
