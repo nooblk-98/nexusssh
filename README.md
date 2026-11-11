@@ -224,13 +224,15 @@ The API checks every request against the caller's grants, executes authorized co
 
 ## Local development
 
-To build the container from your checkout instead of pulling it, add the development override. It also binds the app to loopback only:
+To build the container from your checkout instead of pulling it, use the development stack. It runs its own Redis, keeps the data and secrets volumes, and binds the published port to loopback only:
 
 ```sh
 git clone https://github.com/nooblk-98/nexusssh.git
 cd nexusssh
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+docker compose -f docker-compose.dev.yml up -d --build
 ```
+
+It is a complete stack, so a Git stack (Portainer or similar) can point at `docker-compose.dev.yml` alone. Merging it over the base file (`-f docker-compose.yml -f docker-compose.dev.yml`) works the same way. Set `DEV_BIND_ADDRESS=0.0.0.0` when something other than the host itself must reach the port.
 
 To run the services natively, you need Node.js 24 and a Redis instance on `127.0.0.1:6379`.
 
