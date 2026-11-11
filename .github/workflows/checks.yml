@@ -27,6 +27,7 @@ jobs:
         with: {node-version: 24, cache: npm}
       - run: npm ci
       - run: docker compose config --quiet
+      - run: docker compose -f docker-compose.dev.yml config --quiet
       - run: docker compose -f docker-compose.yml -f docker-compose.dev.yml config --quiet
       - run: python3 tests/recovery_bundle_test.py
       - uses: actions/setup-go@v5

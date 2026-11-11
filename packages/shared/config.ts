@@ -100,7 +100,21 @@ const schema = z.object({
   OIDC_CLIENT_SECRET: z.string().min(1).optional(),
   OIDC_LABEL: z.string().max(80).default("Single sign-on"),
 });
-const parsed = schema.parse(process.env);
+const result = schema.safeParse(process.env);
+if (!result.success) {
+  // A raw ZodError dump hides the variable name in the middle of a JSON blob and
+  // buries it under a stack trace, which makes a misconfigured stack hard to read.
+  const problems = result.error.issues
+    .map((issue) => `  ${issue.path.join(".") || "(root)"}: ${issue.message}`)
+    .join("\n");
+  console.error(
+    `Invalid configuration:\n${problems}\n` +
+      "Set the variables above in the stack environment or docker-compose.override.yml. " +
+      "DATABASE_URL and SECRETS_FILE come from the image; REDIS_URL must point at the redis service.",
+  );
+  process.exit(1);
+}
+const parsed = result.data;
 // Without APP_URL the platform serves whatever address it is reached on: browser
 // requests must come from the same host they were sent to, and agent tokens use
 // fixed identifiers so they stay valid across addresses.
