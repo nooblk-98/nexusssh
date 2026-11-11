@@ -6,7 +6,8 @@
 
 - `docker-compose.dev.yml` is a complete stack on its own, so a Git stack that can only point at one compose file (Portainer, for example) starts with Redis, the data and secrets volumes and `REDIS_URL` in place. Previously it lost `REDIS_URL` and the API exited with `ZodError: path ["REDIS_URL"]`. Merging it over `docker-compose.yml` still works, and CI validates both forms.
 - An invalid environment now prints one `variable: problem` line per setting before exiting, instead of a bare `ZodError` JSON dump, so a missing `REDIS_URL` or `DATABASE_URL` is obvious in the container log.
-- The development stack no longer pins `APP_URL` to `http://localhost:8080`. It stays unset, like the base file, so the app answers on the address it is reached at instead of rejecting writes from a LAN address. Set `DEV_BIND_ADDRESS=0.0.0.0` in the stack environment to reach it from other machines; the default bind stays on loopback.
+- The development stack no longer pins `APP_URL` to `http://localhost:8080`. It stays unset, like the base file, so the app answers on the address it is reached at instead of rejecting writes from a LAN address.
+- The development stack publishes the app on every interface by default, like the base file, so `http://<host-lan-ip>:8080` works from other machines without extra settings. Set `DEV_BIND_ADDRESS=127.0.0.1` to keep it local.
 
 ## [0.5.1](https://github.com/nooblk-98/nexusssh/compare/v0.5.0...v0.5.1) - 2026-11-09
 
