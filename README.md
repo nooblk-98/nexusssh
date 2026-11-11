@@ -232,7 +232,7 @@ cd nexusssh
 docker compose -f docker-compose.dev.yml up -d --build
 ```
 
-It is a complete stack, so a Git stack (Portainer or similar) can point at `docker-compose.dev.yml` alone. Merging it over the base file (`-f docker-compose.yml -f docker-compose.dev.yml`) works the same way. Set `DEV_BIND_ADDRESS=0.0.0.0` when something other than the host itself must reach the port.
+It is a complete stack, so a Git stack (Portainer or similar) can point at `docker-compose.dev.yml` alone. Merging it over the base file (`-f docker-compose.yml -f docker-compose.dev.yml`) works the same way. `APP_URL` stays unset, so the app answers on whatever address it is reached at. To open it from another machine, set `DEV_BIND_ADDRESS=0.0.0.0` in the stack environment; the default keeps the port on loopback.
 
 To run the services natively, you need Node.js 24 and a Redis instance on `127.0.0.1:6379`.
 
